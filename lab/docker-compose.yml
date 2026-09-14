@@ -1,0 +1,29 @@
+# PoC rapide d'aiguillage — pas le pilote P1 réel (§13), juste de quoi
+# faire tourner OPA localement et taper des requêtes dessus pendant qu'on
+# développe policies/rego/. Le PEP, le broker, le registre de cellule n'ont
+# pas encore de code (voir src/*/README.md) : ce compose grandira avec eux.
+
+services:
+  opa:
+    image: openpolicyagent/opa:latest
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+      # --capabilities /policies/capabilities.json une fois généré —
+      # voir policies/README.md pour pourquoi il n'est pas fourni ici tel
+      # quel. Ne pas oublier de le rajouter avant tout usage au-delà du
+      # PoC local.
+    volumes:
+      - ../policies:/policies:ro
+    ports:
+      - "8181:8181"
+
+  # Placeholder : décommenter/compléter une fois src/pep/ implémenté.
+  # pep:
+  #   build: ../src/pep
+  #   depends_on:
+  #     - opa
+  #   ports:
+  #     - "8443:8443"

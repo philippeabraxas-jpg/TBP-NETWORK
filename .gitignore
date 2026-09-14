@@ -1,0 +1,45 @@
+# Secrets et clés — jamais dans le repo, peu importe le sous-dossier
+*.pem
+*.key
+*.p12
+*.pfx
+*.env
+.env.*
+!*.example
+*secret*
+*_rsa
+*_ed25519
+freeradius/certs/
+config/freeradius/certs/
+
+# Python (src/pep, src/telemetry, src/translator probables)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node (si tooling JS pour le lab/CI)
+node_modules/
+
+# Build / artefacts
+*.log
+*.tmp
+dist/
+build/
+
+# Lab / containerlab
+lab/**/*.pcap
+lab/**/state/
+lab/containerlab/**/.clab/
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Figures sources volumineuses non versionnées (garder les PNG exportés, pas les binaires lourds d'édition)
+figs/src/*.psd
+figs/src/*.ai

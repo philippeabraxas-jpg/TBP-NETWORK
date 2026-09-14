@@ -1,0 +1,39 @@
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rego:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+      - name: opa fmt --diff
+        run: opa fmt --list --diff policies/rego/
+      - name: opa check
+        run: opa check policies/rego/
+
+  nftables-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check nftables syntax (dry parse, no load)
+        run: |
+          sudo apt-get update && sudo apt-get install -y nftables
+          for f in config/nftables/*.nft; do
+            echo "Checking $f"
+            sudo nft -c -f "$f"
+          done
+
+  # Placeholder — pas de Dockerfile ni de code src/ pour l'instant (voir
+  # src/*/README.md). À activer une fois qu'il y a quelque chose à builder.
+  # docker:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: docker compose -f lab/docker-compose.yml config

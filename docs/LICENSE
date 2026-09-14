@@ -1,0 +1,21 @@
+Documentation license for this directory (docs/) and figs/
+=============================================================
+
+Copyright (c) Philippe Collet.
+
+The documentation and figures in this repository — including
+docs/spec-v1.4.2.md, docs/glossaire.md, docs/audits/, and figs/ — are
+licensed under the Creative Commons Attribution 4.0 International License
+(CC BY 4.0).
+
+You are free to share and adapt this material for any purpose, even
+commercially, as long as you give appropriate credit, provide a link to
+the license, and indicate if changes were made.
+
+Full legal code: https://creativecommons.org/licenses/by/4.0/legalcode
+Human-readable summary: https://creativecommons.org/licenses/by/4.0/
+
+This license applies to the documentation only. The source code and
+configuration elsewhere in this repository (config/, src/, policies/,
+lab/, tests/, .github/) are covered by the separate, closed LICENSE file
+at the repository root — see that file for the code's terms.

@@ -1,0 +1,51 @@
+#!/usr/sbin/nft -f
+#
+# Squelette de départ pour le PEP local Debian (spec §4.1 : "nftables
+# redirect"). Redirige le trafic sortant d'un poste gouverné vers le PEP
+# local, qui décide (token signé, TTL, portée) avant de laisser passer ou
+# de rejeter — le "mur" (§5.1) applique la même logique côté serveur.
+#
+# NE PAS déployer tel quel : les ports/adresses ci-dessous sont des
+# exemples à adapter à la topologie réelle du pilote P1 (§13). À tester
+# d'abord en mode "monitor" (log sans bloquer), jamais "closed" en
+# premier déploiement — cf. doctrine §5.3 "mode monitor avant closed".
+
+table inet tbp_pep {
+
+    # Interface locale sur laquelle le process PEP écoute pour évaluer
+    # chaque connexion avant redirection réelle.
+    define PEP_PORT = 8443
+
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+
+        # Exempter le loopback et le trafic déjà destiné au PEP lui-même
+        # (éviter une boucle de redirection).
+        iifname "lo" accept
+        tcp dport $PEP_PORT accept
+
+        # Redirige tout le trafic TCP sortant vers le PEP local pour
+        # évaluation (allow/deny par token — voir src/pep/).
+        # Exemple : ne cibler QUE les flux vers le VLAN serveurs (§5.1),
+        # pas tout le trafic sortant (internet, DNS...) — à restreindre
+        # avec une correspondance d'adresse de destination réelle avant
+        # tout déploiement.
+        # ip daddr <VLAN_SERVEURS_CIDR> tcp dport { 80, 443, 5432, 8080 } redirect to :$PEP_PORT
+    }
+
+    chain output_hardening {
+        type filter hook output priority filter; policy accept;
+
+        # Fail-closed explicite : si le PEP local ne répond pas (process
+        # arrêté, crash), le trafic vers le VLAN serveurs doit être
+        # rejeté, pas laissé passer en clair. À affiner avec un vrai
+        # contrôle d'état du process PEP (ex. via une règle qui ne
+        # s'active que si un marqueur de santé absent).
+        # ip daddr <VLAN_SERVEURS_CIDR> ct state new counter log prefix "tbp-pep-unreachable: " drop
+    }
+}
+
+# Rappel doctrine (§5.3, fail usine) : le comportement par défaut en cas de
+# panne d'un composant de contrôle d'accès (ici, le PEP) doit être
+# fail-closed, jamais fail-open — contrairement au défaut RADIUS souvent
+# fail-open qu'il faut forcer explicitement (voir config/freeradius/).

@@ -1,0 +1,17 @@
+Copyright (c) Philippe Collet. All rights reserved.
+
+This LICENSE file covers the source code and configuration in this
+repository (directories including but not limited to: config/, src/,
+policies/, lab/, tests/, .github/), except where a different LICENSE file
+is present in a subdirectory (see docs/LICENSE for the documentation
+license).
+
+No part of the covered code may be copied, modified, distributed,
+sublicensed, or used, in whole or in part, without prior written
+permission from the copyright holder.
+
+This is a closed-source posture adopted for the initial development and
+pilot phase of the TBP-NETWORK implementation. The author intends to
+open the license of some or all of this code at a later date; until an
+updated LICENSE file is published, no rights beyond viewing the source
+in this repository are granted.
