@@ -5,6 +5,8 @@
 
 **Intègre :** audits adversariaux indépendants (Gemini, DeepSeek, Claude — v1.1–v1.3) · audit pratique quatre évaluateurs + deux méta-audits (référence de déploiement v1.2) · manifeste réseau (intégré et normalisé).
 
+**Implémentation** : ce document fait partie du dépôt [TBP-NETWORK](https://github.com/philippeabraxas-jpg/TBP-NETWORK) — voir le [README](../README.md) pour la structure du dépôt, la séquence de déploiement (§13) et les configurations de départ (`config/`, `policies/`).
+
 ---
 
 ## 0 · Résumé
