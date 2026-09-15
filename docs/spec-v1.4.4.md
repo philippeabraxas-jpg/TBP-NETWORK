@@ -1,5 +1,5 @@
 # TBP — Gouvernance d'actions attestée
-## Note technique v1.4.3 · 15 septembre 2026 · Philippe Collet
+## Note technique v1.4.4 · 15 septembre 2026 · Philippe Collet
 
 > **This document is in French; translation to English is planned but not
 > done yet — see the [repository README](../README.md) for an English
@@ -31,7 +31,7 @@ TBP gouverne les **capacités des agents**, pas leurs modèles. Un LLM est proba
 - **Jamais par oui, toujours par défaut-deny** — l'inconnu est classé strict (y compris les API sans invariants déclarés).
 - **Défaisable mais détectable** — on ne prétend pas « impossible », on prétend « impossible à cacher ».
 - **On gouverne les capacités, pas les machines** — la question n'est pas « peut-on entrer sans passer par le routeur » (toujours oui) mais « que peut-on atteindre » (borné) et « qui le verra » (prouvé).
-- **On éclaire l'action, on ne la juge pas** — TBP ne produit pas de verdict de sécurité. Il produit un état à trois positions : rejeté (règle métier ou traducteur), autorisé (rien ne l'empêche dans TBP), soumis (gris). La sécurité reste portée par les règles métier ; TBP la rend activable, signée et auditable.
+- **TBP n'est pas un juge, c'est un livre de lois et un greffe** — il applique mécaniquement des règles déjà écrites par le métier ; aucune discrétion n'est exercée à l'exécution. Il produit un état à trois positions : rejeté (règle métier ou traducteur), autorisé (rien ne l'empêche dans TBP), soumis (gris — la seule discrétion admise, et elle est humaine). La sécurité reste portée par les règles métier ; TBP la rend activable, signée et auditable.
 - **L'action exécutée est l'action traduite** — le traducteur produit l'action ; le mensonge d'intention de l'agent est structurellement stérilisé.
 - **La décision mentie reste imputable** — un composant compromis peut mentir sur la décision, pas sur sa responsabilité.
 - **On ne ferme pas tous les trous ; on les classe par impact et on mitigue proportionnellement** — la gouvernance est un problème d'allocation, pas de complétude.
@@ -114,7 +114,7 @@ L'intégrité de l'effet appartient au métier. Le PEP valide l'enveloppe, pas l
 - **Métriques ancrées** : FNR < 0,1 %, FPR < 2 %, calculées par époque, consignées dans la maîtresse. **Format de feuille : agrégats + hash du corpus — contenu jamais en clair** (relie la vie privée §11 au schéma de feuille).
 - **Dégradé contrôlé** : dépassement de seuil = tier-shift ou révocation de bundle ; panne du traducteur = rejet du langage naturel, structuré seulement, aucun fallback cloud.
 
-Le traducteur est un paramètre de friction, pas un paramètre de sécurité. Il ne dit pas « dangereux » ou « sûr » ; il dit « je sais traduire » ou « je ne sais pas ». Sa qualité ne détermine pas la sûreté — elle détermine le taux d'escalade et donc la tenabilité du budget de friction (§9.1). Un traducteur trop prudent épuise l'opérateur ; un traducteur trop confiant laisse passer des actions mal traduites, rattrapées par les règles métier ou par le refus par défaut. La métrique pertinente n'est donc pas seulement FNR/FPR au sens strict, mais taux d'escalade et taux de traduction correcte hors refus. La sûreté des classes F/I/W reste portée par les règles, le quorum (§7.5) et l'arbitrage humain.
+Le traducteur est un paramètre de friction, pas un paramètre de sécurité : il éclaire l'action, il ne la décide jamais. Il ne dit pas « dangereux » ou « sûr » ; il dit « je sais traduire » ou « je ne sais pas ». Sa qualité ne détermine pas la sûreté — elle détermine le taux d'escalade et donc la tenabilité du budget de friction (§9.1). Un traducteur trop prudent épuise l'opérateur ; un traducteur trop confiant laisse passer des actions mal traduites, rattrapées par les règles métier ou par le refus par défaut. La métrique pertinente n'est donc pas seulement FNR/FPR au sens strict, mais taux d'escalade et taux de traduction correcte hors refus. La sûreté des classes F/I/W reste portée par les règles, le quorum (§7.5) et l'arbitrage humain.
 
 - **Durcissement runtime** (vLLM/PyTorch) : processus non-root dédié, CAP_DROP_ALL, seccomp strict — dm-verity protège l'image au repos, pas la surface runtime.
 
@@ -255,7 +255,7 @@ L'architecture est utilisable *parce qu'elle accepte d'être imparfaite* ; cette
 8. L'admin root reste un acteur de confiance — le plus audité.
 9. La disponibilité a un prix.
 10. La conformité (AI Act art. 14) est le prix d'entrée de l'arbitrage humain ; TBP l'amortit.
-11. TBP ne juge pas la sécurité d'une action ; il éclaire l'action et la rend activable, signée, auditable. Le verdict de sûreté appartient aux règles métier et à l'arbitrage humain.
+11. TBP n'est pas un juge, c'est un livre de lois et un greffe : il éclaire l'action et la rend activable, signée, auditable, sans exercer de discrétion. Le verdict de sûreté appartient aux règles métier (déjà écrites) et à l'arbitrage humain (le gris).
 
 ## 11 · Questions ouvertes
 
@@ -273,7 +273,7 @@ L'architecture est utilisable *parce qu'elle accepte d'être imparfaite* ; cette
 
 La classification F/I/W est une décision locale, prise par la gouvernance de chaque entité sur son propre périmètre. Il n'y a pas d'autorité centrale de classification. La compatibilité entre entités est vérifiée mécaniquement par le handshake (§3) : `policy_id = hash(P)`, subsomption mécanique. Si la politique de B ne subsume pas celle de A, B refuse ou restreint l'échange.
 
-Conséquence : la légitimité de la classification est celle de la gouvernance qui la produit. Le protocole ne la juge pas, il la rend vérifiable. L'atelier ne peut pas écrire dans la compta ; la compta peut lire la déclaration de l'atelier et l'écrire dans ses propres registres. Chacun reste souverain chez lui ; les échanges passent par des canaux dont la sémantique est explicitement bornée.
+Conséquence : la légitimité de la classification est celle de la gouvernance qui la produit. Le protocole ne se prononce pas dessus, il la rend vérifiable. L'atelier ne peut pas écrire dans la compta ; la compta peut lire la déclaration de l'atelier et l'écrire dans ses propres registres. Chacun reste souverain chez lui ; les échanges passent par des canaux dont la sémantique est explicitement bornée.
 
 Ce mécanisme vaut à toute échelle : en entreprise (périmètres organisationnels) comme entre institutions (périmètres souverains). Ce n'est pas le même problème politique, c'est le même protocole. La difficulté restante — méta-invariants, hiérarchie des règles, reconnaissance mutuelle des classifications — relève de la négociation entre gouvernances, pas du protocole. TBP ne résout pas ce problème ; il le rend traitable.
 
@@ -344,7 +344,8 @@ Un terme par concept — les synonymes des documents amont (manifeste réseau, r
 | v1.2 (audit DeepSeek) | fenêtre canari ancrée · limite de légitimité · provenance ≠ conformité · gouvernance de la qualité du traducteur · régime de coût et indicateurs · table des langages |
 | v1.3 (audit Claude) | anti-rejeu jti · localhost ≠ authentification · rejeu chiffré · indicateurs · veritrail vérifié |
 | v1.4.1 (revue indépendante) | corrections textuelles (§1, §8) · anti-dribble explicite : proscription d'inspection de contenu, §4.1-bis · budget de friction ancré comme contrainte de pilote (§9.1) · refonte des figures 1, 2, 3, 5, 6 : flux unidirectionnels clarifiés, palette harmonisée |
-| **v1.4.3 (clarifications)** | §1 : principe « on éclaire l'action, on ne la juge pas » · §4.5 : le traducteur est un paramètre de friction, pas de sécurité ; métriques recentrées (taux d'escalade, traduction correcte hors refus) · §9.1 : lien explicite avec §4.5 · §11.8 : la gouvernance de la classification devient une conséquence du §3 (souveraineté locale + subsomption mécanique), plus une question ouverte · §10 : ajout du point 11 · §0 : épigraphe du switch activable et auditable |
+| **v1.4.4 (précision terminologique)** | Élimination de « juger »/« jugement » comme verbe décrivant TBP, y compris à la forme négative : TBP n'exerce aucune discrétion, il n'y a donc rien à juger ni à ne pas juger. §1 : « on éclaire l'action, on ne la juge pas » → « TBP n'est pas un juge, c'est un livre de lois et un greffe » · §4.5 : « il éclaire l'action, il ne la juge jamais » → « il éclaire l'action, il ne la décide jamais » · §10 point 11 : même reformulation (livre de lois et greffe) · §11.8 : « le protocole ne la juge pas » → « le protocole ne se prononce pas dessus » |
+| v1.4.3 (clarifications) | §1 : principe « on éclaire l'action, on ne la juge pas » · §4.5 : le traducteur est un paramètre de friction, pas de sécurité ; métriques recentrées (taux d'escalade, traduction correcte hors refus) · §9.1 : lien explicite avec §4.5 · §11.8 : la gouvernance de la classification devient une conséquence du §3 (souveraineté locale + subsomption mécanique), plus une question ouverte · §10 : ajout du point 11 · §0 : épigraphe du switch activable et auditable |
 | v1.4.2 (corrections) | citation erronée corrigée (§11, §12) : RFC 9578 est *« Privacy Pass Issuance Protocols »*, pas « Proof of Transit » — jamais publié en RFC, seulement `draft-ietf-sfc-proof-of-transit` (IETF SFC, expiré) · glossaire de normalisation (§14) appliqué aux occurrences manquées : « garde »/« garde sémantique » → « traducteur » (§8, §10) ; « Sésame » → « passeport » (§4.1-bis, §8) · coquille §3.3 (« différentié » → « différencié ») · NIST 800-207 → NIST SP 800-207 (§3.3) |
 | v1.4 | référence de déploiement v1.2 intégrée (4 passes pratiques + 2 méta-audits) : passeports à capacité bornée · clés éphémères · temps explicite (NTS) · circuit-breaker OPA · extension PG · EAP-TLS = même PKI · OCSP fail-behavior · durcissement vLLM · RGPD/rétention · gouvernance de la classification · glossaire · statut épistémique · manifeste réseau intégré et normalisé |
 
