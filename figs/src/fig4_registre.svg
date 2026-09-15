@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 430" role="img" aria-label="Registre à deux niveaux : chaque cellule tient sa propre chaîne (chemin chaud), inscrite périodiquement dans la chaîne maîtresse (tiède, motif Certificate Transparency), elle-même ancrée en externe (froid).">
+  <title>Registre à deux niveaux</title>
+  <defs>
+    <marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+  </defs>
+
+  <!-- Temperature labels -->
+  <g font-family="Helvetica,Arial,sans-serif" font-size="10.5" fill="#888">
+    <text x="20" y="60">chaud</text>
+    <text x="20" y="235">tiède</text>
+    <text x="20" y="365">froid</text>
+  </g>
+
+  <!-- Cells -->
+  <g font-family="Helvetica,Arial,sans-serif">
+    <rect x="80" y="40" width="220" height="70" fill="#f7f7f7" stroke="#1a1a1a" stroke-width="1.5" rx="5"/>
+    <text x="190" y="68" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a1a1a">Cellule A</text>
+    <text x="190" y="85" text-anchor="middle" font-size="9.5" fill="#555">chaîne locale — sans coordination</text>
+
+    <rect x="340" y="40" width="220" height="70" fill="#f7f7f7" stroke="#1a1a1a" stroke-width="1.5" rx="5"/>
+    <text x="450" y="68" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a1a1a">Cellule B</text>
+    <text x="450" y="85" text-anchor="middle" font-size="9.5" fill="#555">chaîne locale — sans coordination</text>
+
+    <rect x="600" y="40" width="220" height="70" fill="#f7f7f7" stroke="#1a1a1a" stroke-width="1.5" rx="5"/>
+    <text x="710" y="68" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a1a1a">Cellule C</text>
+    <text x="710" y="85" text-anchor="middle" font-size="9.5" fill="#555">chaîne locale — sans coordination</text>
+
+    <!-- Master chain -->
+    <rect x="250" y="190" width="400" height="80" fill="#eef4fa" stroke="#1a5490" stroke-width="1.5" rx="5"/>
+    <text x="450" y="220" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a5490">Chaîne maîtresse</text>
+    <text x="450" y="238" text-anchor="middle" font-size="10" fill="#1a5490">motif CT (RFC 6962) — Tessera</text>
+    <text x="450" y="254" text-anchor="middle" font-size="9.5" fill="#1a5490">séparation de domaine feuille/nœud</text>
+
+    <!-- External anchor -->
+    <rect x="330" y="330" width="240" height="65" fill="#fff" stroke="#888" stroke-width="1.5" stroke-dasharray="6,4" rx="5"/>
+    <text x="450" y="358" text-anchor="middle" font-size="12" font-weight="bold" fill="#555">Ancrage externe</text>
+    <text x="450" y="375" text-anchor="middle" font-size="9.5" fill="#666">preuve tiers, store-and-forward</text>
+  </g>
+
+  <!-- Arrows -->
+  <g stroke="#1a1a1a" stroke-width="1.5" fill="none" marker-end="url(#arrow4)">
+    <line x1="190" y1="110" x2="330" y2="188"/>
+    <line x1="450" y1="110" x2="450" y2="186"/>
+    <line x1="710" y1="110" x2="570" y2="188"/>
+  </g>
+  <line x1="450" y1="270" x2="450" y2="326" stroke="#1a5490" stroke-width="1.5" marker-end="url(#arrow4)"/>
+
+  <text x="450" y="155" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#333">hash(broker_id, tête, TSA) — inscription périodique</text>
+  <text x="450" y="305" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#1a5490">lag maximal borné — défaut 120 s (§6.2)</text>
+</svg>
