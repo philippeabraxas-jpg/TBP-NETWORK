@@ -69,8 +69,10 @@ config/
 └── sysctl/               Generic kernel hardening
 src/
 ├── pep/                 Local policy enforcement point (§4.1, §4.1-bis, §4.3)
+│   └── postgres-extension/  Two-hook in-process PEP for PostgreSQL (§4.4)
 ├── telemetry/            Flow metadata, anti-dribble (§4.1-bis)
-└── translator/            Translator runtime hardening (§4.5)
+├── translator/            Translator runtime hardening (§4.5)
+└── registry/              Cell registry / Tessera POSIX driver, disk backpressure (§6)
 lab/                    docker-compose PoC + containerlab topology (TBD)
 tests/
 ├── p1_friction/         Latency thresholds to respect (§9.1)
