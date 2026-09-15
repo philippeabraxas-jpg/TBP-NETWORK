@@ -8,6 +8,12 @@ machine to enterprise deployments up to WWW scale.
 > you're allowed to do once inside — and proves it. We govern capabilities,
 > not models. »*
 
+**Never a partnership by trust — only by an attested handshake.** That's
+what this repository is: the inter-entity handshake (spec §3) and
+everything around it — NAC, PEPs, cell registries — that extends TBP's
+governance from a single machine to a network of entities that have to
+trust each other without simply trusting each other.
+
 **Note on language**: the core specification (`docs/spec-v1.4.2.md`) and
 glossary (`docs/glossaire.md`) are currently written in French — this
 README and the configuration guidance below are in English so the repo is
