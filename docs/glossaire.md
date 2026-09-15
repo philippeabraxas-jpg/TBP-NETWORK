@@ -1,6 +1,6 @@
 # TBP normalization glossary
 
-Quick-reference extract of §14 from [`spec-v1.4.2.md`](./spec-v1.4.2.md) (French) —
+Quick-reference extract of §14 from [`spec-v1.4.3.md`](./spec-v1.4.3.md) (French) —
 that file remains the source of truth; this one exists to be linked/grepped
 without reopening the whole technical note. One canonical term per concept;
 synonyms found in upstream documents (network manifesto, deployment
@@ -22,7 +22,7 @@ synonym, including in comments and variable/field names where reasonable.
 | manifeste | manifest | état attesté, measured state | the measured vector of the governed stack (§6.3) |
 | trou instrumenté | instrumented hole | capteur, canal instrumenté | a path outside the wall whose telemetry feeds the registry |
 
-**Adding a term**: edit the §14 table in `spec-v1.4.2.md` first (it's the
+**Adding a term**: edit the §14 table in `spec-v1.4.3.md` first (it's the
 source), then mirror it here. The two tables must stay word-for-word
 identical (the "English gloss" column above is this file's own addition
 for readability and is not part of the source table).
