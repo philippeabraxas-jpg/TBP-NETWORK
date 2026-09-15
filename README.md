@@ -1,108 +1,132 @@
 # TBP-NETWORK
 
-Implémentation réseau du **Teleological Bounding Protocol (TBP)** —
-gouvernance d'actions attestée pour agents IA en réseau, du petit
-déploiement jusqu'à l'échelle WWW.
+Network-level implementation of the **Teleological Bounding Protocol (TBP)** —
+attested governance of AI agent actions over a network, from a single
+machine to enterprise deployments up to WWW scale.
 
-> *« Le contrôle d'accès existant décide si tu entres ; TBP décide ce que tu
-> peux faire une fois dedans — et le prouve. On gouverne les capacités, pas
-> les modèles. »*
+> *« Existing access control decides whether you get in; TBP decides what
+> you're allowed to do once inside — and proves it. We govern capabilities,
+> not models. »*
 
-## Commencer ici
+**Note on language**: the core specification (`docs/spec-v1.4.2.md`) and
+glossary (`docs/glossaire.md`) are currently written in French — this
+README and the configuration guidance below are in English so the repo is
+navigable either way. Translating the full spec is on the list; until then,
+this README summarizes enough to get oriented, and a native/fluent French
+reader or a translation tool can go deeper on any section referenced below.
 
-La spécification complète est **[`docs/spec-v1.4.2.md`](docs/spec-v1.4.2.md)** —
-c'est la source de vérité pour toute décision de conception ou de
-configuration dans ce dépôt. Ce README ne résume que ce qu'il faut pour
-s'orienter ; en cas de doute, la spec fait foi.
+## Start here
 
-Repères utiles pour la lire :
-- **§1 Doctrine** — les huit règles non négociables.
-- **§13 Séquence d'implémentation** — l'ordre à suivre (HSM → OPA → PEP →
-  NAC → traducteur), et le scope exact du pilote P1.
-- **§9.1 Budget de friction** — les seuils de latence et d'arbitrage qui
-  font qu'un déploiement TBP est réussi ou non ; à garder sous les yeux à
-  chaque décision de configuration.
-- **[`docs/glossaire.md`](docs/glossaire.md)** — un terme canonique par
-  concept ; à utiliser partout dans le code et la doc de ce dépôt (voir
-  `CONTRIBUTING.md`).
+The full specification is **[`docs/spec-v1.4.2.md`](docs/spec-v1.4.2.md)**
+(French) — it is the source of truth for any design or configuration
+decision in this repo. This README only summarizes what's needed to get
+oriented; when in doubt, the spec governs.
 
-## Structure du dépôt
+Useful landmarks for reading it:
+- **§1 Doctrine** — the eight non-negotiable rules.
+- **§13 Implementation sequence** — the order to follow (HSM → OPA → PEP →
+  NAC → translator), and the exact scope of pilot P1.
+- **§9.1 Friction budget** — the latency and arbitration-rate thresholds
+  that determine whether a TBP deployment is actually working; keep these
+  in view for every configuration decision.
+- **[`docs/glossaire.md`](docs/glossaire.md)** — one canonical term per
+  concept, to be used consistently across the code and docs of this repo
+  (see `CONTRIBUTING.md`).
+
+## Relation to the main TBP repository
+
+The protocol itself — specification, formal doctrine, adversarial audits,
+core implementation (HSM signing, Merkle audit chain, OPA policy engine) —
+lives in [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol),
+licensed Apache 2.0 (open). **This repository is the network-scale rollout**
+of that same protocol: NAC, local PEPs, cell registries, the inter-entity
+handshake — the pieces needed to take TBP from a single governed machine to
+a governed network. "TBP is an open contribution" refers to the protocol
+and its specification (open here too, see Licensing below); the
+network-implementation *code* in this specific repo is closed during the
+development/pilot phase (see Licensing) — a deliberate, temporary
+distinction, not a contradiction: the doctrine, the rules, and how to
+verify them are open now; the reference implementation of this particular
+rollout opens once it's pilot-tested.
+
+## Repository structure
 
 ```
-docs/                 Spécification (spec-v1.4.2.md), glossaire, audits
-figs/                  Figures référencées par la spec (voir MANIFEST.md — aucune n'existe encore)
+docs/                 Specification (spec-v1.4.2.md), glossary, audits — currently French
+figs/                  Figures referenced by the spec (see MANIFEST.md — none exist yet)
 policies/
-├── README.md          Comment générer capabilities.json correctement
-└── rego/               Exemples illustratifs de politiques Rego
+├── README.md          How to generate capabilities.json correctly
+└── rego/               Illustrative example Rego policies
 config/
-├── nftables/           Redirection PEP local (§4.1)
+├── nftables/           Local PEP redirection (§4.1)
 ├── freeradius/          802.1X / EAP-TLS (§5.1)
-└── sysctl/               Durcissement kernel générique
+└── sysctl/               Generic kernel hardening
 src/
-├── pep/                 Point d'application de politique local (§4.1, §4.1-bis, §4.3)
-├── telemetry/            Métadonnées de flux, anti-dribble (§4.1-bis)
-└── translator/            Durcissement runtime du traducteur (§4.5)
-lab/                    PoC docker-compose + topologie containerlab (à définir)
+├── pep/                 Local policy enforcement point (§4.1, §4.1-bis, §4.3)
+├── telemetry/            Flow metadata, anti-dribble (§4.1-bis)
+└── translator/            Translator runtime hardening (§4.5)
+lab/                    docker-compose PoC + containerlab topology (TBD)
 tests/
-├── p1_friction/         Seuils de latence à respecter (§9.1)
-└── p2_redteam/           Scénarios d'attaque à couvrir (§13)
-.github/                Templates d'issue, CI (lint Rego + nftables)
+├── p1_friction/         Latency thresholds to respect (§9.1)
+└── p2_redteam/           Attack scenarios to cover (§13)
+.github/                Issue templates, CI (Rego + nftables lint)
 ```
 
-**État actuel : essentiellement un squelette.** La spec est corrigée et
-complète ; `config/` et `policies/` contiennent des points de départ
-concrets ; `src/`, `lab/` et `tests/` sont pour l'instant des README
-décrivant le scope attendu (voir §13 pour l'ordre dans lequel les remplir).
-Ne pas déployer `config/` tel quel — chaque fichier le dit explicitement,
-mais autant le répéter ici.
+**Current status: essentially a skeleton.** The spec is corrected and
+complete; `config/` and `policies/` contain concrete starting points;
+`src/`, `lab/` and `tests/` are, for now, READMEs describing the expected
+scope (see §13 for the order to fill them in). Do not deploy `config/`
+as-is — every file there says so explicitly, worth repeating here too.
 
-## Indications de configuration — par où commencer
+## Configuration guidance — where to start
 
-D'après la séquence d'implémentation (§13) et le scope du pilote P1
-(§13, §9.1 : 1 VLAN serveurs, routeur Debian, 2 cellules, 802.1X, registre
-central, régression utilisateur mesurée = 0) :
+Based on the implementation sequence (§13) and the pilot P1 scope (§13,
+§9.1: 1 server VLAN, Debian router, 2 cells, 802.1X, central registry,
+measured user-experience regression = 0):
 
-1. **Genèse et clés** (§7.2, §3.2) — avant tout le reste : cérémonie de
-   genèse signée par le quorum de contrôleurs (m-of-n, HSM), ancrée
-   hors-bande. Rien dans ce dépôt ne remplace cette étape ; elle est
-   procédurale, pas du code.
-2. **OPA** — installer, générer `policies/capabilities.json` selon
-   [`policies/README.md`](policies/README.md) (retirer `http.send` et
-   `time.now_ns` avant tout déploiement, jamais après), démarrer avec
-   `lab/docker-compose.yml` pour itérer sur les règles en local.
-3. **PEP** — le premier périmètre réellement gouverné (§13). Lire
-   [`src/pep/README.md`](src/pep/README.md) pour les décisions à prendre
-   avant d'écrire du code, et [`config/nftables/pep-redirect.nft`](config/nftables/pep-redirect.nft)
-   pour la redirection réseau côté Debian. **Déployer d'abord en mode
-   monitor** (log, pas de blocage) — jamais `closed` en premier (doctrine
+1. **Genesis and keys** (§7.2, §3.2) — before anything else: a genesis
+   ceremony signed by the controller quorum (m-of-n, HSM), anchored
+   out-of-band. Nothing in this repo replaces this step; it's procedural,
+   not code.
+2. **OPA** — install it, generate `policies/capabilities.json` following
+   [`policies/README.md`](policies/README.md) (strip `http.send` and
+   `time.now_ns` before any deployment, never after), start it with
+   `lab/docker-compose.yml` to iterate on rules locally.
+3. **PEP** — the first genuinely governed perimeter (§13). Read
+   [`src/pep/README.md`](src/pep/README.md) for the decisions to make
+   before writing any code, and [`config/nftables/pep-redirect.nft`](config/nftables/pep-redirect.nft)
+   for the Debian-side network redirection. **Deploy in monitor mode
+   first** (log, no blocking) — never `closed` on first rollout (doctrine
    §5.3).
-4. **NAC en parallèle** — [`config/freeradius/README.md`](config/freeradius/README.md) :
-   802.1X/EAP-TLS réutilisant la même PKI que le handshake (§3), fail-closed
-   forcé au niveau switch (pas seulement côté RADIUS), pas de VLAN assigné
-   par RADIUS en v1.
-5. **Durcissement hôte** — [`config/sysctl/99-tbp-hardening.conf`](config/sysctl/99-tbp-hardening.conf)
-   sur chaque machine portant un composant TBP (broker, PEP, registre).
-6. **Traducteur en dernier** (§13) — une fois le reste stable ; voir
-   [`src/translator/README.md`](src/translator/README.md) pour le
-   durcissement runtime attendu (non-root, cap-drop, seccomp — distinct de
-   `dm-verity`, qui protège l'image au repos, pas le runtime).
+4. **NAC in parallel** — [`config/freeradius/README.md`](config/freeradius/README.md):
+   802.1X/EAP-TLS reusing the same PKI as the handshake (§3), fail-closed
+   enforced at the switch level (not just on the RADIUS side), no
+   RADIUS-assigned VLAN in v1.
+5. **Host hardening** — [`config/sysctl/99-tbp-hardening.conf`](config/sysctl/99-tbp-hardening.conf)
+   on every machine running a TBP component (broker, PEP, registry).
+6. **Translator last** (§13) — once everything else is stable; see
+   [`src/translator/README.md`](src/translator/README.md) for the
+   expected runtime hardening (non-root, cap-drop, seccomp — distinct from
+   `dm-verity`, which protects the image at rest, not the runtime).
 
-À chaque étape, mesurer contre le budget de friction (§9.1) — voir
-[`tests/p1_friction/README.md`](tests/p1_friction/README.md) pour les
-seuils exacts. Le pilote échoue si la latence ou le taux d'arbitrage
-dépassent ces seuils, même si tout fonctionne par ailleurs.
+At every step, measure against the friction budget (§9.1) — see
+[`tests/p1_friction/README.md`](tests/p1_friction/README.md) for the exact
+thresholds. The pilot fails if latency or arbitration rate exceed these
+thresholds, even if everything else works.
 
-## Licence
+## Licensing
 
-Double licence, par sous-arbre :
-- **`docs/` et `figs/`** : [CC BY 4.0](docs/LICENSE) — libre de partager
-  et adapter avec attribution.
-- **Tout le reste** (`config/`, `src/`, `policies/`, `lab/`, `tests/`,
-  `.github/`) : [tous droits réservés](LICENSE) — fermé pour la phase de
-  développement et de pilote actuelle ; une licence plus ouverte est
-  prévue plus tard.
+Dual license, by subtree:
+- **`docs/` and `figs/`**: [CC BY 4.0](docs/LICENSE) — free to share and
+  adapt with attribution.
+- **Everything else** (`config/`, `src/`, `policies/`, `lab/`, `tests/`,
+  `.github/`): [all rights reserved](LICENSE) — closed during the current
+  development/pilot phase; a more open license is planned once the
+  network-rollout implementation is pilot-tested. The protocol itself —
+  specification and core implementation — is open under Apache 2.0 in
+  [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol);
+  only this specific network-rollout *code* is temporarily closed.
 
-Voir [`CONTRIBUTING.md`](CONTRIBUTING.md) pour ce qui est ouvert aux
-contributions dès maintenant (la documentation) et les règles à respecter
-en modifiant la spec (normalisation terminologique, citations vérifiées,
-changelog).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for what's open to contributions
+right now (the documentation) and the rules to follow when editing the
+spec (terminology normalization, verified citations, changelog).

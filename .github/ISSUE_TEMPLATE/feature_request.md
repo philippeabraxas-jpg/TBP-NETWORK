@@ -1,18 +1,17 @@
 ---
-name: Proposition
-about: Une évolution de la spec ou de l'implémentation
-title: "[PROPOSITION] "
+name: Proposal
+about: An evolution of the spec or the implementation
+title: "[PROPOSAL] "
 labels: enhancement
 ---
 
-**Doctrine concernée** (§1) : laquelle des huit règles cette proposition
-touche-t-elle, et comment reste-t-elle cohérente avec elle ?
+**Doctrine affected** (§1): which of the eight rules does this proposal
+touch, and how does it stay consistent with it?
 
-**Nouveau terme introduit ?** Si oui, ajouter une ligne au glossaire de
-normalisation (§14 de la spec, et `docs/glossaire.md`) — voir
-`CONTRIBUTING.md`.
+**New term introduced?** If so, add a line to the normalization glossary
+(spec §14, and `docs/glossaire.md`) — see `CONTRIBUTING.md`.
 
-**Impact sur le budget de friction (§9.1)** : latence ajoutée estimée,
-impact sur le taux d'arbitrage humain.
+**Impact on the friction budget** (§9.1): estimated added latency, impact
+on the human arbitration rate.
 
-**Description** :
+**Description**:

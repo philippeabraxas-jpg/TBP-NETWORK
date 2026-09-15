@@ -1,49 +1,47 @@
 # FreeRADIUS — 802.1X / EAP-TLS (spec §5.1)
 
-Le NAC est un **aiguillage**, pas un mur : authentifié (802.1X, EAP-TLS) →
-VLAN donnant accès au broker ; inconnu → VLAN captif dont la seule route est
-l'enrôlement ou le broker-forcé. **EAP-TLS doit réutiliser la même PKI que
-le handshake TBP (§3)** — une seule infrastructure d'identité, pas deux.
+The NAC is a **switchboard**, not a wall: authenticated (802.1X, EAP-TLS)
+→ VLAN granting access to the broker; unknown → **captive VLAN** whose
+only route is enrollment or the forced-broker path. **EAP-TLS must reuse
+the same PKI as the TBP handshake (§3)** — a single identity
+infrastructure, not two.
 
-## Ce qui manque encore ici
+## What's still missing here
 
-Aucune config FreeRADIUS n'est fournie pour l'instant — ce dossier est un
-point d'ancrage, pas un déploiement prêt à l'emploi. À produire avant le
-pilote P1 (§13) :
+No FreeRADIUS config is provided yet — this folder is an anchor point,
+not a ready-to-deploy setup. To produce before pilot P1 (§13):
 
-- `clients.conf` : déclaration des switchs/AP comme clients RADIUS
-  (secrets partagés — jamais commités, voir `.gitignore` racine).
-- `sites-available/tbp-eap-tls` : site dédié EAP-TLS, certificats émis par
-  la même autorité que le handshake (§3), CA privée dédiée au pilote,
-  jamais la CA de test FreeRADIUS livrée par défaut.
-- `mods-available/eap` : forcer `tls-config` sur la CA du pilote,
-  désactiver les méthodes EAP autres que TLS (pas de PEAP/MSCHAPv2 en
-  parallèle — une seule voie d'authentification, cohérent avec la
-  doctrine "jamais par nom, toujours par signature", §1).
+- `clients.conf`: declaring switches/APs as RADIUS clients (shared
+  secrets — never committed, see the root `.gitignore`).
+- `sites-available/tbp-eap-tls`: dedicated EAP-TLS site, certificates
+  issued by the same authority as the handshake (§3), a private CA
+  dedicated to the pilot, never FreeRADIUS's default test CA.
+- `mods-available/eap`: force `tls-config` onto the pilot's CA, disable
+  EAP methods other than TLS (no PEAP/MSCHAPv2 in parallel — a single
+  authentication path, consistent with the "never by name, always by
+  signature" doctrine, §1).
 
-## Points de configuration critiques (doctrine §5.3)
+## Critical configuration points (doctrine §5.3)
 
-- **Fail-closed obligatoire** : le comportement par défaut de FreeRADIUS
-  sur un rejet ou un timeout est de refuser — ne **jamais** configurer de
-  VLAN de repli "ouvert" en cas d'échec d'authentification. Le texte de
-  référence appelle ça le "défaut fail-open souvent implicite du RADIUS" :
-  il doit être forcé fail-closed **côté switch** (assignation VLAN par
-  défaut = VLAN captif, jamais un VLAN de confiance), pas seulement côté
-  serveur RADIUS.
-- **MAB (MAC Authentication Bypass)** : si utilisé pour des périphériques
-  IoT ne supportant pas 802.1X, il doit rester un **canal instrumenté**
-  (§5.3) — VLAN IoT dédié, jamais silencieux, télémétrie alimentant le
-  registre comme tout "trou" du mur.
-- **Déploiement progressif** : mode `monitor` (auth loggée, pas encore
-  appliquée) avant `closed` (VLAN réellement contraint) — jamais l'inverse
-  en production. Pas de VLAN assigné par RADIUS en v1 (`tunnel-private-group-id`
-  désactivé initialement) — le NAC ne fait qu'aiguiller authentifié/non
-  authentifié dans un premier temps, la granularité de VLAN par profil
-  vient après validation du pilote.
+- **Fail-closed is mandatory**: FreeRADIUS's default behavior on a reject
+  or timeout is to refuse — **never** configure an "open" fallback VLAN on
+  authentication failure. The reference text calls this "RADIUS's often
+  implicit fail-open default": it must be forced fail-closed **at the
+  switch level** (default VLAN assignment = captive VLAN, never a trusted
+  VLAN), not only on the RADIUS server side.
+- **MAB (MAC Authentication Bypass)**: if used for IoT devices that don't
+  support 802.1X, it must remain an **instrumented channel** (§5.3) —
+  dedicated IoT VLAN, never silent, telemetry feeding the registry like
+  any other "hole" in the wall.
+- **Progressive rollout**: `monitor` mode (auth logged, not yet enforced)
+  before `closed` (VLAN actually constrained) — never the reverse in
+  production. No RADIUS-assigned VLAN in v1 (`tunnel-private-group-id`
+  disabled initially) — the NAC only routes authenticated/unauthenticated
+  at first; per-profile VLAN granularity comes after the pilot is
+  validated.
 
-## Vérification OCSP/CRL
+## OCSP/CRL verification
 
-Un OCSP ou CRL injoignable ne doit **jamais** être un soft-fail silencieux
-(cert accepté par défaut) — router vers un VLAN de remédiation avec un
-retour visible à l'utilisateur, jamais un blocage muet ni un laisser-passer
-muet.
+An unreachable OCSP or CRL must **never** be a silent soft-fail (cert
+accepted by default) — route to a remediation VLAN with visible feedback
+to the user, never a silent block nor a silent pass-through.

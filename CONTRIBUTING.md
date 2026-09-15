@@ -1,37 +1,42 @@
-# Contribuer à TBP-NETWORK
+# Contributing to TBP-NETWORK
 
-## État du dépôt
+## Repository status
 
-Le code (`config/`, `src/`, `policies/`, `lab/`, `tests/`, `.github/`) est
-sous licence fermée (voir `LICENSE`) — pas de contributions externes
-acceptées pour l'instant. La documentation (`docs/`, `figs/`) est en
-CC BY 4.0 (voir `docs/LICENSE`) : les corrections et suggestions sur la
-spec, le glossaire ou les figures sont bienvenues par issue ou pull
-request.
+The code (`config/`, `src/`, `policies/`, `lab/`, `tests/`, `.github/`) is
+under a closed license (see `LICENSE`) — no external contributions
+accepted there for now. The documentation (`docs/`, `figs/`) is CC BY 4.0
+(see `docs/LICENSE`): corrections and suggestions on the spec, glossary,
+or figures are welcome via issue or pull request.
 
-## Règles pour toute modification de `docs/spec-v1.4.2.md`
+Note: the spec and glossary are currently in French (see README's
+"Note on language"). Issues/PRs proposing an English translation, in whole
+or in part, are very welcome.
 
-1. **Le glossaire de normalisation (§14) est la source de vérité
-   terminologique.** Toute modification qui introduit un nouveau concept
-   doit soit réutiliser un terme canonique existant, soit l'ajouter au
-   glossaire — jamais un synonyme non mappé glissé dans le corps du texte.
-   `docs/glossaire.md` doit rester identique mot pour mot au tableau du §14.
-2. **Toute référence normative (RFC, draft IETF, norme) doit être vérifiée
-   avant commit** — numéro ET titre, pas seulement le numéro qui "sonne
-   juste". Une correction de ce type a déjà eu lieu (voir §16, v1.4.2) :
-   RFC 9578 avait été citée à tort pour « Proof of Transit » (c'est en
-   réalité *Privacy Pass Issuance Protocols* — « Proof of Transit » n'a
-   jamais été publié en RFC).
-3. **Toute modification de version doit ajouter une ligne au changelog
-   (§16)**, jamais écraser silencieusement le contenu d'une version
-   précédente — cohérent avec la doctrine « dater la confiance » du §15.
-4. **Numérotation des sections** : certaines sections commencent à `.2`
-   (§3, §6) plutôt qu'à `.1` — c'est hérité des révisions précédentes, pas
-   une erreur à « corriger » en renumérotant tout le document (ça casserait
-   les renvois croisés internes et externes).
+## Rules for any change to `docs/spec-v1.4.2.md`
 
-## Rapporter un problème
+1. **The normalization glossary (§14) is the terminology source of
+   truth.** Any change introducing a new concept must either reuse an
+   existing canonical term or add it to the glossary — never slip in an
+   unmapped synonym in the body text. `docs/glossaire.md` mirrors the §14
+   table (with an added English-gloss column for readability, not part of
+   the source data) — keep the canonical term / synonyms / definition
+   columns in sync between the two whenever either changes.
+2. **Any normative reference (RFC, IETF draft, standard) must be verified
+   before commit** — number AND title, not just a number that "sounds
+   right." A correction of exactly this kind already happened (see §16,
+   v1.4.2): RFC 9578 was wrongly cited for "Proof of Transit" (it's
+   actually *Privacy Pass Issuance Protocols* — "Proof of Transit" was
+   never published as an RFC at all).
+3. **Any version change must add a line to the changelog (§16)**, never
+   silently overwrite a previous version's content — consistent with the
+   "date your confidence" doctrine in §15.
+4. **Section numbering**: some sections start at `.2` (§3, §6) rather than
+   `.1` — inherited from earlier revisions, not an error to "fix" by
+   renumbering the whole document (that would break internal and external
+   cross-references).
 
-Utiliser les templates dans `.github/ISSUE_TEMPLATE/`. Pour un problème de
-sécurité sur l'implémentation (pas la spec), ne pas ouvrir d'issue publique
-— contacter l'auteur directement.
+## Reporting an issue
+
+Use the templates in `.github/ISSUE_TEMPLATE/`. For a security issue in
+the implementation (not the spec), do not open a public issue — contact
+the author directly.

@@ -1,21 +1,21 @@
-# Figures référencées par `docs/spec-v1.4.2.md`
+# Figures referenced by `docs/spec-v1.4.2.md`
 
-Aucun fichier image n'existe encore dans ce dossier — les six figures
-suivantes sont référencées par la note technique mais restent à produire.
-Ce manifeste liste ce que chacune doit montrer, d'après le texte qui
-l'entoure dans la spec, pour que quiconque les dessine (ou les génère) parte
-du bon contenu sans avoir à relire tout le document.
+No image file exists in this folder yet — the six figures below are
+referenced by the technical note but still need to be produced. This
+manifest lists what each one must show, based on the text surrounding it
+in the spec, so that whoever draws (or generates) them starts from the
+right content without having to re-read the whole document.
 
-| Fichier | Section | Contenu attendu |
+| File | Section | Expected content |
 |---|---|---|
-| `fig1_chaine.png` | §0 Résumé | La chaîne de gouvernance TBP de bout en bout : agent → traducteur → OPA (décision) → PEP (exécution) → registre (preuve) — le schéma d'ensemble auquel tout le reste renvoie. |
-| `fig2_handshake.png` | §3 Handshake inter-entités | Les trois preuves du handshake en séquence : policy_id (règles), preuve de consistance O(log n) (historique), nonce → cycle OPA → feuille → signature HSM (vivacité). |
-| `fig3_reseau.png` | §5.1 Le mur et l'aiguillage | Topologie réseau : NAC en aiguillage, VLAN broker vs VLAN captif, mur serveur (aucun chemin direct client→serveur), EAP-TLS partageant la PKI du handshake. |
-| `fig4_registre.png` | §6 Registre à deux niveaux | Chaîne de cellule (chaud) → inscription périodique dans la chaîne maîtresse (motif CT/RFC 6962) → ancrage externe (froid). |
-| `fig5_passeport.png` | §4.1-bis Passeports à capacité bornée | Séparation des températures : compteur au PEP/terminateur (exécution) vs enveloppe d'egress au broker (émission), avec la télémétrie de métadonnées en sortie. |
-| `fig6_cles.png` | §7 Cluster : cellules, époques, miroirs, canari | Hiérarchie de clés et de temps : contrôleurs (m-of-n, HSM) → jeton d'époque (TTL) → clés de cellule → tokens d'action (TTL court). |
+| `fig1_chaine.png` | §0 Summary | The end-to-end TBP governance chain: agent → translator → OPA (decision) → PEP (execution) → registry (proof) — the overview diagram everything else refers back to. |
+| `fig2_handshake.png` | §3 Inter-entity handshake | The three handshake proofs in sequence: policy_id (rules), O(log n) consistency proof (history), verifier nonce → real OPA cycle → leaf → HSM signature (liveness). |
+| `fig3_reseau.png` | §5.1 The wall and the switchboard | Network topology: NAC as switchboard, broker VLAN vs. captive VLAN, server wall (no direct client→server path), EAP-TLS sharing the handshake's PKI. |
+| `fig4_registre.png` | §6 Two-tier registry | Cell chain (hot) → periodic inscription into the master chain (CT pattern/RFC 6962) → external anchoring (cold). |
+| `fig5_passeport.png` | §4.1-bis Bounded-capacity passports | Temperature separation: counter at the PEP/terminator (execution) vs. egress envelope at the broker (issuance), with metadata telemetry as output. |
+| `fig6_cles.png` | §7 Cluster: cells, epochs, mirrors, canary | Key and time hierarchy: controllers (m-of-n, HSM) → epoch token (TTL) → cell keys → action tokens (short TTL). |
 
-Format suggéré : SVG source versionné (`figs/src/`) + export PNG ici, pour
-rester éditable sans dépendre d'un outil propriétaire. Palette et style :
-voir la mention « palette harmonisée » du changelog v1.4.1 (§16) — à définir
-si aucune charte n'existe déjà ailleurs.
+Suggested format: versioned SVG source (`figs/src/`) + PNG export here, to
+stay editable without depending on a proprietary tool. Palette and style:
+see the "harmonized palette" note in the v1.4.1 changelog (§16) — to
+define if no style guide exists elsewhere already.

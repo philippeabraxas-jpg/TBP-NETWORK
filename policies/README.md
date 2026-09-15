@@ -1,43 +1,42 @@
 # Policies — OPA / Rego (spec §12 checklist)
 
-## `capabilities.json` — à générer, pas à copier
+## `capabilities.json` — generate it, don't copy one
 
-Pas de `capabilities.json` fourni dans ce dossier : le contenu réel dépend
-de la version d'OPA effectivement déployée (la liste des built-ins change
-d'une version à l'autre), donc un fichier écrit à la main ici serait soit
-faux, soit obsolète dès la prochaine mise à jour d'OPA — un risque de
-sécurité pire que l'absence de fichier (un `http.send` qu'on croit bloqué
-alors qu'il ne l'est pas plus).
+No `capabilities.json` is provided in this folder: its real content
+depends on the actually-deployed OPA version (the built-in list changes
+between versions), so a hand-written file here would be either wrong or
+obsolete as soon as OPA is upgraded — a worse security risk than having no
+file at all (believing `http.send` is blocked when it no longer is).
 
-Séquence correcte, à documenter dans le pipeline de déploiement :
+Correct sequence, to document in the deployment pipeline:
 
 ```sh
-# 1. Générer la liste complète des built-ins de LA version d'OPA déployée
+# 1. Generate the full built-in list of THE deployed OPA version
 opa capabilities > policies/capabilities.json
 
-# 2. Retirer manuellement les built-ins qui violent la doctrine (spec §12) :
-#    - http.send            (aucun appel réseau sortant depuis une règle)
-#    - net.lookup_ip_addr   (même raison)
-#    - time.now_ns          (le temps vient du broker/NTS, pas de l'horloge locale d'OPA — §6.2)
-#    - opa.runtime          (sauf usage déjà audité et justifié, ex. lire un
-#                            jeton d'environnement — jamais pour de l'I/O)
+# 2. Manually remove built-ins that violate the doctrine (spec §12):
+#    - http.send            (no outbound network call from a rule)
+#    - net.lookup_ip_addr   (same reason)
+#    - time.now_ns          (time comes from the broker/NTS, not OPA's local clock — §6.2)
+#    - opa.runtime          (unless a use is already audited and justified,
+#                            e.g. reading an environment token — never for I/O)
 
-# 3. Démarrer OPA avec ce fichier de capacités restreint :
+# 3. Start OPA with this restricted capabilities file:
 opa run --server --capabilities policies/capabilities.json ...
 ```
 
-**Circuit-breaker OPA (mentionné §0/§12)** : ce n'est pas un mécanisme natif
-d'OPA — il n'existe rien d'intégré au moteur Rego qui coupe une évaluation
-à 5 ms. C'est une propriété à implémenter côté appelant (le PEP/broker,
-voir `src/pep/`) : timeout strict sur l'appel à OPA, **fail-closed** (deny)
-si dépassé. À ne pas présenter comme une garantie d'OPA lui-même dans la
-documentation ou le code — même principe que le préfixe honnête déjà établi
-ailleurs dans l'écosystème TBP pour ne jamais laisser croire à une
-vérification qui n'existe pas.
+**OPA circuit-breaker (mentioned §0/§12)**: this is not a native OPA
+mechanism — nothing built into the Rego engine cuts off an evaluation at
+5 ms. It's a property to implement on the caller side (the PEP/broker,
+see `src/pep/`): a strict timeout on the call to OPA, **fail-closed**
+(deny) if exceeded. Do not present this as a guarantee OPA itself
+provides, in documentation or code — same principle as the honest prefix
+already established elsewhere in the TBP ecosystem to never imply a check
+that doesn't exist.
 
-## `rego/` — exemples de politiques
+## `rego/` — policy examples
 
-Voir [`rego/README.md`](./rego/) pour les squelettes de départ (defaut-deny,
-structure minimale conforme à la doctrine §1). Ce sont des **exemples
-illustratifs** pour amorcer les règles propres du pilote (§14 : « règles
-propres »), pas une politique de référence à déployer telle quelle.
+See [`rego/README.md`](./rego/) for starter skeletons (default-deny,
+minimal structure consistent with doctrine §1). These are **illustrative
+examples** to bootstrap the pilot's own rules (§14: "règles propres" /
+"own rules"), not a reference policy to deploy as-is.

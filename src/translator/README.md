@@ -1,31 +1,31 @@
-# Traducteur — durcissement runtime (spec §4.5)
+# Translator — runtime hardening (spec §4.5)
 
-Le traducteur (anciennement appelé "garde sémantique" dans des documents
-amont — voir `docs/glossaire.md`) est l'IA locale qui produit l'action
-réellement exécutée. Ce dossier couvre le **durcissement runtime**
-(vLLM/PyTorch), pas le modèle ni les prompts eux-mêmes :
+The translator (previously called "semantic guard" in upstream documents —
+see `docs/glossaire.md`) is the local AI that produces the action actually
+executed. This folder covers **runtime hardening** (vLLM/PyTorch), not the
+model or the prompts themselves:
 
-- Processus non-root dédié.
-- `CAP_DROP_ALL` (retrait de toutes les capacités Linux — à traduire en
-  configuration réelle : `CapabilityBoundingSet=` dans l'unité systemd, ou
-  `cap_drop: [ALL]` si conteneurisé).
-- Seccomp strict.
-- **Rappel important de la spec** : `dm-verity` protège l'image au repos,
-  **pas** la surface runtime — ne pas confondre les deux dans la
-  documentation de déploiement (une image vérifiée peut quand même être
-  compromise une fois le process démarré, si le runtime n'est pas
-  lui-même confiné).
+- Dedicated non-root process.
+- `CAP_DROP_ALL` (dropping all Linux capabilities — to translate into real
+  configuration: `CapabilityBoundingSet=` in the systemd unit, or
+  `cap_drop: [ALL]` if containerized).
+- Strict seccomp.
+- **Important reminder from the spec**: `dm-verity` protects the image at
+  rest, **not** the runtime surface — don't conflate the two in deployment
+  documentation (a verified image can still be compromised once the
+  process is running, if the runtime itself isn't confined).
 
-## Non implémenté ici (placeholder)
+## Not implemented here (placeholder)
 
-- Unité systemd du service traducteur avec les propriétés de confinement
-  ci-dessus (comparer avec le PEP réseau de `config/nftables/`, même
-  logique de défense en profondeur : réseau ET process).
-- **Dégradé contrôlé** (§4.5) : si le traducteur tombe, la politique est
-  "rejet du langage naturel, structuré seulement, aucun fallback cloud" —
-  à implémenter comme un comportement explicite et testé (voir
-  `tests/p2_redteam/`, scénario de panne du traducteur), pas une
-  conséquence accidentelle d'une exception non gérée.
-- Corpus natif par langue (positif/négatif) et pipeline de mesure continue
-  (FNR < 0,1 %, FPR < 2 %, §4.5) — question ouverte #4 de la spec (§11) :
-  "métriques par classe, corpus, traducteurs redondants — à développer."
+- systemd unit for the translator service with the confinement properties
+  above (compare with the network PEP in `config/nftables/`, same
+  defense-in-depth logic: network AND process).
+- **Controlled degradation** (§4.5): if the translator goes down, policy
+  is "reject natural language, structured input only, no cloud fallback"
+  — to implement as an explicit, tested behavior (see `tests/p2_redteam/`,
+  translator-failure scenario), not an accidental side effect of an
+  unhandled exception.
+- Native per-language corpus (positive/negative) and continuous
+  measurement pipeline (FNR < 0.1%, FPR < 2%, §4.5) — open question #4 of
+  the spec (§11): "translator: metrics per class, corpus, redundant
+  translators — to develop."

@@ -1,6 +1,11 @@
 # TBP — Gouvernance d'actions attestée
 ## Note technique v1.4.2 · 14 septembre 2026 · Philippe Collet
 
+> **This document is in French; translation to English is planned but not
+> done yet — see the [repository README](../README.md) for an English
+> summary of what's covered in each section, and for the configuration
+> guidance derived from it.**
+
 > *« Le contrôle d'accès existant décide si tu entres ; TBP décide ce que tu peux faire une fois dedans — et le prouve. On gouverne les capacités, pas les modèles. »*
 
 **Intègre :** audits adversariaux indépendants (Gemini, DeepSeek, Claude — v1.1–v1.3) · audit pratique quatre évaluateurs + deux méta-audits (référence de déploiement v1.2) · manifeste réseau (intégré et normalisé).

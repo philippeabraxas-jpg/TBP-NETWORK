@@ -1,23 +1,22 @@
-# Télémétrie de métadonnées — anti-dribble (spec §4.1-bis)
+# Metadata telemetry — anti-dribble (spec §4.1-bis)
 
-Exportateurs de métadonnées de flux (style NetFlow/IPFIX) pour l'egress
-passant par un passeport : octets par intervalle, destination, rythme.
-Chaque enregistrement devient une feuille dans le registre de cellule.
+Flow metadata exporters (NetFlow/IPFIX-style) for egress passing through a
+passport: bytes per interval, destination, rate. Each record becomes a
+leaf in the cell registry.
 
-**Rappel doctrinal impératif** (§4.1-bis, déjà corrigé une fois en v1.4.2
-pour utiliser le terme canonique "passeport" plutôt que "Sésame" — voir
-`docs/spec-v1.4.2.md` §16) : **l'inspection du contenu des flux du
-passeport est proscrite.** L'anti-dribble (détection d'exfiltration
-goutte-à-goutte, sous-seuil) repose *exclusivement* sur le post-traitement
-des métadonnées — jamais sur du DPI (deep packet inspection). Toute
-implémentation ici qui toucherait au contenu des paquets plutôt qu'à leurs
-métadonnées est hors-doctrine, pas juste hors-scope.
+**Mandatory doctrinal reminder** (§4.1-bis, already corrected once in
+v1.4.2 to use the canonical term "passport" rather than "Sésame" — see
+`docs/spec-v1.4.2.md` §16): **inspecting the content of passport flows is
+prohibited.** Anti-dribble (detecting drip-feed, sub-threshold
+exfiltration) relies *exclusively* on metadata post-processing — never on
+DPI (deep packet inspection). Any implementation here that touches packet
+content rather than metadata is off-doctrine, not just out of scope.
 
-## Non implémenté ici (placeholder)
+## Not implemented here (placeholder)
 
-- Choix du format d'export : NetFlow v9 ou IPFIX (préférer IPFIX, plus
-  extensible pour les champs propres à TBP — jti, cellule d'origine).
-- Pipeline d'agrégation avant écriture au registre (§4.5 : "agrégats +
-  hash du corpus — contenu jamais en clair" s'applique par analogie ici).
-- Détection du "goutte-à-goutte" elle-même (seuils, fenêtres glissantes) —
-  question ouverte, pas de mécanisme figé dans la spec au-delà du principe.
+- Export format choice: NetFlow v9 or IPFIX (prefer IPFIX, more extensible
+  for TBP-specific fields — jti, origin cell).
+- Aggregation pipeline before writing to the registry (§4.5: "aggregates +
+  corpus hash — content never in the clear" applies here by analogy).
+- The "drip-feed" detection itself (thresholds, sliding windows) — an open
+  question, no fixed mechanism in the spec beyond the principle.

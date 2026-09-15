@@ -1,16 +1,16 @@
 ---
 name: Bug
-about: Un comportement du code ou de la spec qui ne correspond pas à ce qui est documenté
+about: A behavior in the code or spec that doesn't match what's documented
 title: "[BUG] "
 labels: bug
 ---
 
-**Composant concerné** : docs/spec · policies/rego · config/nftables · config/freeradius · config/sysctl · src/pep · src/telemetry · src/translator · lab · tests
+**Component affected**: docs/spec · policies/rego · config/nftables · config/freeradius · config/sysctl · src/pep · src/telemetry · src/translator · lab · tests
 
-**Section de la spec concernée** (si applicable) : §
+**Relevant spec section** (if applicable): §
 
-**Comportement attendu** (d'après la spec ou la doc) :
+**Expected behavior** (per the spec or docs):
 
-**Comportement observé** :
+**Observed behavior**:
 
-**Étapes pour reproduire** :
+**Steps to reproduce**:

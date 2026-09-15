@@ -1,27 +1,29 @@
-# Campagne rouge P2 — scénario « Michel » étendu (spec §13)
+# P2 red-team campaign — extended "Michel" scenario (spec §13)
 
-Métrique non négociable : **zéro action dangereuse non journalisée** — les
-trous doivent être comptés, jamais ignorés silencieusement.
+Non-negotiable metric: **zero dangerous action left unlogged** — holes
+must be counted, never silently ignored.
 
-## Scénarios à couvrir (extraits de la spec, à détailler en cas de test)
+## Scenarios to cover (extracted from the spec, to detail when testing)
 
-- [ ] Portable inconnu tentant de rejoindre le réseau (§5.1, NAC aiguillage)
-- [ ] SFTP direct hors broker (§5.2, "aucun chemin direct client → serveur")
-- [ ] Exfiltration par clé USB (§5.2, hardware — hors périmètre réseau,
-      compensé par USBGuard/GPO/BIOS-IOMMU)
-- [ ] Hotspot / 4G comme canal de contournement (§5.2 — non couvert par
-      la prévention, doit être détecté par la télémétrie de ressources)
-- [ ] Submersion du broker/registre (§7, §8 — DoS doit être alarmé, jamais
-      un acte silencieusement autorisé)
-- [ ] Plan mensonger présenté à l'arbitrage humain (§4.2 — vérifier que la
-      déviation entre plan approuvé et exécution réelle est bien détectée)
-- [ ] Promotion canari sous partition réseau (§7.4 — la fenêtre saine doit
-      rester ancrée dans la maîtresse, jamais mesurée par la canari
-      elle-même)
-- [ ] Rejeu de token au-delà de la fenêtre TTL (§4.3, anti-rejeu jti)
-- [ ] Coupure de télémétrie par un admin sous pression (§5.3 — doit exiger
-      un quorum, être signée, alarmée, consignée — jamais un simple arrêt
-      de service silencieux)
+- [ ] Unknown laptop attempting to join the network (§5.1, NAC switchboard)
+- [ ] Direct SFTP bypassing the broker (§5.2, "no direct client → server
+      path")
+- [ ] USB-key exfiltration (§5.2, hardware — outside network scope,
+      compensated by USBGuard/GPO/BIOS-IOMMU)
+- [ ] Hotspot / 4G as a bypass channel (§5.2 — not covered by prevention,
+      must be detected via resource telemetry)
+- [ ] Broker/registry submersion (§7, §8 — a DoS must be alarmed, never a
+      silently authorized act)
+- [ ] Deceptive plan presented at human arbitration (§4.2 — verify that
+      the deviation between the approved plan and actual execution is
+      indeed detected)
+- [ ] Canary promotion under network partition (§7.4 — the sound window
+      must stay anchored in the master chain, never measured by the
+      canary itself)
+- [ ] Token replay beyond the TTL window (§4.3, jti anti-replay)
+- [ ] Telemetry cutoff by an admin under pressure (§5.3 — must require a
+      quorum, be signed, alarmed, logged — never a plain silent service
+      stop)
 
-Chaque scénario testé doit produire une feuille dans le registre — un test
-qui "réussit" sans laisser de trace vérifiable n'a rien prouvé.
+Every tested scenario must produce a leaf in the registry — a test that
+"passes" without leaving a verifiable trace has proven nothing.

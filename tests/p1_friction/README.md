@@ -1,23 +1,23 @@
-# Benchmarks de latence — budget de friction (spec §9.1)
+# Latency benchmarks — friction budget (spec §9.1)
 
-Le pilote échoue si ces seuils ne tiennent pas, pas seulement s'il y a un
-bug fonctionnel — la friction est une contrainte fondatrice, pas un
-détail de perf à optimiser après coup.
+The pilot fails if these thresholds don't hold, not only if there's a
+functional bug — friction is a founding constraint, not a perf detail to
+optimize afterward.
 
-| Mesure | Seuil | Source |
+| Measure | Threshold | Source |
 |---|---|---|
-| Latence ajoutée tier 1 (inoffensif, lecture seule) | < 5 ms | §9.1 |
-| Latence tier 1 (cible large) | 2–5 ms | §9 |
-| Latence tier 2 (à arbitrer, hors temps humain) | 10–50 ms | §9 |
-| Taux d'arbitrage humain | < 10 % des actions | §9.1 |
-| Régression d'expérience utilisateur mesurée | = 0 (condition d'échec sinon) | §9.1 |
+| Added latency, tier 1 (harmless, read-only) | < 5 ms | §9.1 |
+| Tier 1 latency (broad target) | 2–5 ms | §9 |
+| Tier 2 latency (to arbitrate, outside human time) | 10–50 ms | §9 |
+| Human arbitration rate | < 10% of actions | §9.1 |
+| Measured user-experience regression | = 0 (otherwise pilot failure condition) | §9.1 |
 
-## Non implémenté ici (placeholder)
+## Not implemented here (placeholder)
 
-- Harnais de charge (k6/locust/autocannon selon la stack finale de
-  `src/pep/`) mesurant la latence ajoutée par le PEP seul (hors traducteur,
-  hors réseau) pour isoler la variable.
-- Suivi dans le temps des **indicateurs annonciateurs** (§9) : taux
-  d'arbitrage > 20 %, validations < 5 s, trous non instrumentés, TTL qui
-  s'allongent, culture des exceptions — ce sont les signaux de "mort par
-  friction" (§9, scénario B) avant qu'il ne soit trop tard pour corriger.
+- Load harness (k6/locust/autocannon depending on `src/pep/`'s final
+  stack) measuring the latency added by the PEP alone (excluding
+  translator, excluding network) to isolate the variable.
+- Tracking over time of the **leading indicators** (§9): arbitration rate
+  > 20%, validations < 5 s, uninstrumented holes, TTLs stretching out,
+  an exceptions culture — these are the signals of "death by friction"
+  (§9, scenario B) before it's too late to correct course.
