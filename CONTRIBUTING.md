@@ -12,7 +12,7 @@ Note: the spec and glossary are currently in French (see README's
 "Note on language"). Issues/PRs proposing an English translation, in whole
 or in part, are very welcome.
 
-## Rules for any change to `docs/spec-v1.4.7.md`
+## Rules for any change to `docs/spec-v1.4.8.md`
 
 1. **The normalization glossary (§14) is the terminology source of
    truth.** Any change introducing a new concept must either reuse an
