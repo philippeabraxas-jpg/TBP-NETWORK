@@ -14,7 +14,7 @@ everything around it — NAC, PEPs, cell registries — that extends TBP's
 governance from a single machine to a network of entities that have to
 trust each other without simply trusting each other.
 
-**Note on language**: the core specification (`docs/spec-v1.4.4.md`) and
+**Note on language**: the core specification (`docs/spec-v1.4.5.md`) and
 glossary (`docs/glossaire.md`) are currently written in French — this
 README and the configuration guidance below are in English so the repo is
 navigable either way. Translating the full spec is on the list; until then,
@@ -23,7 +23,7 @@ reader or a translation tool can go deeper on any section referenced below.
 
 ## Start here
 
-The full specification is **[`docs/spec-v1.4.4.md`](docs/spec-v1.4.4.md)**
+The full specification is **[`docs/spec-v1.4.5.md`](docs/spec-v1.4.5.md)**
 (French) — it is the source of truth for any design or configuration
 decision in this repo. This README only summarizes what's needed to get
 oriented; when in doubt, the spec governs.
@@ -58,7 +58,7 @@ rollout opens once it's pilot-tested.
 ## Repository structure
 
 ```
-docs/                 Specification (spec-v1.4.4.md), glossary, audits — currently French
+docs/                 Specification (spec-v1.4.5.md), glossary, audits — currently French
 figs/                  Figures referenced by the spec (see MANIFEST.md)
 policies/
 ├── README.md          How to generate capabilities.json correctly

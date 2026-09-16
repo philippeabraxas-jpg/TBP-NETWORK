@@ -1,5 +1,5 @@
 # TBP — Gouvernance d'actions attestée
-## Note technique v1.4.4 · 15 septembre 2026 · Philippe Collet
+## Note technique v1.4.5 · 16 septembre 2026 · Philippe Collet
 
 > **This document is in French; translation to English is planned but not
 > done yet — see the [repository README](../README.md) for an English
@@ -104,7 +104,13 @@ Signature + fraîcheur + portée ne répondent pas à « déjà consommé ? ». 
 
 ### 4.4 · Écart ordre → effet (aliasing sémantique)
 
-L'intégrité de l'effet appartient au métier. Le PEP valide l'enveloppe, pas les effets cachés (triggers, cascades). Mitigations bornées aux classes F/I/W : (1) **dry-run avec diff d'état** soumis à OPA avant commit ; (2) object-capabilities (token scellé sur hash objet/champ/valeur) ; (3) **PEP in-process** — pour PostgreSQL, extension avec blocage à `post_parse_analyze` (pré-planificateur : `ExecutorStart` seul est post-planning, une fonction à effet de bord peut y être déjà évaluée) ; (4) contract-driven — **une API sans invariants déclarés est classée W**.
+L'intégrité de l'effet appartient au métier. Le PEP valide l'enveloppe, pas les effets cachés (triggers, cascades). Mitigations bornées aux classes F/I/W, sur deux niveaux — **par action** puis **par séquence** — parce qu'une politique qui ne juge qu'une action à la fois ne peut, par construction, jamais voir un effet qui n'existe qu'au niveau de la séquence.
+
+**Par action** : (1) **dry-run avec diff d'état** soumis à OPA avant commit ; (2) object-capabilities (token scellé sur hash objet/champ/valeur) ; (3) **PEP in-process** — pour PostgreSQL, extension avec blocage à `post_parse_analyze` (pré-planificateur : `ExecutorStart` seul est post-planning, une fonction à effet de bord peut y être déjà évaluée) ; (4) contract-driven — **une API sans invariants déclarés est classée W**.
+
+**Par séquence**, hérité du moteur de politique OPA du dépôt protocole (Responsible-Alliance-Protocol — voir README, *Relation to the main TBP repository*) : (5) profil comportemental à état, par agent — fenêtres glissantes 24 h / 7 j (montant et nombre cumulés, fréquence de rafale, dérive comportementale par écart à une base EMA, similarité et anomalies temporelles) ; score composite versionné comme **entrée OPA de premier rang**, jamais un heuristique hors politique (ex. cumul 24 h au-delà du seuil sans approbation humaine = refus, quel que soit le statut individuel de chaque action composant le cumul). Ferme la classe où l'attaque « saucisson » (N actions sous le seuil, effet agrégé au-dessus) échappe par construction à (1)-(4), qui n'évaluent jamais que l'action en cours.
+
+**Résidu, anticipé pour fermeture ex-post plutôt qu'ex-ante** : une action isolée, de grande ampleur, dont l'effet dévie de l'intention sans être intercepté par (1)-(5), reste possible — c'est le résidu métier du §10 point 5. Il n'est pas laissé sans réponse documentée : la voie de fermeture identifiée est un **post-mortem obligatoire avec reconstruction de la dérive intention → effet**, recalibrant en retour les seuils F/I/W — mais cette voie appartient au module optionnel TBP-GOVERNANCE (Responsible-Alliance-Protocol), pas au périmètre core de TBP-NETWORK ; voir §11.9 pour le statut exact et pourquoi ce module reste délibérément hors du déploiement par défaut.
 
 ### 4.5 · Le traducteur : anti-fraude structurelle et qualité mesurée
 
@@ -209,7 +215,7 @@ Monotonicité vérifiable (§11) ; affaiblissement légitime = transition motiv�
 | Fraude par description (agent menteur) | traducteur : l'action exécutée est l'action traduite | fermé structurellement |
 | Erreur de traduction | règles (refus par défaut) + qualité mesurée (§4.5) | dommage de qualité borné |
 | Plan abstrait mensonge en arbitrage | plan approuvé = contrat hashé | — |
-| Aliasing sémantique | métier primaire + mitigations §4.4 bornées F/I/W | résidu métier |
+| Aliasing sémantique | métier primaire + mitigations §4.4 par action et par séquence (F/I/W) | résidu métier : fermeture ex-post anticipée, module optionnel (§11.9) |
 | Rejeu de token | jti + cache PEP + cardinalité F/W | borné à N réplicas ; détectable |
 | Tunnel ouvert (passeport) | passeport à quota + enveloppe + métadonnées (§4.1-bis) | dribble → post-traitement |
 | Contournement local du PEP | re-validation service / peer credentials / eBPF cgroup | — |
@@ -277,7 +283,13 @@ Conséquence : la légitimité de la classification est celle de la gouvernance 
 
 Ce mécanisme vaut à toute échelle : en entreprise (périmètres organisationnels) comme entre institutions (périmètres souverains). Ce n'est pas le même problème politique, c'est le même protocole. La difficulté restante — méta-invariants, hiérarchie des règles, reconnaissance mutuelle des classifications — relève de la négociation entre gouvernances, pas du protocole. TBP ne résout pas ce problème ; il le rend traitable.
 
-## 12 · Briques réutilisées et checklists
+### 11.9 · Fermeture ex-post du résidu d'aliasing sémantique (module optionnel)
+
+Le résidu identifié au §4.4 (action isolée, de grande ampleur, effet dévié de l'intention, non intercepté par les mitigations (1)-(5)) a une voie de fermeture ex-post anticipée mais **délibérément non intégrée au périmètre core** de ce dépôt : **TBP-GOVERNANCE**, module du dépôt protocole (Responsible-Alliance-Protocol), qui ajoute une voie de dérogation multisig (comité 5 rôles, quorum 3-of-5, JWT à durée limitée injecté dans OPA) et rend le post-mortem obligatoire — reconstruction de la dérive intention → effet, analyse d'impact, détection d'urgence fabriquée — sur chaque usage de cette voie.
+
+Pourquoi hors périmètre par défaut : TBP-GOVERNANCE documente lui-même sa propre doctrine (« A bypass is not an evolution. It is a tragic concession to the complexity of the real world ») — prérequis lourds (HSM, comité 24/7, cadre juridique, six mois de TBP-CORE stable sans incident), coût systémique volontairement élevé (fenêtre de confiance érodée à chaque usage, verrouillage définitif si le budget de 24 h de dérogation cumulée sur 12 mois est dépassé), et une recommandation explicite : la plupart des déploiements doivent rester sur le socle sans dérogation. L'intégrer par défaut à TBP-NETWORK transformerait une échappatoire volontairement pénible en confort — la « boiling frog » que le module lui-même met en garde contre.
+
+**État** : anticipé et documenté — pas une lacune non vue. Intégration dans ce dépôt : ouverte, conditionnée aux mêmes prérequis que ceux du module (checklist infrastructure/gouvernance/légal/observabilité), pas avant le pilote P1/P2 (§13).
 
 | Besoin | Brique |
 |---|---|
@@ -344,7 +356,8 @@ Un terme par concept — les synonymes des documents amont (manifeste réseau, r
 | v1.2 (audit DeepSeek) | fenêtre canari ancrée · limite de légitimité · provenance ≠ conformité · gouvernance de la qualité du traducteur · régime de coût et indicateurs · table des langages |
 | v1.3 (audit Claude) | anti-rejeu jti · localhost ≠ authentification · rejeu chiffré · indicateurs · veritrail vérifié |
 | v1.4.1 (revue indépendante) | corrections textuelles (§1, §8) · anti-dribble explicite : proscription d'inspection de contenu, §4.1-bis · budget de friction ancré comme contrainte de pilote (§9.1) · refonte des figures 1, 2, 3, 5, 6 : flux unidirectionnels clarifiés, palette harmonisée |
-| **v1.4.4 (précision terminologique)** | Élimination de « juger »/« jugement » comme verbe décrivant TBP, y compris à la forme négative : TBP n'exerce aucune discrétion, il n'y a donc rien à juger ni à ne pas juger. §1 : « on éclaire l'action, on ne la juge pas » → « TBP n'est pas un juge, c'est un livre de lois et un greffe » · §4.5 : « il éclaire l'action, il ne la juge jamais » → « il éclaire l'action, il ne la décide jamais » · §10 point 11 : même reformulation (livre de lois et greffe) · §11.8 : « le protocole ne la juge pas » → « le protocole ne se prononce pas dessus » |
+| **v1.4.5 (fermeture de l'aliasing sémantique)** | §4.4 : les mitigations F/I/W deviennent explicitement à deux niveaux — par action (1)-(4), inchangées, et par séquence (5) nouvelle, un profil comportemental à état par agent (fenêtres glissantes, dérive EMA, score composite en entrée OPA de premier rang) hérité du moteur de politique du dépôt protocole, fermant la classe d'attaque « saucisson » que (1)-(4) ne peuvent pas voir par construction · le résidu métier restant (action isolée hors (1)-(5)) n'est plus seulement mentionné comme non fermé : §11.9 (nouveau) documente sa voie de fermeture ex-post anticipée (post-mortem + reconstruction de la dérive intention → effet, module optionnel TBP-GOVERNANCE) et pourquoi elle reste volontairement hors périmètre core par défaut · §8 : ligne aliasing sémantique reformulée en conséquence — objectif : ne pas laisser croire que ce résidu n'est pas anticipé |
+| v1.4.4 (précision terminologique) | Élimination de « juger »/« jugement » comme verbe décrivant TBP, y compris à la forme négative : TBP n'exerce aucune discrétion, il n'y a donc rien à juger ni à ne pas juger. §1 : « on éclaire l'action, on ne la juge pas » → « TBP n'est pas un juge, c'est un livre de lois et un greffe » · §4.5 : « il éclaire l'action, il ne la juge jamais » → « il éclaire l'action, il ne la décide jamais » · §10 point 11 : même reformulation (livre de lois et greffe) · §11.8 : « le protocole ne la juge pas » → « le protocole ne se prononce pas dessus » |
 | v1.4.3 (clarifications) | §1 : principe « on éclaire l'action, on ne la juge pas » · §4.5 : le traducteur est un paramètre de friction, pas de sécurité ; métriques recentrées (taux d'escalade, traduction correcte hors refus) · §9.1 : lien explicite avec §4.5 · §11.8 : la gouvernance de la classification devient une conséquence du §3 (souveraineté locale + subsomption mécanique), plus une question ouverte · §10 : ajout du point 11 · §0 : épigraphe du switch activable et auditable |
 | v1.4.2 (corrections) | citation erronée corrigée (§11, §12) : RFC 9578 est *« Privacy Pass Issuance Protocols »*, pas « Proof of Transit » — jamais publié en RFC, seulement `draft-ietf-sfc-proof-of-transit` (IETF SFC, expiré) · glossaire de normalisation (§14) appliqué aux occurrences manquées : « garde »/« garde sémantique » → « traducteur » (§8, §10) ; « Sésame » → « passeport » (§4.1-bis, §8) · coquille §3.3 (« différentié » → « différencié ») · NIST 800-207 → NIST SP 800-207 (§3.3) |
 | v1.4 | référence de déploiement v1.2 intégrée (4 passes pratiques + 2 méta-audits) : passeports à capacité bornée · clés éphémères · temps explicite (NTS) · circuit-breaker OPA · extension PG · EAP-TLS = même PKI · OCSP fail-behavior · durcissement vLLM · RGPD/rétention · gouvernance de la classification · glossaire · statut épistémique · manifeste réseau intégré et normalisé |
