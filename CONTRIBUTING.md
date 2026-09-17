@@ -3,10 +3,15 @@
 ## Repository status
 
 The code (`config/`, `src/`, `policies/`, `lab/`, `tests/`, `.github/`) is
-under a closed license (see `LICENSE`) — no external contributions
-accepted there for now. The documentation (`docs/`, `figs/`) is CC BY 4.0
-(see `docs/LICENSE`): corrections and suggestions on the spec, glossary,
-or figures are welcome via issue or pull request.
+Apache 2.0 (see `LICENSE`) — external contributions welcome, same as the
+documentation (`docs/`, `figs/`, CC BY 4.0, see `docs/LICENSE`). This
+repository is largely a skeleton right now (see README's "Current
+status"): most of `src/`, `lab/`, and `tests/` are READMEs describing
+expected scope, not working code yet — a good entry point for a first
+contribution is exactly one of those "not implemented here" sections.
+Open an issue first for anything beyond a small, well-scoped change, so
+design direction doesn't conflict with an already-planned decision in
+the spec.
 
 Note: the reference specification is `docs/spec-en-v1.0.md` (English);
 `docs/spec-v1.4.8.md` is the author's French working note, not the

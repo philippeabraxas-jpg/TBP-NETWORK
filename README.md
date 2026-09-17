@@ -53,13 +53,10 @@ lives in [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/
 licensed Apache 2.0 (open). **This repository is the network-scale rollout**
 of that same protocol: NAC, local PEPs, cell registries, the inter-entity
 handshake — the pieces needed to take TBP from a single governed machine to
-a governed network. "TBP is an open contribution" refers to the protocol
-and its specification (open here too, see Licensing below); the
-network-implementation *code* in this specific repo is closed during the
-development/pilot phase (see Licensing) — a deliberate, temporary
-distinction, not a contradiction: the doctrine, the rules, and how to
-verify them are open now; the reference implementation of this particular
-rollout opens once it's pilot-tested.
+a governed network. As of this notice, this repository's code is Apache
+2.0 too (see Licensing below) — the same license as the core protocol,
+one license across both repositories, not two. It previously used a
+closed license during an initial pilot phase; that phase is over.
 
 ## Repository structure
 
@@ -134,13 +131,14 @@ Dual license, by subtree:
 - **`docs/` and `figs/`**: [CC BY 4.0](docs/LICENSE) — free to share and
   adapt with attribution.
 - **Everything else** (`config/`, `src/`, `policies/`, `lab/`, `tests/`,
-  `.github/`): [all rights reserved](LICENSE) — closed during the current
-  development/pilot phase; a more open license is planned once the
-  network-rollout implementation is pilot-tested. The protocol itself —
-  specification and core implementation — is open under Apache 2.0 in
-  [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol);
-  only this specific network-rollout *code* is temporarily closed.
+  `.github/`): [Apache 2.0](LICENSE) — same license as the core protocol
+  in [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol).
+  This code was closed-license during an initial pilot phase; that
+  phase is over — the project isn't viable built alone, and a
+  governance protocol whose own doctrine is "never by trust, always by
+  verifiable proof" shouldn't ask for trust on its own implementation.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for what's open to contributions
-right now (the documentation) and the rules to follow when editing the
-spec (terminology normalization, verified citations, changelog).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to contribute — code
+included now, not just documentation — and the rules to follow when
+editing the spec (terminology normalization, verified citations,
+changelog).
