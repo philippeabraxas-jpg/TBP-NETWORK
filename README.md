@@ -14,22 +14,28 @@ everything around it — NAC, PEPs, cell registries — that extends TBP's
 governance from a single machine to a network of entities that have to
 trust each other without simply trusting each other.
 
-**Note on language**: the core specification (`docs/spec-v1.4.8.md`) and
-glossary (`docs/glossaire.md`) are currently written in French — this
-README and the configuration guidance below are in English so the repo is
-navigable either way. Translating the full spec is on the list; until then,
-this README summarizes enough to get oriented, and a native/fluent French
-reader or a translation tool can go deeper on any section referenced below.
+**Note on language**: the reference specification is now
+**[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)** (English) — this is the
+document code and audits should be built against. The original French
+document (`docs/spec-v1.4.8.md`) remains in the repo as the author's
+working note: denser, less linear, useful for design-rationale digging,
+but not the one to cite. The glossary (`docs/glossaire.md`) is still
+French-sourced (§14 of the French doc is its terminology source of
+truth) with an English gloss column for readability — this is unchanged
+for now.
 
 ## Start here
 
-The full specification is **[`docs/spec-v1.4.8.md`](docs/spec-v1.4.8.md)**
-(French) — it is the source of truth for any design or configuration
-decision in this repo. This README only summarizes what's needed to get
-oriented; when in doubt, the spec governs.
+The full specification is **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)**
+— it is the source of truth for any design or configuration decision in
+this repo. This README only summarizes what's needed to get oriented;
+when in doubt, the spec governs. The French working note
+(`docs/spec-v1.4.8.md`) is not superseded content-wise — it's the same
+protocol, developed there first — but it is not the citable reference
+going forward.
 
 Useful landmarks for reading it:
-- **§1 Doctrine** — the eight non-negotiable rules.
+- **§1 Doctrine** — the ten non-negotiable rules.
 - **§13 Implementation sequence** — the order to follow (HSM → OPA → PEP →
   NAC → translator), and the exact scope of pilot P1.
 - **§9.1 Friction budget** — the latency and arbitration-rate thresholds
@@ -58,7 +64,7 @@ rollout opens once it's pilot-tested.
 ## Repository structure
 
 ```
-docs/                 Specification (spec-v1.4.8.md), glossary, audits — currently French
+docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.8.md, French working note), glossary, audits
 figs/                  Figures referenced by the spec (see MANIFEST.md)
 policies/
 ├── README.md          How to generate capabilities.json correctly

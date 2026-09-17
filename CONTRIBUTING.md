@@ -8,11 +8,20 @@ accepted there for now. The documentation (`docs/`, `figs/`) is CC BY 4.0
 (see `docs/LICENSE`): corrections and suggestions on the spec, glossary,
 or figures are welcome via issue or pull request.
 
-Note: the spec and glossary are currently in French (see README's
-"Note on language"). Issues/PRs proposing an English translation, in whole
-or in part, are very welcome.
+Note: the reference specification is `docs/spec-en-v1.0.md` (English);
+`docs/spec-v1.4.8.md` is the author's French working note, not the
+citable document (see README's "Note on language"). The glossary
+(`docs/glossaire.md`) is still French-sourced (§14 of the French doc).
+Issues/PRs keeping `spec-en-v1.0.md` and `spec-v1.4.8.md` synchronized
+where they diverge, or translating the glossary, are welcome.
 
-## Rules for any change to `docs/spec-v1.4.8.md`
+## Rules for any change to the specification (`spec-en-v1.0.md` and/or `spec-v1.4.8.md`)
+
+These rules governed `spec-v1.4.4.md` through `spec-v1.4.8.md`; they apply
+identically to `spec-en-v1.0.md` now that it is the reference, except
+where noted (rule 3). When a substantive change is made to one document,
+check whether the other needs the same change — they describe the same
+protocol and should not silently diverge on anything normative.
 
 1. **The normalization glossary (§14) is the terminology source of
    truth.** Any change introducing a new concept must either reuse an
@@ -23,17 +32,22 @@ or in part, are very welcome.
    columns in sync between the two whenever either changes.
 2. **Any normative reference (RFC, IETF draft, standard) must be verified
    before commit** — number AND title, not just a number that "sounds
-   right." A correction of exactly this kind already happened (see §16,
-   v1.4.2): RFC 9578 was wrongly cited for "Proof of Transit" (it's
-   actually *Privacy Pass Issuance Protocols* — "Proof of Transit" was
-   never published as an RFC at all).
-3. **Any version change must add a line to the changelog (§16)**, never
-   silently overwrite a previous version's content — consistent with the
-   "date your confidence" doctrine in §15.
+   right." A correction of exactly this kind already happened in the
+   French doc (see its §16, v1.4.2): RFC 9578 was wrongly cited for
+   "Proof of Transit" (it's actually *Privacy Pass Issuance Protocols* —
+   "Proof of Transit" was never published as an RFC at all).
+3. **Changelog practice differs by document, deliberately.** The French
+   doc keeps an explicit §16 table — any version change there must add a
+   line, never silently overwrite a previous version's content
+   (consistent with its "date your confidence" doctrine, §15). The
+   English `spec-en-v1.0.md` has no equivalent §16 table by design (see
+   its §13 "Stability policy": git history over the registry's own chain
+   is its changelog) — do not add one; track changes via commits instead.
 4. **Section numbering**: some sections start at `.2` (§3, §6) rather than
    `.1` — inherited from earlier revisions, not an error to "fix" by
    renumbering the whole document (that would break internal and external
-   cross-references).
+   cross-references). This applies to both documents identically —
+   `spec-en-v1.0.md` mirrors the same numbering.
 
 ## Reporting an issue
 
