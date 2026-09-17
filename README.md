@@ -1,6 +1,6 @@
 # TBP-NETWORK
 
-Network-level implementation of the **Teleological Bounding Protocol (TBP)** —
+Network-level implementation of the **[Teleological Bounding Protocol (TBP)](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol)** —
 attested governance of AI agent actions over a network, from a single
 machine to enterprise deployments up to WWW scale.
 
