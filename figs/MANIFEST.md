@@ -1,4 +1,4 @@
-# Figures referenced by `docs/spec-en-v1.0.md` (and `docs/spec-v1.4.8.md`, same figures)
+# Figures referenced by `docs/spec-en-v1.0.md` (and `docs/spec-v1.4.9.md`, same figures)
 
 All six figures exist as PNG. This manifest tracks what each one shows,
 per the constructs each figure is drawing (box/arrow mechanism diagrams

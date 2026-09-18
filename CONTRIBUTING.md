@@ -24,15 +24,15 @@ current") is welcome, but should say why in the PR description —
 "picks up fix X" — not just "update submodule."
 
 Note: the reference specification is `docs/spec-en-v1.0.md` (English);
-`docs/spec-v1.4.8.md` is the author's French working note, not the
+`docs/spec-v1.4.9.md` is the author's French working note, not the
 citable document (see README's "Note on language"). The glossary
 (`docs/glossaire.md`) is still French-sourced (§14 of the French doc).
-Issues/PRs keeping `spec-en-v1.0.md` and `spec-v1.4.8.md` synchronized
+Issues/PRs keeping `spec-en-v1.0.md` and `spec-v1.4.9.md` synchronized
 where they diverge, or translating the glossary, are welcome.
 
-## Rules for any change to the specification (`spec-en-v1.0.md` and/or `spec-v1.4.8.md`)
+## Rules for any change to the specification (`spec-en-v1.0.md` and/or `spec-v1.4.9.md`)
 
-These rules governed `spec-v1.4.4.md` through `spec-v1.4.8.md`; they apply
+These rules governed `spec-v1.4.4.md` through `spec-v1.4.9.md`; they apply
 identically to `spec-en-v1.0.md` now that it is the reference, except
 where noted (rule 3). When a substantive change is made to one document,
 check whether the other needs the same change — they describe the same

@@ -303,7 +303,7 @@ The architecture is usable *because it accepts being imperfect*; this constraint
 
 **Intra-domain**: wall, PEPs, cells, epochs, canary. **Inter-domain** (companion concept note): handshake, named policies, referenced collection, trust by contract.
 
-**Sequence**: (1) HSM + genesis ceremony — nothing is signable before; (2) OPA + stratification validator + base registry; (3) HTTP/gRPC PEP = first truly governed perimeter; (4) NAC in parallel (monitor phase starts early — calendar time); (5) translator + F/I/W escalation (PG proxy, co-evaluation, 70B/MoE) last.
+**Sequence**: (1) HSM + genesis ceremony — nothing is signable before; (2) cluster fencing — epoch issuance and rotation, controller quorum (k-of-n) for class W, mirror/canary promotion (§7) — required before any multi-cell deployment, including the 2-cell P1 pilot below; a single cell can defer this, a pilot cannot; (3) OPA + stratification validator + base registry; (4) HTTP/gRPC PEP = first truly governed perimeter; (5) NAC in parallel (monitor phase starts early — calendar time); (6) translator + F/I/W escalation (PG proxy, co-evaluation, 70B/MoE) last.
 
 **Pilot P1**: one server VLAN, Debian router, 2 cells, DB + share PEPs, 802.1X, central registry — under the §9.1 friction budget (user regression = 0). **P2 red-team campaign**: the extended "Michel" scenario (unknown laptop, direct SFTP, USB, hotspot, flooding, lying plan, canary promotion under partition, replay, telemetry cut). **Non-negotiable metric**: zero dangerous action unlogged — holes counted, never ignored.
 
