@@ -1,6 +1,6 @@
 {
-  "provenance": "RFC 6962 §2.1 + transparency-dev/merkle v0.0.2 (rfc6962_test.go, testonly/constants.go) — valeurs publiées, recalculables : echo -n <hex> | xxd -r -p | sha256sum",
-  "hashStrategy": "leaf = SHA256(0x00‖data) ; node = SHA256(0x01‖left‖right) ; MTH(∅) = SHA256(\"\") ; split k = plus grande puissance de 2 < n",
+  "provenance": "RFC 6962 §2.1 + transparency-dev/merkle v0.0.2 (rfc6962_test.go, testonly/constants.go) — valeurs publiées, recalculables : echo -n \u003chex\u003e | xxd -r -p | sha256sum",
+  "hashStrategy": "leaf = SHA256(0x00‖data) ; node = SHA256(0x01‖left‖right) ; MTH(∅) = SHA256(\"\") ; split k = plus grande puissance de 2 \u003c n",
   "emptyRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "leafHashEmpty": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
   "leafHashL123456": "395aa064aa4c29f7010acfe3f25db9485bbd4b91897b6ad7ad547639252b4d56",
