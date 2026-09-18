@@ -33,6 +33,11 @@ build/
 # pire que pas de fichier du tout — régénérer depuis le binaire déployé)
 policies/capabilities.json
 
+# Généré par scripts/genesis/genesis_dev.sh (T3) — token SoftHSM de dev,
+# clés importées, epoch0.json, ancre simulée, binaire : artefacts locaux,
+# régénérés à chaque run, jamais commités
+scripts/genesis/out/
+
 # Lab / containerlab
 lab/**/*.pcap
 lab/**/state/
