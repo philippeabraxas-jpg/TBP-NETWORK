@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -268,8 +269,8 @@ func TestMonitorTripAtThreshold(t *testing.T) {
 	mon, err := NewMonitor(MonitorOptions{
 		Dir: dir, CellID: "cell-t5", QuotaBytes: quota,
 		Interval: 5 * time.Millisecond,
-		OnTrip:  func(Alarm) { atomic.AddInt32(&trips, 1) },
-		OnAlarm: func(a Alarm) { atomic.AddInt32(&alarms, 1); box.store(a) },
+		OnTrip:   func(Alarm) { atomic.AddInt32(&trips, 1) },
+		OnAlarm:  func(a Alarm) { atomic.AddInt32(&alarms, 1); box.store(a) },
 	})
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
@@ -343,12 +344,12 @@ func TestMonitorHostFloor(t *testing.T) {
 
 	var box alarmBox
 	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
-		CellID: "cell-t5",
-		QuotaBytes:    1 << 40, // quota énorme : seul le plancher hôte peut tirer
+		CellID:         "cell-t5",
+		QuotaBytes:     1 << 40, // quota énorme : seul le plancher hôte peut tirer
 		HostFloorBytes: 1 << 30,
-		Fs:            fakeFs{free: 1 << 20}, // 1 Mio libre « mesuré » < plancher
-		Interval:      5 * time.Millisecond,
-		OnAlarm:       func(a Alarm) { box.store(a) },
+		Fs:             fakeFs{free: 1 << 20}, // 1 Mio libre « mesuré » < plancher
+		Interval:       5 * time.Millisecond,
+		OnAlarm:        func(a Alarm) { box.store(a) },
 	})
 	defer log.Close(ctx)
 	go mon.Run(ctx)
@@ -369,7 +370,7 @@ func TestMonitorSamplerError(t *testing.T) {
 
 	var box alarmBox
 	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
-		CellID: "cell-t5",
+		CellID:     "cell-t5",
 		QuotaBytes: 1 << 40, Sampler: failingSampler{},
 		Interval: 5 * time.Millisecond,
 		OnAlarm:  func(a Alarm) { box.store(a) },
@@ -390,7 +391,7 @@ func TestMonitorDisengage(t *testing.T) {
 
 	var box alarmBox
 	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
-		CellID: "cell-t5",
+		CellID:     "cell-t5",
 		QuotaBytes: 1, // déjà dépassé → engagement au premier échantillon
 		Interval:   5 * time.Millisecond,
 		OnAlarm:    func(a Alarm) { box.store(a) },
@@ -420,7 +421,7 @@ func TestMonitorBelowThreshold(t *testing.T) {
 
 	var alarms int32
 	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
-		CellID: "cell-t5",
+		CellID:     "cell-t5",
 		QuotaBytes: 1 << 40, Interval: 5 * time.Millisecond,
 		Fs:      fakeFs{free: 1 << 40},
 		OnAlarm: func(Alarm) { atomic.AddInt32(&alarms, 1) },
@@ -503,10 +504,10 @@ func TestMonitorLeafWriteFailureStillTrips(t *testing.T) {
 
 	var box alarmBox
 	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
-		CellID: "cell-t5",
+		CellID:     "cell-t5",
 		QuotaBytes: 1, // déjà dépassé
-		Interval:  5 * time.Millisecond,
-		OnAlarm:  func(a Alarm) { box.store(a) },
+		Interval:   5 * time.Millisecond,
+		OnAlarm:    func(a Alarm) { box.store(a) },
 	})
 	// Le log est fermé AVANT l'engagement : la feuille d'arrêt échouera.
 	if err := log.Close(ctx); err != nil {
@@ -531,5 +532,97 @@ func TestMonitorClosed(t *testing.T) {
 	mon.Close()
 	if err := mon.Run(ctx); !errors.Is(err, ErrMonitorClosed) {
 		t.Fatalf("Run après Close: err=%v, attendu ErrMonitorClosed", err)
+	}
+}
+
+func TestMonitorConcurrentAppendersTripAtThreshold(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dir := t.TempDir()
+	skey, vkey, err := GenerateCellKey(testOrigin)
+	if err != nil {
+		t.Fatalf("GenerateCellKey: %v", err)
+	}
+	signer, err := note.NewSigner(skey)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	verifier, err := NewVerifier(vkey)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	initLog := reopenTestLog(t, ctx, dir, nil, signer, verifier)
+	if err := initLog.Close(ctx); err != nil {
+		t.Fatalf("Close init: %v", err)
+	}
+	used, err := (DirSampler{}).UsedBytes(dir)
+	if err != nil {
+		t.Fatalf("UsedBytes: %v", err)
+	}
+	// Seuil large : laisse le temps à de nombreux goroutines de se
+	// bousculer contre l'engagement plutôt que de trip au tout premier append.
+	quota := (used + 40*leafStorageBytes) * 10 / 8
+
+	var box alarmBox
+	mon, err := NewMonitor(MonitorOptions{
+		Dir: dir, CellID: "cell-t5-stress", QuotaBytes: quota,
+		Interval: time.Millisecond,
+		OnAlarm:  func(a Alarm) { box.store(a) },
+	})
+	if err != nil {
+		t.Fatalf("NewMonitor: %v", err)
+	}
+	log := reopenTestLog(t, ctx, dir, mon, signer, verifier)
+	if err := mon.Bind(log); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	defer log.Close(ctx)
+	go mon.Run(ctx)
+
+	const writers = 32
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				_, err := log.Append(ctx, Leaf{
+					Kind: KindDecision, CellID: "cell-t5-stress",
+					PayloadHash: HashPayload([]byte("s"), []byte{byte(w), byte(i)}),
+					Timestamp:   int64(i + 1),
+				})
+				if err != nil {
+					return // ErrBackpressure (ou ctx) — ce goroutine s'arrête
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	waitAlarm(t, &box, 10*time.Second)
+
+	_, size, err := log.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if size == 0 {
+		t.Fatal("registre vide après le test de charge")
+	}
+	last := readLeafAt(t, log, size, size-1)
+	if last.Kind != KindBackpressure {
+		t.Fatalf("SOUS CHARGE CONCURRENTE : dernière feuille (index %d/%d) kind=%d, attendu KindBackpressure(%d) — une écriture a dépassé la feuille d'arrêt",
+			size-1, size, last.Kind, KindBackpressure)
+	}
+
+	// Aucune autre feuille KindBackpressure dans le log (engagement unique).
+	var bpCount int
+	for i := uint64(0); i < size; i++ {
+		if readLeafAt(t, log, size, i).Kind == KindBackpressure {
+			bpCount++
+		}
+	}
+	if bpCount != 1 {
+		t.Fatalf("%d feuilles KindBackpressure dans le log, attendu exactement 1", bpCount)
 	}
 }
