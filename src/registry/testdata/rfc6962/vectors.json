@@ -1,0 +1,30 @@
+{
+  "provenance": "RFC 6962 §2.1 + transparency-dev/merkle v0.0.2 (rfc6962_test.go, testonly/constants.go) — valeurs publiées, recalculables : echo -n \u003chex\u003e | xxd -r -p | sha256sum",
+  "hashStrategy": "leaf = SHA256(0x00‖data) ; node = SHA256(0x01‖left‖right) ; MTH(∅) = SHA256(\"\") ; split k = plus grande puissance de 2 \u003c n",
+  "emptyRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "leafHashEmpty": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+  "leafHashL123456": "395aa064aa4c29f7010acfe3f25db9485bbd4b91897b6ad7ad547639252b4d56",
+  "nodeHashN123N456": "aa217fe888e47007fa15edab33c2b492a722cb106c64667fc2b044444de66bbb",
+  "tree": {
+    "leavesHex": [
+      "",
+      "00",
+      "10",
+      "2021",
+      "3031",
+      "40414243",
+      "5051525354555657",
+      "606162636465666768696a6b6c6d6e6f"
+    ],
+    "rootsHex": [
+      "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+      "fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125",
+      "aeb6bcfe274b70a14fb067a5e5578264db0fa9b51af5e0ba159158f329e06e77",
+      "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7",
+      "4e3bbb1f7b478dcfe71fb631631519a3bca12c9aefca1612bfce4c13a86264d4",
+      "76e67dadbcdf1e10e1b74ddc608abd2f98dfb16fbce75277b5232a127f2087ef",
+      "ddb89be403809e325750d3d263cd78929c2942b7942a34b77e122c9594a74c8c",
+      "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328"
+    ]
+  }
+}
