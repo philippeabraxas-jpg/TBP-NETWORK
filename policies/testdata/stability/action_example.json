@@ -1,0 +1,10 @@
+{
+  "comment": "Fixture de stabilité (§12) pour policies/rego/action_example.rego — K évaluations identiques doivent produire des sorties identiques.",
+  "query": "data.tbp.example.action",
+  "input": {
+    "action": "read",
+    "resource": "doc-1",
+    "actor": {"cellule": "cell-a", "policy_id": "sha256:example"},
+    "passeport": null
+  }
+}
