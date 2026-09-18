@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +148,21 @@ func TestUnmarshalLeafErrors(t *testing.T) {
 	}
 	if _, err := UnmarshalLeaf(append(append([]byte{}, data...), 0x00)); err == nil {
 		t.Fatal("octet surnuméraire accepté (longueur incohérente)")
+	}
+
+	// idLen=0 forgé à la main : Marshal ne produit jamais ce flux (il
+	// refuse un CellID vide), mais rien n'empêchait auparavant un flux
+	// d'octets construit directement de passer le seul contrôle de
+	// longueur avec idLen=0 et de ressortir avec un CellID vide — brèche
+	// de symétrie avec Marshal. Longueur cohérente pour idLen=0
+	// (1+1+8+1+0+32) : ce n'est PAS le contrôle de longueur qui doit
+	// rejeter ce cas, c'est le contrôle idLen==0 explicite.
+	emptyID := make([]byte, 1+1+8+1+32)
+	emptyID[0] = leafVersion
+	emptyID[1] = KindDecision
+	// octets 2:10 = timestamp (peu importe la valeur ici) ; octet 10 = 0 (idLen)
+	if _, err := UnmarshalLeaf(emptyID); err == nil {
+		t.Fatal("cellID vide (idLen=0 forgé) accepté")
 	}
 }
 
@@ -480,5 +496,108 @@ func TestAppendRejectsInvalidLeaf(t *testing.T) {
 	}
 	if size != 0 {
 		t.Fatalf("%d feuille(s) écrite(s) malgré les refus", size)
+	}
+}
+
+// TestAppendCancelledContext : un contexte déjà annulé fait échouer Append
+// explicitement — pas de succès silencieux, pas de blocage.
+func TestAppendCancelledContext(t *testing.T) {
+	log, _ := openTestLog(t, context.Background(), t.TempDir(), nil)
+	defer log.Close(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := log.Append(ctx, Leaf{Kind: KindDecision, CellID: "c", Timestamp: 1}); err == nil {
+		t.Fatal("Append avec un contexte déjà annulé a réussi silencieusement")
+	}
+}
+
+// TestCellLogConcurrentAppend : Append est utilisable depuis plusieurs
+// goroutines sans coordination côté appelant (le PEP et la télémétrie
+// écriront concurremment dans la même cellule) — chaque appel doit obtenir
+// un index distinct et contigu, sans doublon ni trou.
+func TestCellLogConcurrentAppend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	defer log.Close(ctx)
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	idxs := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			idx, err := log.Append(ctx, Leaf{Kind: KindDecision, CellID: "cell-a", PayloadHash: HashPayload([]byte("s"), []byte{byte(i)}), Timestamp: int64(i + 1)})
+			errs[i], idxs[i] = err, idx
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[uint64]int{}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d : Append: %v", i, err)
+		}
+		seen[idxs[i]]++
+	}
+	if len(seen) != n {
+		t.Fatalf("%d index distincts pour %d appends concurrents — doublons ou trous : %v", len(seen), n, seen)
+	}
+	for idx, count := range seen {
+		if count != 1 {
+			t.Fatalf("index %d obtenu %d fois", idx, count)
+		}
+	}
+	_, size, err := log.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if size != n {
+		t.Fatalf("taille finale %d, attendu %d", size, n)
+	}
+}
+
+// TestOpenVerifierMismatch : Verifier qui ne correspond pas à la paire de
+// clés du Signer — Head doit refuser le checkpoint plutôt que de faire
+// confiance à une signature qu'il ne peut pas authentifier (fail-closed).
+func TestOpenVerifierMismatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	skey, _, err := GenerateCellKey(testOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Origine différente = clé publique sans rapport avec celle du signataire.
+	_, wrongVkey, err := GenerateCellKey("tbp/registry/cell-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := note.NewSigner(skey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongVerifier, err := NewVerifier(wrongVkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := Open(ctx, Options{
+		Dir: t.TempDir(), Signer: signer, Verifier: wrongVerifier,
+		BatchSize: 1, BatchAge: 10 * time.Millisecond, CheckpointInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open : %v", err)
+	}
+	defer log.Close(ctx)
+
+	if _, err := log.Append(ctx, Leaf{Kind: KindDecision, CellID: "c", Timestamp: 1}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, _, err := log.Head(ctx); err == nil {
+		t.Fatal("Head accepté malgré un Verifier ne correspondant pas au Signer")
 	}
 }

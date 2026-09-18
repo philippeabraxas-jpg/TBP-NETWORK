@@ -95,6 +95,14 @@ func UnmarshalLeaf(data []byte) (Leaf, error) {
 	}
 	l.Timestamp = int64(binary.BigEndian.Uint64(data[2:10]))
 	idLen := int(data[10])
+	if idLen == 0 {
+		// Marshal refuse un CellID vide (voir plus haut) : une feuille
+		// bien formée n'en produit jamais. Sans ce garde, un flux
+		// d'octets forgé à la main (idLen=0) passait le seul contrôle de
+		// longueur ci-dessous et ressortait avec un CellID vide — brèche
+		// de symétrie avec Marshal, pas une feuille que ce format admet.
+		return l, fmt.Errorf("cellID vide : longueur annoncée 0")
+	}
 	if len(data) != 1+1+8+1+idLen+32 {
 		return l, fmt.Errorf("longueur incohérente : %d octets, cellID annoncé %d", len(data), idLen)
 	}
