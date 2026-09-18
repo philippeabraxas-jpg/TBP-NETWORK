@@ -28,6 +28,11 @@ node_modules/
 dist/
 build/
 
+# Généré par policies/gen_capabilities.sh — jamais commité (policies/README.md
+# et T1, #3 : un fichier figé devient faux dès la prochaine mise à jour d'OPA,
+# pire que pas de fichier du tout — régénérer depuis le binaire déployé)
+policies/capabilities.json
+
 # Lab / containerlab
 lab/**/*.pcap
 lab/**/state/
