@@ -184,6 +184,23 @@ silencieux (§1, `src/pep/README.md`) :
 2. **Schéma** : payload conforme à `schema.cddl` — clés inconnues, types,
    tailles, `v = 1` (CBOR déterministe, décodage strict, clés dupliquées
    interdites) ;
+
+   > **Note d'implémentation (T9) — rien de ceci n'est le comportement par
+   > défaut de `fxamacker/cbor/v2`.** Un `Unmarshal` nu accepte
+   > silencieusement les clés dupliquées (dernière valeur gagnante, aucune
+   > erreur) et les items de longueur indéfinie ; il n'a de plus aucune
+   > notion du jeu de clés fermé de `schema.cddl` et laisse donc passer
+   > toute clé inconnue sans erreur — vérifié empiriquement contre
+   > `fxamacker/cbor/v2` v2.9.4. Le « décodage strict » exigé ici n'est
+   > donc PAS une propriété acquise en choisissant CBOR : T9 doit
+   > explicitement construire son `DecMode` avec
+   > `DupMapKey: cbor.DupMapKeyEnforcedAPF` et
+   > `IndefLength: cbor.IndefLengthForbidden`, **et** rejeter par un
+   > contrôle dédié toute clé décodée hors de l'ensemble fermé
+   > `{1, 2, 4, 6, 7, −1, −2, −3, −4, −5, −6, −7, −9}` (`schema.cddl`
+   > n'est pas exécuté comme validateur au chemin chaud — le budget de
+   > latence §9.1 l'exclut — ce contrôle de clés doit donc être écrit à la
+   > main, pas délégué à un validateur CDDL générique) ;
 3. **Clé** : `kid` résolu dans le trousseau épinglé de la cellule ;
 4. **Signature** : Ed25519 sur la `Sig_structure` — « jamais par nom,
    toujours par signature » ;
