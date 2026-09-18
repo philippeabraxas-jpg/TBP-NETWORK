@@ -476,6 +476,13 @@ func cmdVerify(args []string) error {
 	fs, _, _, out := newFlagSet()
 	m := fs.Int("m", 2, "quorum attendu")
 	fs.Parse(args)
+	if *m < 1 {
+		// Sans ce garde, -m 0 rend "valid < *m" toujours faux : un jeton
+		// à zéro signature valide "passerait" le contrôle de quorum.
+		// cmdSign valide déjà m ≥ 1 côté signature ; même garde ici, pas
+		// de passage silencieux (§1 : default-deny).
+		return fmt.Errorf("-m doit être ≥ 1 (quorum attendu, reçu %d)", *m)
+	}
 
 	// 1. Manifest : intégrité de l'ensemble des clés publiques
 	mfData, err := os.ReadFile(filepath.Join(*out, "manifest.json"))
