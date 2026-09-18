@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/mod/sumdb/note"
@@ -90,6 +91,16 @@ type CellLog struct {
 	await    *tessera.PublicationAwaiter
 	verifier note.Verifier
 	bp       BackpressureChecker
+	// inflight suit les Append acceptés et pas encore terminés — T5 :
+	// quand le backpressure s'engage, le moniteur attend leur drainage
+	// (waitInflight) avant d'écrire la feuille d'arrêt, ce qui garantit
+	// que KindBackpressure est littéralement la DERNIÈRE feuille du log.
+	// Mutex+cond plutôt que sync.WaitGroup : Add concurrent à Wait quand
+	// le compteur est à zéro est un motif interdit (le double contrôle
+	// d'Append peut produire exactement cet entrelacement).
+	inflightMu sync.Mutex
+	inflightN  int64
+	inflightCh chan struct{} // créé au premier enter, fermé et remis à nil au retour à zéro
 }
 
 // Open ouvre (ou crée) le log de la cellule dans opts.Dir. L'opération est
@@ -145,10 +156,32 @@ func Open(ctx context.Context, opts Options) (*CellLog, error) {
 // locale. Si le backpressure (T5) est engagé, l'écriture est REFUSÉE avec
 // ErrBackpressure — doctrine README : la dernière feuille écrite avant
 // l'engagement doit être une feuille KindBackpressure (l'arrêt est tracé).
+//
+// Double contrôle autour du compteur in-flight : un Append peut passer le
+// premier Engaged() juste avant que le moniteur ne verrouille ; le second
+// contrôle (après Add) le rattrape alors, et l'append n'a jamais lieu —
+// le moniteur attend le drainage (waitInflight) avant la feuille d'arrêt,
+// donc tout append accepté AVANT le verrouillage est terminé avant elle.
 func (l *CellLog) Append(ctx context.Context, leaf Leaf) (uint64, error) {
 	if l.bp != nil && l.bp.Engaged() {
 		return 0, ErrBackpressure
 	}
+	l.inflightEnter()
+	defer l.inflightExit()
+	if l.bp != nil && l.bp.Engaged() {
+		// Le verrou est tombé entre le premier contrôle et l'entrée en
+		// vol : waitInflight côté moniteur peut déjà être reparti
+		// (compteur à zéro) — on refuse plutôt que d'écrire après la
+		// feuille d'arrêt.
+		return 0, ErrBackpressure
+	}
+	return l.appendInternal(ctx, leaf)
+}
+
+// appendInternal écrit sans consulter le backpressure — réservé à la
+// feuille d'arrêt KindBackpressure du moniteur T5 (qui a déjà verrouillé
+// et drainé). Append reste le seul point d'entrée métier.
+func (l *CellLog) appendInternal(ctx context.Context, leaf Leaf) (uint64, error) {
 	if leaf.Timestamp == 0 {
 		// Défaut dev : horloge locale. En production, l'appelant fournit
 		// l'horodatage NTS de la cellule (src/registry/README.md).
@@ -163,6 +196,45 @@ func (l *CellLog) Append(ctx context.Context, leaf Leaf) (uint64, error) {
 		return 0, fmt.Errorf("append: %w", err)
 	}
 	return idx.Index, nil
+}
+
+// waitInflight bloque jusqu'au drainage des Append en vol — utilisé par le
+// moniteur T5 entre le verrouillage et l'écriture de la feuille d'arrêt.
+func (l *CellLog) waitInflight() {
+	for {
+		l.inflightMu.Lock()
+		if l.inflightN == 0 {
+			l.inflightMu.Unlock()
+			return
+		}
+		ch := l.inflightCh
+		l.inflightMu.Unlock()
+		<-ch // fermé au prochain passage à zéro
+	}
+}
+
+// inflightEnter / inflightExit gèrent le compteur d'Append en vol. Le canal
+// n'est créé que s'il n'existe pas, fermé et remis à nil au retour à zéro :
+// un waitInflight qui observe n>0 capture LE canal courant et est sûr d'être
+// réveillé au prochain drainage complet — sans la course Add/Wait interdite
+// de sync.WaitGroup (compteur à zéro).
+func (l *CellLog) inflightEnter() {
+	l.inflightMu.Lock()
+	l.inflightN++
+	if l.inflightCh == nil {
+		l.inflightCh = make(chan struct{})
+	}
+	l.inflightMu.Unlock()
+}
+
+func (l *CellLog) inflightExit() {
+	l.inflightMu.Lock()
+	l.inflightN--
+	if l.inflightN == 0 && l.inflightCh != nil {
+		close(l.inflightCh)
+		l.inflightCh = nil
+	}
+	l.inflightMu.Unlock()
 }
 
 // Head retourne la tête courante du log : racine Merkle (32 octets) et
