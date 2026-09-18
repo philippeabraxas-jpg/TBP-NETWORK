@@ -1,0 +1,61 @@
+; ---------------------------------------------------------------------------
+; TBP-NETWORK — schéma formel du jeton signé, version 1 (tâche T8, issue #10)
+; Spec : v1.4.10 — §4.1 (jeton d'action), §4.1-bis (passeport à quota),
+; §4.4(2) (object-capabilities), §4.3 (anti-rejeu), §7.2 (fencing d'époque),
+; §11.3 (déterminisme), §12 (Ed25519).
+;
+; Enveloppe : COSE_Sign1 (RFC 9052), alg = EdDSA (-8), Ed25519 (§12).
+; Payload   : CWT (RFC 8392) — les clés 1, 2, 4, 6, 7 relèvent du registre
+;             CWT IANA ; les clés négatives sont à usage privé TBP.
+; Encodage  : CBOR déterministe (RFC 8949 §4.2.1, tri longueur-d'abord) —
+;             c'est la sérialisation canonique exigée par §11.3.
+;
+; Toute clé inconnue, tout type non conforme, toute valeur hors contrainte
+; = rejet (fail-closed, §1).
+; ---------------------------------------------------------------------------
+
+tbp-claims = {
+  1: tstr .size (1..255),    ; iss       — identifiant de la cellule émettrice
+                             ;             (origin du registre, §6)
+  2: tstr .size (1..255),    ; sub       — entité gouvernée (identité §3)
+  4: uint,                   ; exp       — fin de validité (secondes unix)
+  6: uint,                   ; iat       — émission (secondes unix)
+                             ;             contrainte : 30 <= exp - iat <= 60 (§4.1)
+  7: jti,                    ; cti = jti — identifiant unique anti-rejeu (§4.3),
+                             ;             porté par chaque feuille d'exécution (§4.1)
+  -1: hash32,                ; policy_id — hash(P), hash du bundle de règles
+                             ;             (§3, §7.4) : SHA-256 du bundle OPA signé
+  -2: tstr .size (1..255),   ; action    — action autorisée, PRODUITE par le
+                             ;             traducteur, jamais déclarée (§4.5)
+  -3: tstr .size (1..1024),  ; resource  — ressource cible exacte
+  ? -4: class,               ; class     — F | I | W | hors-classe (§5.3) ;
+                             ;             ABSENT = W (défaut fail-closed, §1)
+  ? -5: hash32,              ; object_seal — hash objet/champ/valeur (§4.4(2)) ;
+                             ;             présent = capacité scellée
+  -6: uint,                  ; epoch     — N de l'époque d'émission (§7.2) ;
+                             ;             l'épouse mourante tue le jeton (§7.3)
+  ? -7: quota,               ; passeport — présent = ouverture de chemin lourd
+                             ;             (§4.1-bis)
+  -9: schema-version,        ; v         — version du présent schéma
+}
+
+; --- types -----------------------------------------------------------------
+
+jti = bstr .size 16          ; 128 bits tirés crypto (§4.3 : unique par jeton)
+hash32 = bstr .size 32       ; SHA-256
+class = uint .lt 4           ; 0 = F (financier), 1 = I (infrastructure),
+                             ; 2 = W (survie), 3 = hors F/I/W (§5.3)
+schema-version = 1           ; v1 — tout changement non compatible incrémente
+
+; --- passeport à quota (§4.1-bis) ------------------------------------------
+; Vecteur (ressource, opération, volume_max, fenêtre, TTL, jti) : le TTL est
+; l'exp du jeton englobant et le jti son cti — le lien cryptographique est
+; structurel : le quota vit DANS le payload signé, jamais dans une règle
+; modifiable hors bande.
+
+quota = {
+  1: tstr .size (1..1024),   ; resource  — ressource du chemin ouvert
+  2: tstr .size (1..64),     ; operation — opération autorisée (ex. "POST")
+  3: uint,                   ; volume_max — plafond de volume (octets)
+  4: uint .gt 0,             ; window_s  — fenêtre de décompte (secondes)
+}
