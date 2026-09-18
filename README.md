@@ -17,7 +17,7 @@ trust each other without simply trusting each other.
 **Note on language**: the reference specification is now
 **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)** (English) — this is the
 document code and audits should be built against. The original French
-document (`docs/spec-v1.4.9.md`) remains in the repo as the author's
+document (`docs/spec-v1.4.10.md`) remains in the repo as the author's
 working note: denser, less linear, useful for design-rationale digging,
 but not the one to cite. The glossary (`docs/glossaire.md`) is still
 French-sourced (§14 of the French doc is its terminology source of
@@ -30,7 +30,7 @@ The full specification is **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)**
 — it is the source of truth for any design or configuration decision in
 this repo. This README only summarizes what's needed to get oriented;
 when in doubt, the spec governs. The French working note
-(`docs/spec-v1.4.9.md`) is not superseded content-wise — it's the same
+(`docs/spec-v1.4.10.md`) is not superseded content-wise — it's the same
 protocol, developed there first — but it is not the citable reference
 going forward.
 
@@ -79,7 +79,7 @@ tbp4.2.1/             Git submodule: the core protocol (Responsible-Alliance-Pro
                       engine this repo's PEPs enforce against). Not copied: run
                       `git submodule update --init` to fetch it; source of truth
                       and issue tracker for this code stay in that repository.
-docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.9.md, French working note), glossary, audits
+docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.10.md, French working note), glossary, audits
 figs/                  Figures referenced by the spec (see MANIFEST.md)
 policies/
 ├── README.md          How to generate capabilities.json correctly
@@ -129,16 +129,23 @@ measured user-experience regression = 0):
    **No `src/` scope exists yet for this** (unlike `pep/`, `registry/`,
    `telemetry/`, `translator/` — see the skeleton note above): work
    directly from spec §7 until a `src/cluster/README.md` is written.
-3. **OPA** — install it, generate `policies/capabilities.json` following
-   [`policies/README.md`](policies/README.md) (strip `http.send` and
-   `time.now_ns` before any deployment, never after), start it with
-   `lab/docker-compose.yml` to iterate on rules locally.
+3. **OPA + registry** — install OPA, generate `policies/capabilities.json`
+   following [`policies/README.md`](policies/README.md) (strip
+   `http.send` and `time.now_ns` before any deployment, never after),
+   start it with `lab/docker-compose.yml` to iterate on rules locally.
+   Includes the attested manifest and measured boot (§6.3, §13 step 3) —
+   a cell's own state must be provable before its decisions are; not yet
+   covered by [`src/registry/README.md`](src/registry/README.md), which
+   scopes the log/backpressure/anchoring side only.
 4. **PEP** — the first genuinely governed perimeter (§13). Read
    [`src/pep/README.md`](src/pep/README.md) for the decisions to make
    before writing any code, and [`config/nftables/pep-redirect.nft`](config/nftables/pep-redirect.nft)
    for the Debian-side network redirection. **Deploy in monitor mode
    first** (log, no blocking) — never `closed` on first rollout (doctrine
-   §5.3).
+   §5.3). Includes plan-as-contract arbitration (§4.2, §13 step 4) —
+   token validation alone governs a single action, not the multi-step
+   plan an operator actually signs; also not yet covered by
+   `src/pep/README.md`.
 5. **NAC in parallel** — [`config/freeradius/README.md`](config/freeradius/README.md):
    802.1X/EAP-TLS reusing the same PKI as the handshake (§3), fail-closed
    enforced at the switch level (not just on the RADIUS side), no
