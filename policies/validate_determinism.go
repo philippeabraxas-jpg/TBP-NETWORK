@@ -216,8 +216,8 @@ func checkCycles(modules []module) []finding {
 	visited := map[string]int{} // 0=inconnu, 1=en cours, 2=terminé
 	var stack []string
 
-	var dfs func(u string, neg bool) bool
-	dfs = func(u string, viaNeg bool) bool {
+	var dfs func(u string) bool
+	dfs = func(u string) bool {
 		visited[u] = 1
 		stack = append(stack, u)
 		for _, e := range adj[u] {
@@ -232,13 +232,19 @@ func checkCycles(modules []module) []finding {
 				}
 				cycle := append(append([]string{}, stack[idx:]...), e.to)
 				msg := "cycle de dépendances : " + strings.Join(cycle, " → ")
-				if viaNeg || e.negated {
+				// La négation qui rend un cycle non-stratifiable peut être sur
+				// N'IMPORTE QUELLE arête du cycle, pas seulement la dernière
+				// parcourue avant de refermer la boucle — vérifié directement
+				// sur les arêtes du cycle identifié, jamais par un drapeau
+				// accumulé le long du chemin DFS (qui fuiterait la négation
+				// d'une arête d'ENTRÉE dans le cycle, hors du cycle lui-même).
+				if cycleHasNegation(adj, cycle) {
 					msg += " (négation sur le cycle — non stratifiable)"
 				}
 				findings = append(findings, finding{Section: "§11.3", Rule: u, Message: msg})
 				return true
 			}
-			if visited[e.to] == 0 && dfs(e.to, e.negated) {
+			if visited[e.to] == 0 && dfs(e.to) {
 				return true
 			}
 		}
@@ -250,11 +256,28 @@ func checkCycles(modules []module) []finding {
 	for _, m := range modules {
 		for _, r := range m.rules {
 			if visited[r.node] == 0 {
-				dfs(r.node, false)
+				dfs(r.node)
 			}
 		}
 	}
 	return findings
+}
+
+// cycleHasNegation indique si une arête du cycle identifié (pas du chemin
+// DFS complet depuis la racine de parcours, qui peut inclure des arêtes
+// d'entrée hors cycle) est négatée. C'est la définition correcte de la
+// théorie de stratification : un cycle est non-stratifiable si une
+// négation apparaît n'importe où sur ce cycle, pas seulement sur l'arête
+// qui l'a refermé.
+func cycleHasNegation(adj map[string][]edge, cycle []string) bool {
+	for i := 0; i+1 < len(cycle); i++ {
+		for _, e := range adj[cycle[i]] {
+			if e.to == cycle[i+1] && e.negated {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // collectRuleRefs extrait les références à des règles du bundle depuis le
@@ -362,6 +385,7 @@ func checkOrderSensitivity(modules []module) []finding {
 	var findings []finding
 	for _, m := range modules {
 		for _, r := range m.rules {
+			safe := collectSortSafeVars(r.raw)
 			for _, call := range findCalls(r.raw) {
 				op := callOperator(call)
 				if !orderSensitiveBuiltins[op] {
@@ -371,7 +395,7 @@ func checkOrderSensitivity(modules []module) []finding {
 				if len(call) < 3 {
 					continue
 				}
-				if !orderSafeCollection(call[2]) {
+				if !orderSafeCollection(call[2], safe) {
 					findings = append(findings, finding{
 						Section: "§12",
 						Rule:    r.node,
@@ -382,6 +406,47 @@ func checkOrderSensitivity(modules []module) []finding {
 		}
 	}
 	return findings
+}
+
+// collectSortSafeVars repère les assignations `x := <terme order-safe>`
+// dans le corps d'une règle (y compris la chaîne else) et renvoie
+// l'ensemble des noms de variable dont on peut prouver, statiquement et
+// dans la même règle, qu'elles contiennent une collection ordonnée.
+// Sans ça, la forme pourtant sûre `x := sort(...) ; concat(",", x)` est
+// rejetée à tort : orderSafeCollection ne voit que le terme passé
+// directement à concat(), jamais l'affectation qui l'a produit. Portée
+// volontairement limitée à une seule affectation directe dans la même
+// règle — pas d'analyse de flux inter-règles, cohérent avec le statut
+// "heuristique v1" déjà documenté pour ce contrôle.
+func collectSortSafeVars(raw map[string]any) map[string]bool {
+	safe := map[string]bool{}
+	cur := raw
+	for cur != nil {
+		for _, e := range asList(cur, "body") {
+			expr, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			terms, ok := expr["terms"].([]any)
+			if !ok || len(terms) != 3 {
+				continue
+			}
+			if callOperator(terms) != "assign" {
+				continue
+			}
+			lhs, ok := terms[1].(map[string]any)
+			if !ok || lhs["type"] != "var" {
+				continue
+			}
+			name, _ := lhs["value"].(string)
+			if name != "" && orderSafeCollection(terms[2], nil) {
+				safe[name] = true
+			}
+		}
+		next, _ := cur["else"].(map[string]any)
+		cur = next
+	}
+	return safe
 }
 
 // findCalls retourne toutes les expressions d'appel de l'AST. Deux formes
@@ -444,12 +509,19 @@ func callOperator(call []any) string {
 
 // orderSafeCollection : la collection passée à une fonction sensible à
 // l'ordre est acceptable si c'est un littéral de liste (ordre explicite,
-// §12) ou un appel à sort(...) (ordre trié). Un appel apparaît comme terme
-// {"type":"call","value":[...]} ou comme liste brute selon la position.
-func orderSafeCollection(term any) bool {
+// §12), un appel à sort(...) (ordre trié), ou une variable préalablement
+// assignée depuis un terme order-safe dans la même règle (safeVars, voir
+// collectSortSafeVars — nil ou absente = non reconnue, jamais un passe-droit
+// implicite). Un appel apparaît comme terme {"type":"call","value":[...]}
+// ou comme liste brute selon la position.
+func orderSafeCollection(term any, safeVars map[string]bool) bool {
 	if m, ok := term.(map[string]any); ok {
 		if m["type"] == "array" {
 			return true
+		}
+		if m["type"] == "var" {
+			name, _ := m["value"].(string)
+			return name != "" && safeVars[name]
 		}
 		if m["type"] == "call" {
 			if l, ok := m["value"].([]any); ok && callOperator(l) == "sort" {

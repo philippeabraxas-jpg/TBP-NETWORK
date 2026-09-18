@@ -1,0 +1,22 @@
+name: determinism
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rego-determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: validate_determinism — bundle policies/rego
+        run: go run policies/validate_determinism.go -rego-dir policies/rego -fixtures policies/testdata/stability
+      - name: validate_determinism — selftest (fixtures invalides rejetées)
+        run: go run policies/validate_determinism.go -selftest
