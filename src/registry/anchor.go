@@ -299,7 +299,19 @@ func (a *Anchorer) AnchorOnce(ctx context.Context) error {
 		TokenHash: sha256.Sum256(stamp.Token),
 	}
 
-	// 4. Inscription master chain ; store-and-forward si injoignable.
+	// 4. Inscription master chain ; store-and-forward si injoignable. Si le
+	//    rattrapage du pas 1 n'a pas pu vider le backlog (panne encore en
+	//    cours, ou échec ponctuel sur une seule entrée), l'enregistrement
+	//    courant rejoint le backlog SANS tentative d'inscription : l'y
+	//    insérer quand même intercalerait un ancrage plus récent avant une
+	//    entrée plus ancienne toujours coincée, rompant l'ordre
+	//    chronologique que le rattrapage est censé garantir par
+	//    construction (§6.2). Il continue néanmoins d'alimenter le
+	//    store-and-forward normalement (mêmes bornes, mêmes alarmes).
+	if a.BacklogDepth() > 0 {
+		a.pushBacklog(rec)
+		return fmt.Errorf("ancreur : rattrapage du backlog incomplet (%d en attente) — ancrage courant différé pour préserver l'ordre", a.BacklogDepth())
+	}
 	if _, err := a.appendAnchor(ctx, rec); err != nil {
 		a.pushBacklog(rec)
 		return err
@@ -327,12 +339,25 @@ func (a *Anchorer) appendAnchor(ctx context.Context, rec AnchorRecord) (uint64, 
 // updateLast n'avance que monotone : un ancrage plus ancien que le
 // dernier vérifié (rattrapage de backlog) ne fait jamais reculer la
 // fraîcheur. La reprise après dépassement est automatique et propre :
-// l'ancrage vérifié EST la preuve que la fenêtre est refermée (§6.2).
+// l'ancrage vérifié EST la preuve que la fenêtre est refermée (§6.2) —
+// mais seulement si CET ancrage est lui-même dans la borne. Une entrée de
+// backlog simplement plus récente que la précédente (rattrapage d'une
+// panne longue) reste souvent, à elle seule, hors de MaxAnchorLag : la
+// déclarer « reprise » romprait le dédoublonnage une-alarme-par-épisode
+// (fireTrip re-déclencherait aussitôt pour le même épisode, jamais un
+// nouveau) et mentirait sur l'état réel de fraîcheur.
 func (a *Anchorer) updateLast(rec AnchorRecord, idx uint64, hash [32]byte) {
 	if prev, ok := a.last.Load().(AnchorSnapshot); ok && !rec.TSATime.After(prev.At) {
 		return
 	}
 	a.last.Store(AnchorSnapshot{Hash: hash, At: rec.TSATime, MasterIndex: idx})
+	lag := a.clock().Sub(rec.TSATime)
+	if lag < 0 {
+		lag = 0
+	}
+	if lag > a.maxLag {
+		return // toujours périmé : Check() continuera de refuser, sans fausse reprise
+	}
 	if a.tripped.CompareAndSwap(true, false) {
 		a.fireAlarm(AnchorAlarm{Reason: AnchorReasonRecovered, CellID: a.cellID, At: a.clock()})
 	}

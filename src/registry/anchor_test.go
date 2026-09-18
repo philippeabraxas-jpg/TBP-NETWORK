@@ -718,3 +718,161 @@ func TestAnchorerConcurrentCheck(t *testing.T) {
 		t.Errorf("appels TSA = %d, attendu 5", tsa.callCount())
 	}
 }
+
+// nthFailMaster échoue exactement aux appels Append dont le rang (1-based)
+// figure dans failAt — isole un échec ponctuel au milieu d'un cycle
+// d'ancrage (rattrapage partiel du backlog) sans dépendre du minutage réel.
+type nthFailMaster struct {
+	mu     sync.Mutex
+	failAt map[int]bool
+	calls  int
+	leaves []Leaf
+}
+
+func (m *nthFailMaster) Append(_ context.Context, leaf Leaf) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.failAt[m.calls] {
+		return 0, errors.New("panne ponctuelle")
+	}
+	idx := uint64(len(m.leaves))
+	m.leaves = append(m.leaves, leaf)
+	return idx, nil
+}
+
+// TestAnchorerBacklogFlushNoFalseRecovery : une entrée de backlog qui n'est
+// que PLUS RÉCENTE que le dernier ancrage vérifié — sans être elle-même
+// fraîche au sens de MaxAnchorLag — ne doit jamais déclencher
+// AnchorReasonRecovered ni effacer l'état "tripped". Sinon la reprise est
+// un mensonge (le lag réel reste hors borne) et le dédoublonnage
+// une-alarme-par-épisode de fireTrip se brise : un Check() qui suit
+// immédiatement re-déclenche un DEUXIÈME trip pour ce qui est en réalité
+// la même panne ininterrompue.
+func TestAnchorerBacklogFlushNoFalseRecovery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	t0 := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(t0)
+	tsa := &fakeTSA{genTime: clock.now}
+	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
+
+	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+200s].
+	// #3 flush de cette entrée : OK (mais elle reste vieille de 200s par
+	// rapport à "maintenant"). #4 ancrage courant qui suit dans le même
+	// cycle : échoue à nouveau, pour isoler l'effet du flush seul.
+	master := &nthFailMaster{failAt: map[int]bool{2: true, 4: true}}
+	a, err := NewAnchorer(AnchorerOptions{
+		BrokerID: "broker-test", CellID: "cell-test",
+		Cell: cell, Master: master, TSA: tsa,
+		Interval: time.Second, MaxLag: MaxAnchorLag,
+		Clock: clock.now, OnTrip: trips.add, OnAlarm: alarms.add,
+	})
+	if err != nil {
+		t.Fatalf("NewAnchorer: %v", err)
+	}
+	seedCell(t, ctx, cell)
+
+	if err := a.AnchorOnce(ctx); err != nil {
+		t.Fatalf("ancrage initial: %v", err)
+	}
+	clock.advance(200 * time.Second) // > MaxAnchorLag
+	if err := a.Check(); !errors.Is(err, ErrAnchorStale) {
+		t.Fatalf("Check à +200s = %v, attendu ErrAnchorStale", err)
+	}
+	if trips.count(AnchorReasonLag) != 1 {
+		t.Fatalf("trips lag = %d, attendu 1", trips.count(AnchorReasonLag))
+	}
+	if err := a.AnchorOnce(ctx); err == nil {
+		t.Fatal("attendu échec de l'ancrage courant (panne)")
+	}
+	if got := a.BacklogDepth(); got != 1 {
+		t.Fatalf("backlog = %d, attendu 1", got)
+	}
+
+	clock.advance(200 * time.Second) // now t0+400s ; l'entrée en backlog date de t0+200s
+	if err := a.AnchorOnce(ctx); err == nil {
+		t.Fatal("attendu échec de l'ancrage courant (panne toujours en cours après le flush)")
+	}
+
+	snap, ok := a.Snapshot()
+	if !ok {
+		t.Fatal("aucun snapshot après le flush du backlog")
+	}
+	if actualLag := clock.now().Sub(snap.At); actualLag <= MaxAnchorLag {
+		t.Fatalf("scénario mal construit : lag réel %s ≤ MaxAnchorLag", actualLag)
+	}
+	if alarms.has(AnchorReasonRecovered) {
+		t.Error("AnchorReasonRecovered émis alors que l'entrée flushée est toujours périmée")
+	}
+	if err := a.Check(); !errors.Is(err, ErrAnchorStale) {
+		t.Fatalf("Check après le flush = %v, attendu ErrAnchorStale (toujours périmé)", err)
+	}
+	if trips.count(AnchorReasonLag) != 1 {
+		t.Errorf("trips lag = %d, attendu 1 (même épisode ininterrompu, pas un nouveau)", trips.count(AnchorReasonLag))
+	}
+}
+
+// TestAnchorerPartialFlushWithholdsCurrent : si le rejeu d'une entrée de
+// backlog échoue à nouveau, AnchorOnce ne doit PAS ancrer la tête courante
+// dans ce même cycle — sinon un enregistrement plus récent s'intercalerait
+// dans la master chain avant une entrée de backlog plus ancienne toujours
+// coincée, rompant l'ordre chronologique que le rattrapage est censé
+// garantir par construction (§6.2).
+func TestAnchorerPartialFlushWithholdsCurrent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	t0 := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(t0)
+	tsa := &fakeTSA{genTime: clock.now}
+	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
+
+	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+100s].
+	// #3 rejeu de cette entrée échoue À NOUVEAU (panne ponctuelle).
+	master := &nthFailMaster{failAt: map[int]bool{2: true, 3: true}}
+	a, err := NewAnchorer(AnchorerOptions{
+		BrokerID: "broker-test", CellID: "cell-test",
+		Cell: cell, Master: master, TSA: tsa,
+		Interval: time.Second, MaxLag: MaxAnchorLag,
+		Clock: clock.now, OnTrip: trips.add, OnAlarm: alarms.add,
+	})
+	if err != nil {
+		t.Fatalf("NewAnchorer: %v", err)
+	}
+	seedCell(t, ctx, cell)
+
+	if err := a.AnchorOnce(ctx); err != nil {
+		t.Fatalf("ancrage initial: %v", err)
+	}
+	clock.advance(100 * time.Second)
+	if err := a.AnchorOnce(ctx); err == nil {
+		t.Fatal("attendu échec (backlog=[t0+100s])")
+	}
+	if got := a.BacklogDepth(); got != 1 {
+		t.Fatalf("backlog = %d, attendu 1", got)
+	}
+
+	clock.advance(100 * time.Second) // now t0+200s
+	if err := a.AnchorOnce(ctx); err == nil {
+		t.Fatal("attendu échec : le rattrapage n'a pas pu vider le backlog, l'ancrage courant doit être différé")
+	}
+	// L'entrée coincée (t0+100s) ET l'enregistrement courant différé
+	// (t0+200s) sont tous deux en attente — le store-and-forward continue
+	// d'accumuler normalement, seule l'INSCRIPTION dans la master chain
+	// est différée pour préserver l'ordre.
+	if got := a.BacklogDepth(); got != 2 {
+		t.Fatalf("backlog = %d, attendu 2 (l'entrée coincée + le courant différé)", got)
+	}
+
+	leaves := master.leaves
+	if len(leaves) != 1 {
+		t.Fatalf("feuilles insérées = %d, attendu 1 (seul l'ancrage initial — rien ne doit dépasser l'entrée de backlog coincée)", len(leaves))
+	}
+	if leaves[0].Timestamp != t0.UnixNano() {
+		t.Errorf("feuille insérée à un temps inattendu : %s", time.Unix(0, leaves[0].Timestamp).UTC())
+	}
+}
