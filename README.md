@@ -50,17 +50,35 @@ Useful landmarks for reading it:
 The protocol itself — specification, formal doctrine, adversarial audits,
 core implementation (HSM signing, Merkle audit chain, OPA policy engine) —
 lives in [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol),
-licensed Apache 2.0 (open). **This repository is the network-scale rollout**
-of that same protocol: NAC, local PEPs, cell registries, the inter-entity
-handshake — the pieces needed to take TBP from a single governed machine to
-a governed network. As of this notice, this repository's code is Apache
-2.0 too (see Licensing below) — the same license as the core protocol,
-one license across both repositories, not two. It previously used a
-closed license during an initial pilot phase; that phase is over.
+licensed Apache 2.0 (open), and is vendored in-tree here at `tbp4.2.1/`
+as a git submodule pinned to a specific commit — a pointer, not a fork:
+this repository is never the place to file an issue or PR against that
+code, only against the network-rollout pieces below. **This repository
+is the network-scale rollout** of that same protocol: NAC, local PEPs,
+cell registries, the inter-entity handshake — the pieces needed to take
+TBP from a single governed machine to a governed network. As of this
+notice, this repository's own code is Apache 2.0 too (see Licensing
+below) — the same license as the core protocol, one license across both
+repositories, not two. It previously used a closed license during an
+initial pilot phase; that phase is over.
+
+**Keeping the submodule current**: `tbp4.2.1/` does not update itself —
+bumping it to a newer commit of `Responsible-Alliance-Protocol` is a
+deliberate, reviewed action (`cd tbp4.2.1 && git checkout <commit> && cd
+.. && git add tbp4.2.1 && git commit`), never automatic. A pinned
+submodule that silently falls behind a security fix upstream is worse
+than no submodule at all — treat bumping it with the same care as any
+other dependency update, and check the core repo's own changelog first.
 
 ## Repository structure
 
 ```
+tbp4.2.1/             Git submodule: the core protocol (Responsible-Alliance-Protocol,
+                      pinned commit) — working implementation, tests, live at
+                      invarian.fr; includes tbp-v4-hard-shield/ (the OPA policy
+                      engine this repo's PEPs enforce against). Not copied: run
+                      `git submodule update --init` to fetch it; source of truth
+                      and issue tracker for this code stay in that repository.
 docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.8.md, French working note), glossary, audits
 figs/                  Figures referenced by the spec (see MANIFEST.md)
 policies/
@@ -83,11 +101,16 @@ tests/
 .github/                Issue templates, CI (Rego + nftables lint)
 ```
 
-**Current status: essentially a skeleton.** The spec is corrected and
-complete; `config/` and `policies/` contain concrete starting points;
-`src/`, `lab/` and `tests/` are, for now, READMEs describing the expected
-scope (see §13 for the order to fill them in). Do not deploy `config/`
-as-is — every file there says so explicitly, worth repeating here too.
+**Current status: this repository's own rollout code is essentially a
+skeleton.** The spec is corrected and complete; `config/` and `policies/`
+contain concrete starting points; `src/`, `lab/` and `tests/` are, for
+now, READMEs describing the expected scope (see §13 for the order to
+fill them in). Do not deploy `config/` as-is — every file there says so
+explicitly, worth repeating here too. The protocol this rollout code
+governs against is not a skeleton: `tbp4.2.1/` vendors the working core
+(HSM signer, Merkle audit chain, OPA policy engine, tests, adversarial
+review process) in-tree via git submodule, pinned to a specific commit —
+present here without being copied or duplicated.
 
 ## Configuration guidance — where to start
 

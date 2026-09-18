@@ -13,6 +13,16 @@ Open an issue first for anything beyond a small, well-scoped change, so
 design direction doesn't conflict with an already-planned decision in
 the spec.
 
+**`tbp4.2.1/` is a git submodule, not part of this repository's own
+code.** It's a pinned pointer into `Responsible-Alliance-Protocol`. Never
+send a PR here touching files under `tbp4.2.1/` — it won't merge (the
+submodule content isn't tracked by this repo, only its commit pointer
+is) and it's the wrong repository for that change regardless: file it
+against `Responsible-Alliance-Protocol` directly. A PR here that bumps
+the submodule's pinned commit (see README's "Keeping the submodule
+current") is welcome, but should say why in the PR description —
+"picks up fix X" — not just "update submodule."
+
 Note: the reference specification is `docs/spec-en-v1.0.md` (English);
 `docs/spec-v1.4.8.md` is the author's French working note, not the
 citable document (see README's "Note on language"). The glossary
