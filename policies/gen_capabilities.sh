@@ -36,10 +36,17 @@ OPA_VERSION=$(opa version 2>/dev/null | sed -n 's/^Version: //p')
 echo "OPA déployé : ${OPA_VERSION:-version inconnue} — capabilities générées depuis CE binaire"
 
 # --- 1. Liste complète des built-ins de la version déployée ----------------
+#    'opa capabilities' SANS argument liste les noms de version connus
+#    (texte, pas JSON) — c'est '--current' qui imprime le document JSON de
+#    CETTE version. Sans ce flag, jq échoue à parser dès la ligne 1 : le
+#    script échouait donc à 100% avant ce correctif, sur toute version d'OPA.
 TMP=$(mktemp)
-trap 'rm -f "$TMP"' EXIT
+# Même répertoire que $OUT : le 'mv' final (étape 3-4) doit être atomique,
+# ce qu'un rename cross-filesystem ne garantit pas.
+OUT_TMP=$(mktemp "${SCRIPT_DIR}/capabilities.json.XXXXXX")
+trap 'rm -f "$TMP" "$OUT_TMP"' EXIT
 
-opa capabilities > "$TMP"
+opa capabilities --current > "$TMP"
 
 # --- 2. Chaque built-in interdit doit être PRÉSENT avant retrait -----------
 #    Sinon la liste a changé (mise à jour d'OPA) : arrêt explicite. On ne
@@ -55,23 +62,32 @@ for b in $FORBIDDEN; do
 done
 [ "$missing" -eq 0 ] || exit 1
 
-# --- 3. Retrait ------------------------------------------------------------
+# --- 3. Retrait --------------------------------------------------------
+#    Écrit dans un fichier temporaire, PAS directement dans $OUT : tant que
+#    la vérification négative (étape 4) n'a pas confirmé que ce fichier
+#    bloque bien http.send, il ne doit jamais remplacer un capabilities.json
+#    existant — un fichier non vérifié qui échoue silencieusement à filtrer
+#    est exactement le risque documenté en tête de ce script.
 FORBIDDEN_JSON=$(printf '%s\n' $FORBIDDEN | jq -R . | jq -sc .)
 jq --argjson forbidden "$FORBIDDEN_JSON" \
    '.builtins |= map(select(.name as $n | ($forbidden | index($n)) | not))' \
-   "$TMP" > "$OUT"
+   "$TMP" > "$OUT_TMP"
 
-echo "écrit: $OUT ($(jq '.builtins | length' "$OUT") built-ins retenus)"
+echo "généré (non écrit tant que non vérifié) : $(jq '.builtins | length' "$OUT_TMP") built-ins retenus"
 
-# --- 4. Vérification négative ----------------------------------------------
+# --- 4. Vérification négative -------------------------------------------
 #    Une règle appelant http.send DOIT être refusée au chargement avec le
-#    fichier restreint. Si elle passe, le filtrage a échoué → arrêt.
-if opa check --capabilities "$OUT" "$NEG_RULE" >/dev/null 2>&1; then
+#    fichier restreint. Si elle passe, le filtrage a échoué → arrêt SANS
+#    toucher à $OUT (le fichier précédent, s'il existe, reste en place).
+if opa check --capabilities "$OUT_TMP" "$NEG_RULE" >/dev/null 2>&1; then
     echo "erreur: $NEG_RULE a été ACCEPTÉE alors qu'elle appelle http.send —" >&2
-    echo "        le filtrage de capabilities.json a échoué" >&2
+    echo "        le filtrage de capabilities.json a échoué ; $OUT non modifié" >&2
     exit 1
 fi
 echo "vérification négative OK: une règle appelant http.send est refusée au chargement"
+
+mv -- "$OUT_TMP" "$OUT"
+echo "écrit: $OUT"
 
 echo "rappel: démarrer OPA avec 'opa run --server --capabilities $OUT ...'"
 echo "        le circuit-breaker 5 ms = deny reste à implémenter côté PEP"

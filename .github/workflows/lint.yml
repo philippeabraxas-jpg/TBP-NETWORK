@@ -17,6 +17,8 @@ jobs:
         run: opa fmt --list --diff policies/rego/
       - name: opa check
         run: opa check policies/rego/
+      - name: gen_capabilities.sh (fails if a forbidden built-in vanishes from a newer OPA release)
+        run: policies/gen_capabilities.sh
 
   nftables-syntax:
     runs-on: ubuntu-latest
