@@ -213,6 +213,22 @@ fi
 grep -q "structural-deny-table" "$WORK/err" || fail "refus sous-requête FROM inattendu: $(cat "$WORK/err")"
 ok "CTE et sous-requêtes du FROM: pas de contournement du contrôle structurel"
 
+# --- N. WITH inscriptible : la liste blanche de commandes est récursive ------
+# (régression — correctif be9097e2 : un WITH x AS (DELETE … RETURNING *)
+# SELECT * FROM x a un commandType de TÊTE CMD_SELECT alors que le DELETE
+# vit dans le Query imbriqué du CTE ; sans vérification récursive de la
+# commande à chaque noeud Query, ce DELETE passait le hook 1 — la feuille
+# parse disait "ok" en monitor, et le sceau autorisé l'exécutait vraiment)
+if $PSQL -c "WITH x AS (DELETE FROM docs WHERE id = 1 RETURNING *) SELECT * FROM x;" 2>"$WORK/err"; then
+	fail "WITH inscriptible (DELETE sous SELECT de tête) accepté"
+fi
+grep -q "structural-deny-command" "$WORK/err" \
+	|| fail "refus WITH inscriptible inattendu: $(cat "$WORK/err")"
+out=$($PSQL -c "SELECT * FROM docs ORDER BY id;")
+[ "$out" = "1|alpha
+2|beta" ] || fail "la ligne visée par le DELETE en CTE a disparu: $out"
+ok "WITH inscriptible: DELETE sous SELECT de tête bloqué (commande vérifiée récursivement)"
+
 # --- K. latence §9.1 : surcharge du hook mesurée sur les feuilles ------------
 # (PREPARE en tête du fichier : la préparation vit dans la session du bench)
 {
