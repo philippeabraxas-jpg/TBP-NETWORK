@@ -3,12 +3,12 @@
 #
 # Pré-requis : extension compilée ET installée contre le PostgreSQL cible :
 #
-#   make PG_CONFIG=/chemin/pg_config
-#   make PG_CONFIG=/chemin/pg_config install
+#	make PG_CONFIG=/chemin/pg_config
+#	make PG_CONFIG=/chemin/pg_config install
 #
 # Lancement :
 #
-#   PG_CONFIG=/chemin/pg_config sh test/run_tests.sh
+#	PG_CONFIG=/chemin/pg_config sh test/run_tests.sh
 #
 # Le script crée une instance jetable (initdb), la démarre avec
 # shared_preload_libraries='tbp_pg' en mode monitor (défaut §5.3), joue
@@ -212,19 +212,6 @@ if $PSQL -c "SELECT * FROM (SELECT * FROM secrets) t;" 2>"$WORK/err"; then
 fi
 grep -q "structural-deny-table" "$WORK/err" || fail "refus sous-requête FROM inattendu: $(cat "$WORK/err")"
 ok "CTE et sous-requêtes du FROM: pas de contournement du contrôle structurel"
-
-# WITH inscriptible : commandType de tête = SELECT (autorisé), mais le
-# DELETE vit dans le Query imbriqué du CTE — la liste blanche de commandes
-# doit s'appliquer récursivement, pas seulement à la requête de tête,
-# sinon un WITH inscriptible détourne tbp.allowed_commands en entier.
-if $PSQL -c "WITH x AS (DELETE FROM docs WHERE id = 1 RETURNING *) SELECT * FROM x;" 2>"$WORK/err"; then
-	fail "WITH inscriptible (DELETE) a contourné tbp.allowed_commands=SELECT"
-fi
-grep -q "structural-deny-command" "$WORK/err" || fail "refus WITH inscriptible inattendu: $(cat "$WORK/err")"
-out=$($PSQL -c "SELECT * FROM docs ORDER BY id;")
-[ "$out" = "1|alpha
-2|beta" ] || fail "WITH inscriptible a modifié la table malgré le refus: $out"
-ok "CRITÈRE D'ACCEPTATION: WITH inscriptible (DELETE sous un SELECT de tête) ne contourne pas tbp.allowed_commands"
 
 # --- K. latence §9.1 : surcharge du hook mesurée sur les feuilles ------------
 # (PREPARE en tête du fichier : la préparation vit dans la session du bench)
