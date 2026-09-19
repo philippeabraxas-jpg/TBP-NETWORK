@@ -1,0 +1,14 @@
+# hostapd-port.conf.tmpl — authenticator 802.1X wired pour UN port du
+# switch P1. hostapd décide (EAP relayé au RADIUS) ; l'aiguillage VLAN
+# reste LOCAL au switch (switchd.sh) — pas de VLAN assigné par RADIUS
+# (§5.3, v1). Placeholders : @PORT@ @WORK@ @RADIUS_IP@ @RADIUS_SECRET@.
+driver=wired
+interface=@PORT@
+logger_stdout=-1
+ieee8021x=1
+eap_server=0
+nas_identifier=switch-p1-@PORT@
+auth_server_addr=@RADIUS_IP@
+auth_server_port=1812
+auth_server_shared_secret=@RADIUS_SECRET@
+ctrl_interface=@WORK@/hostapd-@PORT@/ctrl
