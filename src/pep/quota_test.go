@@ -232,6 +232,31 @@ func TestQuotaWindowReset(t *testing.T) {
 	}
 }
 
+// TestQuotaWindowSExtremeValueStillCaps : window_s est un uint64 SANS borne
+// supérieure côté schéma (schema.cddl : `.gt 0` seulement, aucun maximum).
+// Une valeur ≥ 2^63 ne doit PAS faire basculer la fenêtre en négatif et
+// rouvrir le volume à chaque Consume — le plafond volume_max doit tenir
+// quelle que soit l'ampleur de window_s.
+func TestQuotaWindowSExtremeValueStillCaps(t *testing.T) {
+	sink := &stubSink{}
+	cuts := &cutRecorder{}
+	l, clock := newTestLedger(t, 16, sink, nil, cuts)
+
+	const hugeWindowS = math.MaxUint64 // > 2^63 : bascule négative si castée en int64 sans précaution
+	jti := jtiOf(0x0A)
+	c := openPassport(t, l, jti, clock.Load()+3600, 100, hugeWindowS)
+
+	if err := c.Consume(100); err != nil {
+		t.Fatalf("Consume(100): %v", err)
+	}
+	if err := c.Consume(1); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("err=%v, veut ErrQuotaExceeded (le plafond doit tenir même avec window_s énorme)", err)
+	}
+	if !c.Closed() {
+		t.Fatal("compteur non fermé — le plafond a été contourné par la fenêtre")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Mémoire bornée (§4.3, pattern T10) : saturation = refus + alarme latchée,
 // jamais d'éviction ; la purge TTL libère.

@@ -105,7 +105,14 @@ func (c *PassportCounter) Consume(n uint64) error {
 		return ErrPassportExpired
 	}
 	// Fenêtre écoulée : le volume se recharge (quota = débit par fenêtre).
-	if now >= c.windowFrom+int64(c.windowS) {
+	// windowS est un uint64 SANS borne supérieure côté schéma (schema.cddl :
+	// `.gt 0` seulement) : le convertir en int64 pour l'additionner à des
+	// timestamps unix (comme le faisait `windowFrom+int64(windowS)`) permet
+	// à toute valeur ≥ 2^63 de basculer négative, rendant la condition
+	// perpétuellement vraie — le volume se rechargerait à CHAQUE Consume et
+	// le quota ne plafonnerait plus jamais rien. `elapsed` (borné, petit)
+	// reste sûr à convertir dans l'autre sens.
+	if elapsed := now - c.windowFrom; elapsed >= 0 && uint64(elapsed) >= c.windowS {
 		c.windowFrom = now
 		c.remaining = c.volumeMax
 	}
