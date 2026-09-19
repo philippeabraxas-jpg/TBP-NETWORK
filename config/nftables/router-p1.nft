@@ -1,0 +1,65 @@
+#!/usr/sbin/nft -f
+# router-p1.nft — le « mur » du routeur Debian du pilote P1 (§5.1, §13).
+#
+# Doctrine :
+#  - default-deny inter-VLAN (§1) : policy drop, on ouvre explicitement ;
+#  - le captif ne forwarde NULLE PART (§5.1) : sa seule route est le service
+#    d'enrôlement local au routeur (INPUT, pas FORWARD) ;
+#  - les endpoints authentifiés (VLAN 20) atteignent le VLAN serveur (VLAN 10)
+#    en passant ICI — aucun chemin L2 direct endpoint → serveur (§5.1) ;
+#  - compteurs nommés = observabilité « monitor » (§5.3) : chaque tentative
+#    captif → serveur est comptée (et loggable) avant tout blocage aveugle.
+#
+# Chargé par le routeur émulé (lab/containerlab) via `nft -f`.
+
+flush ruleset
+
+table inet tbp_p1 {
+
+    # Interfaces (VLAN sub-interfaces du trunk vers le switch)
+    define IF_SRV  = eth0.10    # VLAN serveur : brokers/cells
+    define IF_AUTH = eth0.20    # VLAN endpoints authentifiés
+    define IF_CAPT = eth0.66    # VLAN captif (non enregistrés / remediation)
+    define IF_MGMT = eth0.99    # mgmt switch <-> radius
+
+    # Port du service d'enrôlement hébergé par le routeur (captif)
+    define ENROLL_PORT = 8080
+
+    # Compteurs nommés — la preuve d'observabilité du scénario minimal
+    counter mur_captif_serveur { }   # tentatives captif -> serveur (bloquées)
+    counter mur_captif_autre   { }   # captif -> toute autre destination
+    counter voie_auth_serveur  { }   # trafic authentifié -> serveur (légitime)
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+
+        ct state established, related accept
+
+        # La voie légitime (§5.1) : endpoints authentifiés -> VLAN serveur.
+        iifname $IF_AUTH oifname $IF_SRV counter name voie_auth_serveur accept
+
+        # Le mur : le captif ne sort de nulle part. Compté d'abord (§5.3
+        # monitor), bloqué ensuite (§1) — les deux en même règle.
+        iifname $IF_CAPT oifname $IF_SRV counter name mur_captif_serveur \
+            log prefix "tbp-mur captif->serveur: " drop
+        iifname $IF_CAPT counter name mur_captif_autre \
+            log prefix "tbp-mur captif: " drop
+
+        # MGMT (switch <-> radius) : pas de forwarding.
+        iifname $IF_MGMT counter log prefix "tbp-mur mgmt: " drop
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        ct state established, related accept
+        iifname "lo" accept
+
+        # Diagnostics du lab (ping). En production : restreindre.
+        icmp type echo-request accept
+
+        # La SEULE voie du captif : l'enrôlement (§5.1 — « atterrit dans le
+        # VLAN captif, seule route : enrôlement »).
+        iifname $IF_CAPT tcp dport $ENROLL_PORT accept
+    }
+}

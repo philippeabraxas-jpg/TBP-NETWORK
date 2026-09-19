@@ -1,0 +1,68 @@
+# p1.clab.yml — topologie containerlab du pilote P1 (spec §13).
+#
+#   1 VLAN serveur (10), routeur Debian (charge config/), 2 cellules,
+#   NAC 802.1X (switch = authenticator hostapd wired, radius = PKI du
+#   handshake T18), endpoints ok/ko. AUCUN lien direct endpoint -> cell
+#   (§5.1) : tout passe par le switch puis le routeur (« le mur »).
+#
+# VLANs : 10 serveur · 20 endpoints authentifiés · 66 captif · 99 mgmt.
+#
+# Le switch est un nœud Linux (hostapd wired + bridge VLAN-aware) — D11 :
+# ceos/cvx sont propriétaires et non reproductibles ; hostapd est
+# l'authenticator 802.1X de référence et le bridge applique l'aiguillage
+# LOCALEMENT (pas de VLAN assigné par RADIUS, §5.3 v1).
+#
+# Orchestration : run_scenario_minimal.sh (build images, deploy, setup,
+# assertions). Preuve sandbox sans docker : tests/scenario_minimal_netns.sh.
+
+name: tbp-p1
+
+topology:
+  nodes:
+    router:
+      kind: linux
+      image: tbp-lab/router:bookworm      # images/router.Dockerfile
+      binds:
+        - ..:/tbp:ro                      # le dépôt (config/ chargée réellement)
+    switch:
+      kind: linux
+      image: tbp-lab/switch:bookworm      # images/switch.Dockerfile
+      binds:
+        - ..:/tbp:ro
+    radius:
+      kind: linux
+      image: tbp-lab/radius:bookworm      # images/radius.Dockerfile
+      binds:
+        - ..:/tbp:ro
+        - .runtime/radius:/run/tbp-p1     # PKI + raddb générés (git-ignoré)
+        - .runtime/nac:/run/nac           # certificats déployés (endpoint-ok)
+    cell-a:
+      kind: linux
+      image: tbp-lab/cell:bookworm        # images/cell.Dockerfile
+    cell-b:
+      kind: linux
+      image: tbp-lab/cell:bookworm
+    endpoint-ok:
+      kind: linux
+      image: tbp-lab/endpoint:bookworm    # images/endpoint.Dockerfile
+      binds:
+        - ..:/tbp:ro
+        - .runtime/nac:/run/nac:ro        # reçoit son certificat via T18
+    endpoint-ko:
+      kind: linux
+      image: tbp-lab/endpoint:bookworm
+      binds:
+        - ..:/tbp:ro
+        - .runtime/foreign:/run/foreign:ro  # PKI étrangère (attaque)
+
+  links:
+    # endpoints -> switch (ports 802.1X, PVID captif au départ)
+    - endpoints: ["endpoint-ok:eth1", "switch:swp1"]
+    - endpoints: ["endpoint-ko:eth1", "switch:swp2"]
+    # switch -> routeur (trunk VLANs 10/20/66/99)
+    - endpoints: ["switch:swp3", "router:eth1"]
+    # switch -> radius (VLAN 99 mgmt) et cells (VLAN 10 serveur)
+    - endpoints: ["switch:swp4", "radius:eth1"]
+    - endpoints: ["switch:swp5", "cell-a:eth1"]
+    - endpoints: ["switch:swp6", "cell-b:eth1"]
+    # NOTE §5.1 : il n'y a volontairement AUCUN lien endpoint-*/cell-*.

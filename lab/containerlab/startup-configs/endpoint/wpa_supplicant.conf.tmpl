@@ -1,0 +1,11 @@
+# wpa_supplicant.conf.tmpl — supplicant 802.1X/EAP-TLS d'un endpoint P1.
+# Certificat délivré par la PKI du handshake (T18). Placeholders :
+# @IDENTITY@ @CA@ @CERT@ @KEY@.
+network={
+    key_mgmt=IEEE8021X
+    eap=TLS
+    identity="@IDENTITY@"
+    ca_cert="@CA@"
+    client_cert="@CERT@"
+    private_key="@KEY@"
+}
