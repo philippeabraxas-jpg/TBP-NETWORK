@@ -3,12 +3,12 @@
 #
 # Pré-requis : extension compilée ET installée contre le PostgreSQL cible :
 #
-#   make PG_CONFIG=/chemin/pg_config
-#   make PG_CONFIG=/chemin/pg_config install
+#	make PG_CONFIG=/chemin/pg_config
+#	make PG_CONFIG=/chemin/pg_config install
 #
 # Lancement :
 #
-#   PG_CONFIG=/chemin/pg_config sh test/run_tests.sh
+#	PG_CONFIG=/chemin/pg_config sh test/run_tests.sh
 #
 # Le script crée une instance jetable (initdb), la démarre avec
 # shared_preload_libraries='tbp_pg' en mode monitor (défaut §5.3), joue
@@ -213,18 +213,21 @@ fi
 grep -q "structural-deny-table" "$WORK/err" || fail "refus sous-requête FROM inattendu: $(cat "$WORK/err")"
 ok "CTE et sous-requêtes du FROM: pas de contournement du contrôle structurel"
 
-# WITH inscriptible : commandType de tête = SELECT (autorisé), mais le
-# DELETE vit dans le Query imbriqué du CTE — la liste blanche de commandes
-# doit s'appliquer récursivement, pas seulement à la requête de tête,
-# sinon un WITH inscriptible détourne tbp.allowed_commands en entier.
+# --- N. WITH inscriptible : la liste blanche de commandes est récursive ------
+# (régression — correctif be9097e2 : un WITH x AS (DELETE … RETURNING *)
+# SELECT * FROM x a un commandType de TÊTE CMD_SELECT alors que le DELETE
+# vit dans le Query imbriqué du CTE ; sans vérification récursive de la
+# commande à chaque noeud Query, ce DELETE passait le hook 1 — la feuille
+# parse disait "ok" en monitor, et le sceau autorisé l'exécutait vraiment)
 if $PSQL -c "WITH x AS (DELETE FROM docs WHERE id = 1 RETURNING *) SELECT * FROM x;" 2>"$WORK/err"; then
-	fail "WITH inscriptible (DELETE) a contourné tbp.allowed_commands=SELECT"
+	fail "WITH inscriptible (DELETE sous SELECT de tête) accepté"
 fi
-grep -q "structural-deny-command" "$WORK/err" || fail "refus WITH inscriptible inattendu: $(cat "$WORK/err")"
+grep -q "structural-deny-command" "$WORK/err" \
+	|| fail "refus WITH inscriptible inattendu: $(cat "$WORK/err")"
 out=$($PSQL -c "SELECT * FROM docs ORDER BY id;")
 [ "$out" = "1|alpha
-2|beta" ] || fail "WITH inscriptible a modifié la table malgré le refus: $out"
-ok "CRITÈRE D'ACCEPTATION: WITH inscriptible (DELETE sous un SELECT de tête) ne contourne pas tbp.allowed_commands"
+2|beta" ] || fail "la ligne visée par le DELETE en CTE a disparu: $out"
+ok "WITH inscriptible: DELETE sous SELECT de tête bloqué (commande vérifiée récursivement)"
 
 # --- K. latence §9.1 : surcharge du hook mesurée sur les feuilles ------------
 # (PREPARE en tête du fichier : la préparation vit dans la session du bench)

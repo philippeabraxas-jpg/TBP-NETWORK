@@ -4,17 +4,17 @@
 # entre versions majeures (post_parse_analyze a gagné JumbleState* en 14).
 # Construire contre les headers serveur de LA version ciblée :
 #
-#   make PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config
-#   make PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config install
+#	make PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config
+#	make PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config install
 #
 # Chargement OBLIGATOIRE via shared_preload_libraries = 'tbp_pg' (le
 # cache de décision D7 vit en mémoire partagée), puis :
 #
-#   CREATE EXTENSION tbp_pg;
+#	CREATE EXTENSION tbp_pg;
 #
 # Tests d'acceptance (instance jetable créée par le script) :
 #
-#   PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config sh test/run_tests.sh
+#	PG_CONFIG=/usr/lib/postgresql/15/bin/pg_config sh test/run_tests.sh
 
 MODULE_big = tbp_pg
 OBJS = tbp_pg.o
