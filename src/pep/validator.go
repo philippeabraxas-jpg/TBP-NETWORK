@@ -167,6 +167,11 @@ type ValidatorOptions struct {
 	// Quota est le compteur de passeports (T12). Peut être nil : tout jeton
 	// portant un passeport est alors refusé (« quota-unverified »).
 	Quota QuotaChecker
+	// Gate est le point unique de décision fail-closed (T14, §4.1/§9.1).
+	// Interrogé AVANT toute la chaîne (étape 0) : un refus motivé y
+	// court-circuite la validation avant toute mutation (l'anti-rejeu n'est
+	// pas consommé). Nil ⇒ pas de portillon (défaut historique).
+	Gate FailClosedGate
 	// Now est l'horloge NTS de la cellule. Nil ⇒ time.Now (dev).
 	Now func() time.Time
 }
@@ -181,6 +186,7 @@ type Validator struct {
 	leaves     LeafSink
 	antiReplay AntiReplayCache
 	quota      QuotaChecker
+	gate       FailClosedGate
 	now        func() time.Time
 }
 
@@ -216,6 +222,7 @@ func NewValidator(opts ValidatorOptions) (*Validator, error) {
 		leaves:     opts.Leaves,
 		antiReplay: opts.AntiReplay,
 		quota:      opts.Quota,
+		gate:       opts.Gate,
 		now:        now,
 	}, nil
 }
@@ -257,6 +264,17 @@ func (v *Validator) decide(wire []byte, req Request, now time.Time) Decision {
 		return Decision{Allow: false, Reason: reason, Token: tok, JTI: jti}
 	}
 	var zeroJTI [16]byte
+
+	// Étape 0 — point unique fail-closed (T14, §4.1/§9.1) : une condition
+	// système basculée refuse AVANT toute la chaîne, donc avant toute
+	// mutation (l'anti-rejeu n'est pas consommé : le jeton re-presenté
+	// après levée suit son cours normal). La feuille de ce refus est la
+	// feuille de décision écrite par ValidateAt.
+	if v.gate != nil {
+		if ref := v.gate.Gate(); ref != nil {
+			return deny(ref.Reason, nil, zeroJTI)
+		}
+	}
 
 	// 1. format : taille bornée puis structure COSE_Sign1.
 	if len(wire) > MaxTokenWireSize {
