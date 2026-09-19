@@ -2,7 +2,9 @@ package pep
 
 import (
 	"crypto/ed25519"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -447,22 +449,72 @@ func TestValidatorGatedBeforeChain(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNoParallelRefusalLinter(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		data, err := os.ReadFile(name)
+	// Refusal a des champs exportés : n'importe quel package qui importe
+	// pep peut en construire un directement, contournant entièrement
+	// FailClosed.Trip()/Gate() — un scan limité au répertoire courant
+	// (os.ReadDir(".") non récursif) ne verrait donc JAMAIS une
+	// construction parallèle logée ailleurs (un sous-répertoire comme
+	// src/pep/postgres-extension, ou tout futur package qui importe pep).
+	// Le linter doit donc couvrir tout le module, pas seulement le paquet
+	// pep lui-même — c'est exactement le genre de dérive que ce test
+	// existe pour empêcher (« un seul endroit qui décide »).
+	root := moduleRoot(t)
+	wantOnly := filepath.Join(root, "src", "pep", "failclosed.go")
+
+	var offenders []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", name, err)
+			return err
 		}
-		if strings.Contains(string(data), "Refusal{") && name != "failclosed.go" {
-			t.Fatalf("%s construit un Refusal — le seul point de décision « refuser maintenant » est failclosed.go", name)
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "tbp4.2.1":
+				return filepath.SkipDir
+			}
+			return nil
 		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		if path == wantOnly {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), "Refusal{") {
+			offenders = append(offenders, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir(%s): %v", root, err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("construction(s) de Refusal{} hors %s : %v — le seul point de décision « refuser maintenant » est failclosed.go", wantOnly, offenders)
+	}
+}
+
+// moduleRoot localise la racine du module (le répertoire portant go.mod)
+// en remontant depuis le répertoire du paquet — le test tourne avec pour
+// CWD le répertoire du paquet (src/pep), pas la racine du dépôt.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod introuvable en remontant depuis le répertoire du paquet")
+		}
+		dir = parent
 	}
 }
 
