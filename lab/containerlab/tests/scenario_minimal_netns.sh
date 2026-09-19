@@ -55,10 +55,20 @@ trap cleanup EXIT
 for n in sw rtr radius cella cellb epok epko; do run $n $IP link set lo up; done
 
 # --- liens veth (endpoints -> switch, trunk routeur, mgmt radius, cells) -----
+# Les deux extrémités sont créées sous un nom temporaire suffixé par $$ dans
+# le netns RACINE, puis renommées une fois déplacées dans leur netns cible.
+# Créer directement "eth0" dans le netns racine (avant le déplacement)
+# entre en collision avec l'interface primaire de l'hôte quand elle
+# s'appelle aussi eth0 (cas courant — c'est le nom par défaut sur la
+# plupart des distributions/conteneurs) : `ip link add eth0 ...` échoue
+# alors avec "File exists" et toute la topologie part de travers en
+# silence (bridge-setup.sh échoue plus loin sans que le script ne le
+# remarque). Symétrique au traitement déjà appliqué au côté switch.
 link() {
-	$IP link add "$2" type veth peer name "$4.$$" || return 1
-	$IP link set "$2" netns ${NS[$1]}
+	$IP link add "$2.$$" type veth peer name "$4.$$" || return 1
+	$IP link set "$2.$$" netns ${NS[$1]}
 	$IP link set "$4.$$" netns ${NS[$3]}
+	run $1 $IP link set "$2.$$" name "$2"
 	run $3 $IP link set "$4.$$" name "$4"
 }
 link epok   eth0 sw swp1

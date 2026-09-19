@@ -39,7 +39,12 @@ fi
 # liés au déploiement : le trunk est l'unique interface data du routeur (eth0
 # dans le harnais netns, eth1 sous containerlab) — détection auto, surcharge
 # possible par TRUNK_IF.
-TRUNK=${TRUNK_IF:-$($IP -o link show | awk -F': ' '$2 != "lo" { sub(/\..*/, "", $2); print $2; exit }')}
+# `ip -o link show` affiche un veth inter-netns (le cas normal, netns comme
+# containerlab) sous la forme « eth0@if22 » : le « .* » ne coupe qu'après un
+# point (suffixe VLAN), pas après le « @ » — sans quoi TRUNK vaut littéralement
+# « eth0@if22 » et le nft généré ci-dessous échoue au chargement (interface
+# invalide) alors que router-setup.sh remonte quand même un succès.
+TRUNK=${TRUNK_IF:-$($IP -o link show | awk -F': ' '$2 != "lo" { sub(/[@.].*/, "", $2); print $2; exit }')}
 RUNNFT="$WORK/router-p1.nft"
 sed -e "s/= eth0\.10/= $TRUNK.10/" -e "s/= eth0\.20/= $TRUNK.20/" \
 	-e "s/= eth0\.66/= $TRUNK.66/" -e "s/= eth0\.99/= $TRUNK.99/" \
