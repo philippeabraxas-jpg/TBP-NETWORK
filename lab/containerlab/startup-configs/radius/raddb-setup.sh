@@ -80,7 +80,8 @@ EOF
 # l'authorize — canal MAB instrumenté, jamais silencieux (§5.3).
 if [ -n "${TBP_MAB_FILE:-}" ] && [ -f "$TBP_MAB_FILE" ]; then
 	cat "$TBP_MAB_FILE" >> "$CONF/mods-config/files/authorize"
-	echo "raddb-setup: MAB — $(grep -c Cleartext-Password \"$TBP_MAB_FILE\") MAC autorisée(s)"
+	CNT=$(grep -c Cleartext-Password "$TBP_MAB_FILE")
+	echo "raddb-setup: MAB — $CNT MAC autorisée(s)"
 fi
 
 echo "raddb-setup: $CONF prêt (EAP-TLS, PKI du handshake, check_crl=yes)"
