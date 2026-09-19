@@ -306,6 +306,16 @@ func (l *QuotaLedger) Len() int {
 	return len(l.counters)
 }
 
+// Counter retourne le compteur d'un passeport ouvert — la couture
+// d'exécution (§4.1-bis) : le listener (T15) y décrémente le volume
+// consommé. Le second retour dit si le passeport est connu (non purgé).
+func (l *QuotaLedger) Counter(jti [16]byte) (*PassportCounter, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok := l.counters[jti]
+	return c, ok
+}
+
 // purgeLocked supprime les compteurs dont le TTL est écoulé — coupés ou
 // non : un passeport expiré est mort de toute façon (le validateur refuse
 // les jetons périmés en amont).
