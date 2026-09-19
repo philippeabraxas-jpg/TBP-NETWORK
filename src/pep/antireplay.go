@@ -120,8 +120,16 @@ func (c *AntiReplay) CheckAndConsume(jti [16]byte, exp time.Time) bool {
 
 // purgeHead dépile les entrées expirées en tête du ring. Coût amorti O(1)
 // par opération : chaque slot n'est dépilé qu'une fois.
+//
+// Frontière stricte (exp < now, PAS exp <= now) : le validateur (T9,
+// validator.go) traite le jeton comme encore frais tant que now ≤ exp
+// (borne incluse — « iat ≤ now ≤ exp »). Purger dès exp == now ouvrirait
+// une fenêtre de rejeu exactement à la dernière seconde de validité du
+// jeton : la première consommation purgerait sa propre entrée avant même
+// le contrôle d'appartenance, et une seconde requête sur le MÊME jeton
+// dans la même seconde serait acceptée comme si elle était neuve.
 func (c *AntiReplay) purgeHead(now int64) {
-	for c.count > 0 && c.ring[c.head].exp <= now {
+	for c.count > 0 && c.ring[c.head].exp < now {
 		delete(c.set, c.ring[c.head].jti)
 		c.ring[c.head] = replayEntry{}
 		c.head = (c.head + 1) % len(c.ring)
@@ -140,7 +148,7 @@ func (c *AntiReplay) purgeAll(now int64) {
 	kept := make([]replayEntry, 0, c.count)
 	for i := 0; i < c.count; i++ {
 		e := c.ring[(c.head+i)%n]
-		if e.exp > now {
+		if e.exp >= now { // même frontière stricte que purgeHead (exp < now purge)
 			kept = append(kept, e)
 		} else {
 			delete(c.set, e.jti)

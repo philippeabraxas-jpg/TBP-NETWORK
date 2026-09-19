@@ -176,6 +176,37 @@ func TestAntiReplayTTLPurge(t *testing.T) {
 	}
 }
 
+// TestAntiReplayExpBoundaryNoReplay : la frontière de purge doit être
+// stricte (exp < now), pas inclusive (exp <= now) — le validateur (T9,
+// validator.go) traite un jeton comme encore frais tant que now ≤ exp
+// (« iat ≤ now ≤ exp », borne haute incluse). Si la purge évinçait dès
+// exp == now, la première consommation d'un jeton purgerait sa PROPRE
+// entrée avant même le contrôle d'appartenance suivant, et une seconde
+// requête sur le même jeton dans la même seconde serait acceptée comme
+// neuve — une fenêtre de rejeu à la dernière seconde de validité de
+// CHAQUE jeton.
+func TestAntiReplayExpBoundaryNoReplay(t *testing.T) {
+	c, clock := newTestCache(t, 8, nil)
+
+	jti := jtiOf(0xAB)
+	exp := expIn(clock, 0) // exp == now dès la première consommation
+
+	if !c.CheckAndConsume(jti, exp) {
+		t.Fatal("première consommation refusée")
+	}
+	// Même jti, même instant (now == exp, encore valide côté T9) : doit
+	// être un rejeu, pas un jeton « neuf ».
+	if c.CheckAndConsume(jti, exp) {
+		t.Fatal("rejeu accepté à la frontière now == exp (purge trop précoce)")
+	}
+	// Une fois l'horloge strictement au-delà de exp, l'entrée se libère
+	// normalement (purge de tête toujours bornée en coût).
+	clock.Add(1)
+	if !c.CheckAndConsume(jtiOf(0xCD), expIn(clock, 5)) {
+		t.Fatal("slot non libéré une fois now strictement > exp")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Chemin froid : la purge de tête est bornée, mais à saturation un scan
 // complet libère les expirés même au milieu du ring (pas de faux trip).
