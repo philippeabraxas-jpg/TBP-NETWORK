@@ -123,53 +123,53 @@ void
 _PG_init(void)
 {
 	DefineCustomBoolVariable("tbp.enforce",
-								 "on = les refus TBP bloquent (closed) ; off = monitor "
-								 "(log would_deny, rien bloqué — doctrine §5.3).",
-								 NULL,
-								 &tbp_enforce,
-								 false,
-								 PGC_SUSET, 0, NULL, NULL, NULL);
+							 "on = les refus TBP bloquent (closed) ; off = monitor "
+							 "(log would_deny, rien bloqué — doctrine §5.3).",
+							 NULL,
+							 &tbp_enforce,
+							 false,
+							 PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomStringVariable("tbp.allowed_commands",
-								   "Commandes autorisées, séparées par des virgules "
-								   "(SELECT,INSERT,UPDATE,DELETE,MERGE). Vide = toutes refusées.",
-								   NULL,
-								   &tbp_allowed_commands,
-								   "",
-								   PGC_SUSET, 0, NULL, NULL, NULL);
+							   "Commandes autorisées, séparées par des virgules "
+							   "(SELECT,INSERT,UPDATE,DELETE,MERGE). Vide = toutes refusées.",
+							   NULL,
+							   &tbp_allowed_commands,
+							   "",
+							   PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomStringVariable("tbp.allowed_tables",
-								   "Tables autorisées (schema.table), séparées par des "
-								   "virgules. Vide = toutes refusées (fail-closed).",
-								   NULL,
-								   &tbp_allowed_tables,
-								   "",
-								   PGC_SUSET, 0, NULL, NULL, NULL);
+							   "Tables autorisées (schema.table), séparées par des "
+							   "virgules. Vide = toutes refusées (fail-closed).",
+							   NULL,
+							   &tbp_allowed_tables,
+							   "",
+							   PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomStringVariable("tbp.allowed_functions",
-								   "Fonctions non immutables explicitement autorisées "
-								   "(noms), séparées par des virgules.",
-								   NULL,
-								   &tbp_allowed_functions,
-								   "",
-								   PGC_SUSET, 0, NULL, NULL, NULL);
+							   "Fonctions non immutables explicitement autorisées "
+							   "(noms), séparées par des virgules.",
+							   NULL,
+							   &tbp_allowed_functions,
+							   "",
+							   PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomStringVariable("tbp.cell_id",
-								   "Identité de la cellule TBP portée par les feuilles (§6.2).",
-								   NULL,
-								   &tbp_cell_id,
-								   "",
-								   PGC_SUSET, 0, NULL, NULL, NULL);
+							   "Identité de la cellule TBP portée par les feuilles (§6.2).",
+							   NULL,
+							   &tbp_cell_id,
+							   "",
+							   PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomStringVariable("tbp.authorizer_role",
-								   "Rôle autorisé à appeler tbp_authorize/tbp_forget_all "
-								   "(le superuser l'est toujours). Vide = superuser seul.",
-								   NULL,
-								   &tbp_authorizer_role,
-								   "",
-								   PGC_SUSET, 0, NULL, NULL, NULL);
+							   "Rôle autorisé à appeler tbp_authorize/tbp_forget_all "
+							   "(le superuser l'est toujours). Vide = superuser seul.",
+							   NULL,
+							   &tbp_authorizer_role,
+							   "",
+							   PGC_SUSET, 0, NULL, NULL, NULL);
 	DefineCustomIntVariable("tbp.cache_entries",
-								"Capacité du cache de décision (§4.3 : borné, jamais "
-								"d'éviction — saturation = refus fail-closed + alarme).",
-								NULL,
-								&tbp_cache_entries,
-								4096, 16, 1048576,
-								PGC_POSTMASTER, 0, NULL, NULL, NULL);
+							"Capacité du cache de décision (§4.3 : borné, jamais "
+							"d'éviction — saturation = refus fail-closed + alarme).",
+							NULL,
+							&tbp_cache_entries,
+							4096, 16, 1048576,
+							PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	shmem_request_hook = tbp_shmem_request;
 	prev_shmem_startup_hook = shmem_startup_hook;
@@ -286,8 +286,8 @@ tbp_json_escape(StringInfo buf, const char *s)
 
 static void
 tbp_emit_leaf(const char *phase, const char *cmd, List *tables,
-				  const char *seal, const char *reason, const char *detail,
-				  uint64 elapsed_us, bool denied)
+			  const char *seal, const char *reason, const char *detail,
+			  uint64 elapsed_us, bool denied)
 {
 	StringInfoData buf;
 	ListCell   *lc;
@@ -424,8 +424,8 @@ tbp_compute_seal(QueryDesc *queryDesc, char out_hex[TBP_SEAL_KEY_LEN])
 	}
 
 	if (EVP_Q_digest(NULL, "SHA256", NULL,
-						 data.data, (size_t) data.len,
-						 digest, &digest_len) != 1 ||
+					 data.data, (size_t) data.len,
+					 digest, &digest_len) != 1 ||
 		digest_len != 32)
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
@@ -915,8 +915,8 @@ tbp_sha256(PG_FUNCTION_ARGS)
 	static const char hexchars[] = "0123456789abcdef";
 
 	if (EVP_Q_digest(NULL, "SHA256", NULL,
-						 VARDATA_ANY(arg), (size_t) VARSIZE_ANY_EXHDR(arg),
-						 digest, &digest_len) != 1 || digest_len != 32)
+					 VARDATA_ANY(arg), (size_t) VARSIZE_ANY_EXHDR(arg),
+					 digest, &digest_len) != 1 || digest_len != 32)
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
 				 errmsg("TBP: échec SHA-256")));
