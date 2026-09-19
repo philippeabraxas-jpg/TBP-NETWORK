@@ -573,6 +573,26 @@ tbp_struct_walker(Node *node, TbpStructCtx *ctx)
 		Query	   *q = (Query *) node;
 		ListCell   *lc;
 
+		/* La liste blanche de commandes doit s'appliquer à CHAQUE noeud
+		 * Query rencontré, pas seulement à la requête de tête : un WITH
+		 * inscriptible (`WITH x AS (DELETE … RETURNING *) SELECT * FROM
+		 * x`) a un commandType de tête CMD_SELECT alors que le DELETE vit
+		 * dans un Query imbriqué (cteList). Ne vérifier que la requête de
+		 * tête laisserait ce DELETE passer le hook 1 sans même une feuille
+		 * would_deny — un contournement direct du fail-closed §1. */
+		if (q->commandType != CMD_UTILITY)
+		{
+			const char *qcmd = tbp_command_name(q->commandType);
+
+			if (!tbp_list_contains(tbp_allowed_commands, qcmd, true))
+			{
+				ctx->deny_reason = "structural-deny-command";
+				snprintf(ctx->deny_detail, sizeof(ctx->deny_detail),
+						 "commande %s hors liste blanche", qcmd);
+				return true;
+			}
+		}
+
 		foreach(lc, q->rtable)
 		{
 			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
@@ -638,14 +658,10 @@ tbp_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 	memset(&ctx, 0, sizeof(ctx));
 	cmd = tbp_command_name(query->commandType);
 
-	if (!tbp_list_contains(tbp_allowed_commands, cmd, true))
-	{
-		ctx.deny_reason = "structural-deny-command";
-		snprintf(ctx.deny_detail, sizeof(ctx.deny_detail),
-				 "commande %s hors liste blanche", cmd);
-	}
-	else
-		(void) tbp_struct_walker((Node *) query, &ctx);
+	/* tbp_struct_walker vérifie la commande (et les tables, fonctions) du
+	 * noeud Query de tête ET de tout Query imbriqué (WITH inscriptible) —
+	 * une seule vérification, appliquée récursivement. */
+	(void) tbp_struct_walker((Node *) query, &ctx);
 
 	INSTR_TIME_SET_CURRENT(t1);
 	INSTR_TIME_SUBTRACT(t1, t0);

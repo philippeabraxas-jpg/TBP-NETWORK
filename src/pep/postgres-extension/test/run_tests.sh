@@ -213,6 +213,19 @@ fi
 grep -q "structural-deny-table" "$WORK/err" || fail "refus sous-requête FROM inattendu: $(cat "$WORK/err")"
 ok "CTE et sous-requêtes du FROM: pas de contournement du contrôle structurel"
 
+# WITH inscriptible : commandType de tête = SELECT (autorisé), mais le
+# DELETE vit dans le Query imbriqué du CTE — la liste blanche de commandes
+# doit s'appliquer récursivement, pas seulement à la requête de tête,
+# sinon un WITH inscriptible détourne tbp.allowed_commands en entier.
+if $PSQL -c "WITH x AS (DELETE FROM docs WHERE id = 1 RETURNING *) SELECT * FROM x;" 2>"$WORK/err"; then
+	fail "WITH inscriptible (DELETE) a contourné tbp.allowed_commands=SELECT"
+fi
+grep -q "structural-deny-command" "$WORK/err" || fail "refus WITH inscriptible inattendu: $(cat "$WORK/err")"
+out=$($PSQL -c "SELECT * FROM docs ORDER BY id;")
+[ "$out" = "1|alpha
+2|beta" ] || fail "WITH inscriptible a modifié la table malgré le refus: $out"
+ok "CRITÈRE D'ACCEPTATION: WITH inscriptible (DELETE sous un SELECT de tête) ne contourne pas tbp.allowed_commands"
+
 # --- K. latence §9.1 : surcharge du hook mesurée sur les feuilles ------------
 # (PREPARE en tête du fichier : la préparation vit dans la session du bench)
 {
