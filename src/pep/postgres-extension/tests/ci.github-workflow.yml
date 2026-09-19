@@ -1,0 +1,19 @@
+# Workflow CI T17 — prêt à copier dans .github/workflows/t17.yml.
+# (Non câblé : le token d'automatisation n'a pas le scope `workflow` — 403.)
+name: t17-postgres-pep-tests
+on:
+  push:
+    paths:
+      - 'src/pep/postgres-extension/**'
+  pull_request:
+    paths:
+      - 'src/pep/postgres-extension/**'
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Banc T17 (PG 15 + extension + pgbouncer + pytest)
+        run: >
+          docker compose -f src/pep/postgres-extension/tests/docker-compose.yml
+          up --build --exit-code-from tests --abort-on-container-exit
