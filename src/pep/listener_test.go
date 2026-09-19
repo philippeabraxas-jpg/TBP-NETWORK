@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 // ---------------------------------------------------------------------------
@@ -313,6 +315,43 @@ func TestListenerConsumeUnknownPassport(t *testing.T) {
 	_, c := consume(t, f, jtiOf(0x99), 1)
 	if c.OK || c.Err == "" {
 		t.Fatalf("consume passeport inconnu: %+v, veut erreur", c)
+	}
+}
+
+// TestListenerQuotaSaturationTracesDeny : le validateur (T9) écrit sa
+// feuille allow AVANT que l'ouverture du passeport (T12) échoue par
+// saturation du registre — sans feuille supplémentaire, le refus
+// réellement rendu à l'appelant ne laisserait AUCUNE trace au registre
+// (seule la feuille allow, déjà obsolète, resterait). §4.1 : chaque
+// décision — allow comme deny — doit porter une feuille correspondant au
+// verdict réel.
+func TestListenerQuotaSaturationTracesDeny(t *testing.T) {
+	f := newListenerFixture(t, true) // MaxPassports: 64
+
+	for i := 0; i < 64; i++ {
+		dummy := passportToken(jtiNum(9000+i), testIAT+3600, 100, 60)
+		if _, err := f.ledger.Open(dummy); err != nil {
+			t.Fatalf("dummy Open #%d: %v", i, err)
+		}
+	}
+
+	leavesBefore := f.sink.count()
+	tok := mintToken(t, quotaClaims(100, 60))
+	out := evaluate(t, f, tok)
+
+	if out.Allow || out.Reason != TripReasonQuotaSaturated {
+		t.Fatalf("verdict=%+v, veut deny %s (registre de quotas saturé à l'admission)", out, TripReasonQuotaSaturated)
+	}
+
+	wantHash := registry.HashPayload(testSalt, decisionLeafRecord(testJTI, false, TripReasonQuotaSaturated))
+	found := false
+	for _, leaf := range f.sink.leaves[leavesBefore:] {
+		if leaf.PayloadHash == wantHash {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("aucune feuille deny pour le verdict réel (%s) — seule la feuille allow du validateur, déjà obsolète, est au registre", TripReasonQuotaSaturated)
 	}
 }
 

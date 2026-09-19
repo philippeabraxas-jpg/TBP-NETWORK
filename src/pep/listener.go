@@ -217,9 +217,16 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	if d.Allow && d.Token != nil && d.Token.Quota != nil && l.ledger != nil {
 		if _, err := l.ledger.Open(d.Token); err != nil {
 			// Registre saturé / vecteur invalide : fail-closed, la porte
-			// ne s'ouvre pas sans son compteur.
+			// ne s'ouvre pas sans son compteur. Le validateur (T9) a déjà
+			// écrit SA feuille allow avant que cet échec ne soit connu —
+			// sans une feuille supplémentaire ici, le registre ne
+			// porterait AUCUNE trace du refus réellement rendu à
+			// l'appelant (contrairement au veto OPA ci-dessous, qui trace
+			// sa propre feuille dans Eval()). §4.1 : chaque décision doit
+			// porter une feuille correspondant au verdict réel.
 			d.Allow = false
 			d.Reason = TripReasonQuotaSaturated
+			l.ledger.writeCutLeaf(d.JTI, d.Reason)
 		} else {
 			passportOpened = true
 		}
