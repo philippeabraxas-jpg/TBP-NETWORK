@@ -35,6 +35,17 @@ PKI=$(CDPATH= cd -- "$(dirname -- "$TBP_PKI_HOME")" && pwd)/$(basename "$TBP_PKI
 [ -f "$PKI/ca/ca.key" ] || {
 	echo "erreur: CA absente — lancer ca_dev.sh d'abord (fail-closed, §1)" >&2
 	exit 1; }
+
+# Verrou exclusif sur la base CA (index.txt/serial) : sans lui, deux
+# enrôlements concurrents pour le MÊME hostname passent tous deux le
+# contrôle ci-dessous avant qu'aucun n'ait fini de signer — double
+# enrôlement silencieux malgré le contrôle, et openssl ca n'est pas sûr en
+# accès concurrent sur index.txt/serial (constaté : entrées orphelines,
+# certificats signés sans ligne index.txt correspondante — donc jamais
+# révocables par revoke_client.sh). Tenu jusqu'à la sortie du script.
+exec 9>"$PKI/.ca.lock"
+flock -x 9
+
 [ -f "$PKI/certs/$HOST.crt" ] && {
 	echo "erreur: $HOST déjà enrôlé — révoquer d'abord (revoke_client.sh), " >&2
 	echo "        jamais de double enrôlement silencieux" >&2

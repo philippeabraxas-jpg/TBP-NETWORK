@@ -23,6 +23,13 @@ PKI=$(CDPATH= cd -- "$(dirname -- "$TBP_PKI_HOME")" && pwd)/$(basename "$TBP_PKI
 [ -f "$PKI/ca/ca.key" ] || {
 	echo "erreur: CA absente — lancer ca_dev.sh d'abord (fail-closed, §1)" >&2
 	exit 1; }
+
+# Même verrou que enroll_client.sh : openssl ca (index.txt/serial) n'est
+# pas sûr en accès concurrent, et une révocation concurrente d'un
+# enrôlement du même hostname ne doit pas s'entrelacer avec lui.
+exec 9>"$PKI/.ca.lock"
+flock -x 9
+
 [ -f "$PKI/certs/$HOST.crt" ] || {
 	echo "erreur: pas de certificat pour « $HOST » (jamais enrôlé ?)" >&2
 	exit 1; }
