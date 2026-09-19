@@ -3,9 +3,11 @@ module github.com/philippeabraxas-jpg/TBP-NETWORK
 go 1.24.0
 
 require (
+	github.com/fxamacker/cbor/v2 v2.9.4
 	github.com/transparency-dev/formats v0.0.0-20251017110053-404c0d5b696c
 	github.com/transparency-dev/merkle v0.0.2
 	github.com/transparency-dev/tessera v1.0.4
+	github.com/veraison/go-cose v1.3.0
 	golang.org/x/mod v0.33.0
 	golang.org/x/sys v0.41.0
 )
@@ -16,6 +18,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
