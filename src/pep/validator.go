@@ -38,6 +38,13 @@ const (
 // tokenVersion est la version de schéma acceptée (claim −9).
 const tokenVersion = 1
 
+// Bornes de taille des champs texte (schema.cddl : `tstr .size (a..b)`).
+const (
+	maxIssSubActionLen = 255  // 1: iss, 2: sub, −2: action
+	maxResourceLen     = 1024 // −3: resource, quota.1: resource
+	maxQuotaOpLen      = 64   // quota.2: operation
+)
+
 // Classes de la ressource (§5.3) — claim optionnel −4, absent ⇒ W.
 type Class uint8
 
@@ -450,10 +457,10 @@ func decodePayload(payload []byte) (*Token, string) {
 	tok := &Token{Class: DefaultClass}
 	var ok bool
 
-	if tok.Iss, ok = stringClaim(claims, 1, true); !ok {
+	if tok.Iss, ok = stringClaim(claims, 1, true, maxIssSubActionLen); !ok {
 		return nil, ReasonSchemaViolation
 	}
-	if tok.Sub, ok = stringClaim(claims, 2, true); !ok {
+	if tok.Sub, ok = stringClaim(claims, 2, true, maxIssSubActionLen); !ok {
 		return nil, ReasonSchemaViolation
 	}
 	if tok.Exp, ok = intClaim(claims, 4, true); !ok {
@@ -472,10 +479,10 @@ func decodePayload(payload []byte) (*Token, string) {
 		return nil, ReasonSchemaViolation
 	}
 	copy(tok.PolicyID[:], policyID)
-	if tok.Action, ok = stringClaim(claims, -2, true); !ok {
+	if tok.Action, ok = stringClaim(claims, -2, true, maxIssSubActionLen); !ok {
 		return nil, ReasonSchemaViolation
 	}
-	if tok.Resource, ok = stringClaim(claims, -3, true); !ok {
+	if tok.Resource, ok = stringClaim(claims, -3, true, maxResourceLen); !ok {
 		return nil, ReasonSchemaViolation
 	}
 
@@ -533,10 +540,10 @@ func decodeQuota(v any) (*Quota, bool) {
 		claims[key] = val
 	}
 	q := &Quota{}
-	if q.Resource, ok = stringClaim(claims, 1, true); !ok {
+	if q.Resource, ok = stringClaim(claims, 1, true, maxResourceLen); !ok {
 		return nil, false
 	}
-	if q.Operation, ok = stringClaim(claims, 2, true); !ok {
+	if q.Operation, ok = stringClaim(claims, 2, true, maxQuotaOpLen); !ok {
 		return nil, false
 	}
 	if q.VolumeMax, ok = uintClaim(claims, 3, true); !ok {
@@ -544,6 +551,9 @@ func decodeQuota(v any) (*Quota, bool) {
 	}
 	if q.WindowS, ok = uintClaim(claims, 4, true); !ok {
 		return nil, false
+	}
+	if q.WindowS == 0 {
+		return nil, false // schema.cddl : 4: uint .gt 0 — fenêtre nulle interdite
 	}
 	return q, true
 }
@@ -577,13 +587,16 @@ func bytesFromAny(v any) ([]byte, bool) {
 	return b, ok
 }
 
-func stringClaim(claims map[int64]any, key int64, required bool) (string, bool) {
+// stringClaim décode une claim texte et applique la borne de taille CDDL
+// `.size (1..maxLen)` — un `tstr` en dehors de cette borne est un jeton
+// mal formé (§1, fail-closed), pas juste un champ « long mais acceptable ».
+func stringClaim(claims map[int64]any, key int64, required bool, maxLen int) (string, bool) {
 	v, present := claims[key]
 	if !present {
 		return "", !required
 	}
 	s, ok := v.(string)
-	if !ok || s == "" {
+	if !ok || len(s) < 1 || len(s) > maxLen {
 		return "", false
 	}
 	return s, true

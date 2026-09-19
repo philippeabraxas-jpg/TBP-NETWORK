@@ -440,6 +440,26 @@ func TestFailClosedBattery(t *testing.T) {
 		{name: "policy_id 31 o", reason: "schema-violation", wire: mint(func(c *testClaims) {
 			c.policyID = c.policyID[:31]
 		})},
+		{name: "action 300 o (> schema.cddl .size(1..255))", reason: "schema-violation", wire: mint(func(c *testClaims) {
+			c.action = strings.Repeat("A", 300)
+		})},
+		{name: "iss 300 o (> schema.cddl .size(1..255))", reason: "schema-violation", wire: mint(func(c *testClaims) {
+			c.iss = strings.Repeat("B", 300)
+		})},
+		// Un `resource` isolément > 1024 o fait nécessairement dépasser
+		// MaxTokenWireSize (le reste du jeton a un coût fixe non nul) :
+		// le plafond de fil (token-too-large) prime toujours sur la
+		// borne CDDL propre à ce champ — c'est la même doctrine
+		// fail-closed par une voie différente, pas un défaut.
+		{name: "resource 1025 o (> schema.cddl .size(1..1024), plafonné par MaxTokenWireSize d'abord)", reason: "token-too-large", wire: mint(func(c *testClaims) {
+			c.resource = strings.Repeat("C", 1025)
+		})},
+		{name: "quota.operation 65 o (> schema.cddl .size(1..64))", reason: "schema-violation", wire: mint(func(c *testClaims) {
+			c.quota = map[int]any{1: "storage.artifacts", 2: strings.Repeat("D", 65), 3: 536870912, 4: 300}
+		})},
+		{name: "quota.window_s = 0 (viole schema.cddl .gt 0)", reason: "schema-violation", wire: mint(func(c *testClaims) {
+			c.quota = map[int]any{1: "storage.artifacts", 2: "append", 3: 536870912, 4: 0}
+		})},
 		{name: "v = 2", reason: "unsupported-version", wire: mint(func(c *testClaims) {
 			c.version = 2
 		})},
@@ -515,6 +535,31 @@ func TestFailClosedBattery(t *testing.T) {
 				t.Fatalf("feuilles=%d, veut 1", sink.count())
 			}
 		})
+	}
+}
+
+// TestResourceSizeBoundEnforcedInIsolation appelle decodePayload directement
+// (boîte blanche, même package) pour vérifier la borne schema.cddl
+// `-3: tstr .size (1..1024)` de `resource` indépendamment du plafond de fil
+// MaxTokenWireSize — un `resource` seul de 1025 o fait toujours dépasser ce
+// plafond (cf. TestFailClosedBattery/"resource 1025 o"), donc ce cas précis
+// n'est autrement jamais atteignable par un jeton complet.
+func TestResourceSizeBoundEnforcedInIsolation(t *testing.T) {
+	base := claimsPayload(nominalClaims())
+	base[-3] = strings.Repeat("C", 1025)
+	payload := canonicalEncMust(t, base)
+
+	tok, reason := decodePayload(payload)
+	if tok != nil || reason != ReasonSchemaViolation {
+		t.Fatalf("resource 1025 o : tok=%v reason=%q, veut nil/schema-violation", tok, reason)
+	}
+
+	// Non-régression : exactement à la borne (1024 o), le champ doit passer.
+	base[-3] = strings.Repeat("C", 1024)
+	payload = canonicalEncMust(t, base)
+	tok, reason = decodePayload(payload)
+	if tok == nil || reason != "" {
+		t.Fatalf("resource 1024 o (borne incluse) : tok=%v reason=%q, veut décodage OK", tok, reason)
 	}
 }
 
