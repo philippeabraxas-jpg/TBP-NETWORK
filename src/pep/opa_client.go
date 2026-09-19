@@ -45,14 +45,20 @@ const EvalTimeout = 5 * time.Millisecond
 
 // Raisons de décision propres au client OPA. opa-timeout, opa-unreachable,
 // opa-error et opa-bad-response déclenchent l'alarme T14 ; opa-deny et
-// opa-undefined sont des verdicts d'un OPA sain (pas d'alarme).
+// opa-undefined sont des verdicts d'un OPA sain (pas d'alarme) ;
+// opa-caller-cancelled est un refus fail-closed SANS alarme T14 : le
+// contexte de l'appelant s'est annulé ou a expiré pour une raison qui lui
+// est propre (rien à voir avec OPA ni avec le budget de 5 ms) — l'honnêteté
+// doctrinale de ce fichier (cf. en-tête) interdirait justement de
+// l'étiqueter opa-timeout et d'en accuser OPA à tort.
 const (
-	ReasonOPADeny        = "opa-deny"
-	ReasonOPAUndefined   = "opa-undefined"
-	ReasonOPATimeout     = "opa-timeout"
-	ReasonOPAUnreachable = "opa-unreachable"
-	ReasonOPAError       = "opa-error"
-	ReasonOPABadResponse = "opa-bad-response"
+	ReasonOPADeny            = "opa-deny"
+	ReasonOPAUndefined       = "opa-undefined"
+	ReasonOPATimeout         = "opa-timeout"
+	ReasonOPAUnreachable     = "opa-unreachable"
+	ReasonOPAError           = "opa-error"
+	ReasonOPABadResponse     = "opa-bad-response"
+	ReasonOPACallerCancelled = "opa-caller-cancelled"
 )
 
 // maxOPAResponse borne le corps de réponse lu (64 Kio — une décision
@@ -223,9 +229,8 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		if ectx.Err() == context.DeadlineExceeded {
-			// Circuit ouvert : deny mesuré au timeout, jamais allow.
-			return c.finish(ctx, in, OPADecision{Reason: ReasonOPATimeout, Err: context.DeadlineExceeded}, start)
+		if reason, callerErr, ok := classifyContextFault(ctx, ectx); ok {
+			return c.finish(ctx, in, OPADecision{Reason: reason, Err: callerErr}, start)
 		}
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPAUnreachable, Err: err}, start)
 	}
@@ -240,8 +245,8 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 	var decoded opaResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOPAResponse)).Decode(&decoded); err != nil {
 		// Un corps qui traîne peut consommer la deadline PENDANT la lecture.
-		if ectx.Err() == context.DeadlineExceeded {
-			return c.finish(ctx, in, OPADecision{Reason: ReasonOPATimeout, Err: context.DeadlineExceeded}, start)
+		if reason, callerErr, ok := classifyContextFault(ctx, ectx); ok {
+			return c.finish(ctx, in, OPADecision{Reason: reason, Err: callerErr}, start)
 		}
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPABadResponse, Err: err}, start)
 	}
@@ -259,6 +264,26 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 	default:
 		return c.finish(ctx, in, OPADecision{Allow: true, Reason: ReasonOK}, start)
 	}
+}
+
+// classifyContextFault distingue, après une erreur transport/lecture liée au
+// contexte, QUI a expiré : notre propre budget (c.timeout, le circuit-
+// breaker §12 — ectx) ou le contexte de l'APPELANT (ctx), annulé ou expiré
+// pour une raison qui lui est propre. ectx hérite de ctx (WithTimeout) :
+// quand ctx est déjà terminé, ectx.Err() reporte exactement la même cause
+// (DeadlineExceeded ou Canceled), indiscernable en apparence d'un
+// déclenchement du breaker — d'où ce contrôle séparé sur ctx lui-même.
+// Étiqueter cela opa-timeout accuserait OPA à tort (l'honnêteté doctrinale
+// de ce fichier l'interdit) ; ok=false laisse l'appelant traiter l'erreur
+// transport normalement (opa-unreachable).
+func classifyContextFault(ctx, ectx context.Context) (reason string, err error, ok bool) {
+	if ctx.Err() != nil {
+		return ReasonOPACallerCancelled, ctx.Err(), true
+	}
+	if ectx.Err() == context.DeadlineExceeded {
+		return ReasonOPATimeout, context.DeadlineExceeded, true
+	}
+	return "", nil, false
 }
 
 // finish épilogue toute décision : mesure, alarme T14 si faute OPA,

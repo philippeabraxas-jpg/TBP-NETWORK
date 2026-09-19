@@ -225,6 +225,47 @@ func TestOPAUnreachable(t *testing.T) {
 	}
 }
 
+// TestOPACallerContextCancelledNotBlamedOnOPA : quand le contexte de
+// l'APPELANT est déjà annulé/expiré (raison qui lui est propre, rien à voir
+// avec OPA ni avec le budget de 5 ms), le refus reste fail-closed mais ne
+// doit JAMAIS être étiqueté opa-timeout ni déclencher l'alarme T14 comme si
+// OPA avait dépassé son circuit-breaker — ce serait exactement le genre de
+// signal malhonnête que la doctrine de ce fichier interdit. OPA répond ici
+// instantanément, bien en-deçà du budget, pour isoler la cause.
+func TestOPACallerContextCancelledNotBlamedOnOPA(t *testing.T) {
+	sink := &stubSink{}
+	rec := &tripRecorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"result":{"allow":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := newOPAClient(t, srv.URL, sink, rec)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond) // garantit l'expiration avant l'appel
+
+	d := c.Eval(callerCtx, opaNominalInput())
+	if d.Allow {
+		t.Fatal("un contexte appelant annulé doit rester fail-closed (deny)")
+	}
+	if d.Reason == ReasonOPATimeout {
+		t.Fatalf("reason=%q : accuse OPA à tort d'avoir dépassé le circuit-breaker", d.Reason)
+	}
+	if d.Reason != ReasonOPACallerCancelled {
+		t.Fatalf("reason=%q, veut %q", d.Reason, ReasonOPACallerCancelled)
+	}
+	if lastReason(rec) == ReasonOPATimeout {
+		t.Fatal("alarme T14 opa-timeout déclenchée pour une annulation côté appelant")
+	}
+	if rec.count() != 0 {
+		t.Fatalf("alarme T14 intempestive: %v (l'annulation appelant n'est pas une faute OPA)", rec.reasons)
+	}
+	if !d.LeafWritten {
+		t.Fatal("feuille de deny manquante")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Autres fautes OPA : statut non 200, corps indécodable — deny + alarme.
 // ---------------------------------------------------------------------------
