@@ -1,0 +1,20 @@
+# Reproduction locale/CI du banc T17 : PostgreSQL 15 + extension tbp_pg
+# compilée depuis la source + pgbouncer + suite pytest, en UN conteneur.
+#
+# Pourquoi un seul conteneur : la doctrine fail-closed impose de basculer
+# tbp.enforce via ALTER SYSTEM + pg_ctl reload (pg_reload_conf() serait
+# elle-même refusée par le hook 1 — fonction volatile — dès le mode closed) ;
+# le harnais de test doit donc garder le contrôle local du postmaster. Les
+# fixtures pytest lancent l'instance PostgreSQL jetable ET le(s) pooler(s)
+# pgbouncer elles-mêmes, exactement comme en local.
+#
+#   docker compose -f tests/docker-compose.yml up --build --exit-code-from tests
+#
+# Les fichiers de pgbouncer/ sont un EXEMPLE de configuration de
+# déploiement (les fixtures génèrent la leur, éphémère).
+services:
+  tests:
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.tests
+    init: true

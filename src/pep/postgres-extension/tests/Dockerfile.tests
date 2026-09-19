@@ -1,0 +1,27 @@
+# Banc T17 tout-en-un : PostgreSQL 15 (D3, épinglé) + extension tbp_pg
+# compilée depuis la source du dépôt + pgbouncer + dépendances python.
+FROM postgres:15-bookworm
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential libssl-dev postgresql-server-dev-15 \
+        pgbouncer python3 python3-pip \
+ && rm -rf /var/lib/apt/lists/*
+
+# Extension : compilée et installée depuis la source du dépôt (contexte = ..)
+COPY . /src/tbp
+RUN make -C /src/tbp/src/pep/postgres-extension with_llvm=no \
+ && make -C /src/tbp/src/pep/postgres-extension install
+
+RUN pip3 install --break-system-packages \
+        pytest sqlalchemy psycopg2-binary
+
+# Le harnais crée ses instances jetables : il faut un utilisateur non root.
+RUN useradd -m tbp && mkdir -p /work && chown tbp:tbp /work
+USER tbp
+WORKDIR /src/tbp/src/pep/postgres-extension
+
+ENV TBP_PG_CONFIG=/usr/bin/pg_config \
+    TBP_PGBOUNCER=/usr/sbin/pgbouncer
+
+CMD ["python3", "-m", "pytest", "tests/", "-v"]
