@@ -1,0 +1,6 @@
+# tbp_pg — PEP in-process TBP pour PostgreSQL (T16, §4.4)
+comment = 'TBP in-process PEP: deux hooks (post_parse_analyze structurel + ExecutorStart sceau plan/valeurs), cache de decision borne, monitor-first'
+default_version = '0.1'
+module_pathname = '$libdir/tbp_pg'
+relocatable = false
+superuser = true
