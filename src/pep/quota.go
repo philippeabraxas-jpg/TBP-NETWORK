@@ -33,8 +33,10 @@ package pep
 // permettre cette agrégation sans re-lecture du jeton.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -76,6 +78,13 @@ type PassportCounter struct {
 	windowFrom int64 // début de la fenêtre courante (unix s)
 	remaining  uint64
 	exp        int64 // TTL du passeport (unix s)
+
+	// consumed totalise les quanta ACCEPTÉS depuis l'ouverture — monotone,
+	// il ne se recharge jamais (contrairement à remaining, qui se recharge
+	// à chaque fenêtre). C'est la source de métadonnées de l'exporteur
+	// T21 (§4.1-bis) : le delta par intervalle est consumed(t)−consumed(t−1),
+	// toujours ≥ 0, sans jamais toucher au contenu du flux.
+	consumed uint64
 
 	now  func() time.Time
 	cut  func(jti [16]byte, reason string) // terminator : coupure de session
@@ -122,6 +131,7 @@ func (c *PassportCounter) Consume(n uint64) error {
 		return ErrQuotaExceeded
 	}
 	c.remaining -= n
+	c.consumed += n
 	return nil
 }
 
@@ -147,6 +157,15 @@ func (c *PassportCounter) Remaining() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.remaining
+}
+
+// ConsumedTotal rapporte le total MONOTONE des quanta acceptés depuis
+// l'ouverture (jamais rechargé par les fenêtres) — la métadonnée lue par
+// l'exporteur T21 (§4.1-bis : octets par intervalle, jamais de contenu).
+func (c *PassportCounter) ConsumedTotal() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.consumed
 }
 
 // Closed rapporte si le compteur a été coupé (dépassement ou expiration).
@@ -205,6 +224,18 @@ type QuotaLedger struct {
 
 	mu      sync.Mutex
 	tripped bool // latch saturation (T14), comme T10
+
+	// evicted accumule l'instantané final des compteurs purgés (TTL
+	// écoulé) depuis le dernier Snapshot() — sans lui, un compteur purgé
+	// entre deux appels Snapshot() (typiquement par un Open() sans rapport,
+	// sur le chemin chaud d'admission) disparaît sans jamais avoir été vu
+	// dans son état terminal : le dernier delta consommé n'est alors JAMAIS
+	// exportable (T21, §4.1-bis) — constaté par test. Purger reste INSTANTANÉ
+	// (Open() ne doit rien à cette liste, §4.3 : TestQuotaLedgerBounded exige
+	// la libération immédiate) ; Snapshot() la vide à chaque appel, bornée à
+	// `max` entrées (comme le registre lui-même) pour ne jamais croître si
+	// personne n'appelle Snapshot() (aucun exportateur branché).
+	evicted []PassportSnapshot
 }
 
 // compile-time : *QuotaLedger satisfait la couture QuotaChecker (T9).
@@ -316,12 +347,71 @@ func (l *QuotaLedger) Counter(jti [16]byte) (*PassportCounter, bool) {
 	return c, ok
 }
 
+// PassportSnapshot est l'instantané de métadonnées d'UN compteur vivant —
+// la couture de l'exporteur T21 (§4.1-bis). MÉTADONNÉES UNIQUEMENT : jti,
+// vecteur signé, total monotone consommé, état. Aucun contenu de flux
+// n'existe à ce niveau — le compteur n'en voit jamais.
+type PassportSnapshot struct {
+	JTI       [16]byte // identifiant du passeport (clé des feuilles)
+	Resource  string   // ressource du vecteur quota SIGNÉ (la destination)
+	Operation string   // opération du vecteur signé
+	Consumed  uint64   // total monotone des quanta acceptés (T21 : delta)
+	Closed    bool     // compteur coupé (dépassement / expiration)
+	Exp       int64    // TTL du passeport (unix s)
+}
+
+// Snapshot énumère les instantanés des compteurs vivants (purgés de
+// l'expiration au passage), dans un ordre DÉTERMINÉ (tri par jti, §11.3)
+// — l'exporteur T21 les traduit en records IPFIX sans jamais toucher un
+// paquet.
+func (l *QuotaLedger) Snapshot() []PassportSnapshot {
+	now := l.now().Unix()
+
+	l.mu.Lock()
+	l.purgeLocked(now)
+	out := make([]PassportSnapshot, 0, len(l.counters)+len(l.evicted))
+	for _, c := range l.counters {
+		out = append(out, PassportSnapshot{
+			JTI:       c.jti,
+			Resource:  c.resource,
+			Operation: c.operation,
+			Consumed:  c.ConsumedTotal(),
+			Closed:    c.Closed(),
+			Exp:       c.exp,
+		})
+	}
+	// Dernier regard garanti sur les compteurs purgés depuis le Snapshot()
+	// précédent (voir le commentaire du champ `evicted`) — sans quoi leur
+	// delta final n'est jamais exportable.
+	out = append(out, l.evicted...)
+	l.evicted = l.evicted[:0]
+	l.mu.Unlock()
+
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].JTI[:], out[j].JTI[:]) < 0
+	})
+	return out
+}
+
 // purgeLocked supprime les compteurs dont le TTL est écoulé — coupés ou
 // non : un passeport expiré est mort de toute façon (le validateur refuse
-// les jetons périmés en amont).
+// les jetons périmés en amont). La suppression de la map reste INSTANTANÉE
+// (§4.3 : Open() compte dessus pour rouvrir le registre dès le TTL passé,
+// TestQuotaLedgerBounded) ; l'instantané final part dans `evicted` avant
+// suppression, pour le prochain Snapshot() (T21).
 func (l *QuotaLedger) purgeLocked(now int64) {
 	for jti, c := range l.counters {
 		if now > c.exp {
+			if len(l.evicted) < l.max {
+				l.evicted = append(l.evicted, PassportSnapshot{
+					JTI:       c.jti,
+					Resource:  c.resource,
+					Operation: c.operation,
+					Consumed:  c.ConsumedTotal(),
+					Closed:    true, // purgé : dernier état, point final
+					Exp:       c.exp,
+				})
+			}
 			delete(l.counters, jti)
 		}
 	}
