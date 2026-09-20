@@ -66,7 +66,32 @@ l'issue [#27](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/27)) :
   alarme `retention-store-full`, jamais de destruction pour faire de la
   place ; erreurs de feuille propagées à l'appelant (§5.3).
 
-## Not implemented here (remaining placeholders)
+## État : détection anti-dribble implémentée (T23)
 
-- The "drip-feed" detection itself (**T23**) — thresholds, sliding
-  windows, on aggregated metadata only.
+`antidribble.go` — décisions D27–D32 (plan et preuves sur l'issue
+[#25](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/25)) :
+
+- **Couture `RecordSink` + tee `FanOut`** (D27) : le détecteur consomme
+  le même fil que l'agrégateur, en parallèle — zéro modification de
+  T21/T22, et aucun angle mort de troncation top-k.
+- **Entité = destination hachée+salée** (D28) : jamais de destination en
+  clair en mémoire ; la concentration est intrinsèque au modèle.
+- **Fenêtres glissantes bornées** (D29, §4.3) : anneaux 24 h (1440
+  minutes) + 7 j (168 heures), ≈ 13 Ko/entité, 4096 entités max —
+  jamais d'éviction (vecteur d'évasion) : map pleine ⇒ alarme
+  `antidribble-entities-full`. Pilotage par le fil (watermark), aucune
+  goroutine.
+- **Score composite versionné** (D30, §4.4(5)) : trois signaux binaires
+  (cumul 24 h/7 j au-delà du seuil ; régularité — présence ≥ seuil et
+  ÉAM/moyenne faible ; dérive EMA rapide/lente réchauffée — la naissance
+  ou la reprise d'un profil n'est pas une dérive), poids per-mille,
+  arithmétique entière (§11.3). `paramsHash` dans chaque feuille : tout
+  changement de seuils est visible dans le registre.
+- **Detect, pas prevent** (D31, §4.1-bis) : l'alerte est une feuille
+  `KindTelemetryAlert` (kind 6) hash-only « TBAD1 » + callback `OnAlert`
+  — aucune coupure automatique. Front montant + hystérésis anti-spam ;
+  une alerte qui ne peut pas laisser de trace est une erreur propagée
+  (§9.1).
+- **Taux de faux positifs mesuré** : 0/32 destinations sur trafic
+  légitime simulé (heures ouvrées, volumes fortement variables, 2 j) —
+  `TestLegitTrafficFalsePositiveRate`.
