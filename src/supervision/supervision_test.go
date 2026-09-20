@@ -187,6 +187,7 @@ type monitorFixture struct {
 	sup      *cellFixture // log de supervision du moniteur
 	manifDir string
 	sink     *[]Alert
+	trig     *triggerRecorder // couture de bascule (T34b)
 	monitor  *Monitor
 }
 
@@ -213,6 +214,7 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 
 	var got []Alert
 	fx.sink = &got
+	fx.trig = &triggerRecorder{}
 	mon, err := NewMonitor(testCtx, MonitorOptions{
 		MonitorCellID: fx.sup.cellID,
 		Log:           fx.sup.log,
@@ -233,7 +235,8 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 			*fx.sink = append(*fx.sink, a)
 			return nil
 		}),
-		Now: clk.now,
+		Trigger: fx.trig,
+		Now:     clk.now,
 	})
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
