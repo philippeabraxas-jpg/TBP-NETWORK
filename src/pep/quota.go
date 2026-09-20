@@ -224,6 +224,18 @@ type QuotaLedger struct {
 
 	mu      sync.Mutex
 	tripped bool // latch saturation (T14), comme T10
+
+	// evicted accumule l'instantané final des compteurs purgés (TTL
+	// écoulé) depuis le dernier Snapshot() — sans lui, un compteur purgé
+	// entre deux appels Snapshot() (typiquement par un Open() sans rapport,
+	// sur le chemin chaud d'admission) disparaît sans jamais avoir été vu
+	// dans son état terminal : le dernier delta consommé n'est alors JAMAIS
+	// exportable (T21, §4.1-bis) — constaté par test. Purger reste INSTANTANÉ
+	// (Open() ne doit rien à cette liste, §4.3 : TestQuotaLedgerBounded exige
+	// la libération immédiate) ; Snapshot() la vide à chaque appel, bornée à
+	// `max` entrées (comme le registre lui-même) pour ne jamais croître si
+	// personne n'appelle Snapshot() (aucun exportateur branché).
+	evicted []PassportSnapshot
 }
 
 // compile-time : *QuotaLedger satisfait la couture QuotaChecker (T9).
@@ -357,7 +369,7 @@ func (l *QuotaLedger) Snapshot() []PassportSnapshot {
 
 	l.mu.Lock()
 	l.purgeLocked(now)
-	out := make([]PassportSnapshot, 0, len(l.counters))
+	out := make([]PassportSnapshot, 0, len(l.counters)+len(l.evicted))
 	for _, c := range l.counters {
 		out = append(out, PassportSnapshot{
 			JTI:       c.jti,
@@ -368,6 +380,11 @@ func (l *QuotaLedger) Snapshot() []PassportSnapshot {
 			Exp:       c.exp,
 		})
 	}
+	// Dernier regard garanti sur les compteurs purgés depuis le Snapshot()
+	// précédent (voir le commentaire du champ `evicted`) — sans quoi leur
+	// delta final n'est jamais exportable.
+	out = append(out, l.evicted...)
+	l.evicted = l.evicted[:0]
 	l.mu.Unlock()
 
 	sort.Slice(out, func(i, j int) bool {
@@ -378,10 +395,23 @@ func (l *QuotaLedger) Snapshot() []PassportSnapshot {
 
 // purgeLocked supprime les compteurs dont le TTL est écoulé — coupés ou
 // non : un passeport expiré est mort de toute façon (le validateur refuse
-// les jetons périmés en amont).
+// les jetons périmés en amont). La suppression de la map reste INSTANTANÉE
+// (§4.3 : Open() compte dessus pour rouvrir le registre dès le TTL passé,
+// TestQuotaLedgerBounded) ; l'instantané final part dans `evicted` avant
+// suppression, pour le prochain Snapshot() (T21).
 func (l *QuotaLedger) purgeLocked(now int64) {
 	for jti, c := range l.counters {
 		if now > c.exp {
+			if len(l.evicted) < l.max {
+				l.evicted = append(l.evicted, PassportSnapshot{
+					JTI:       c.jti,
+					Resource:  c.resource,
+					Operation: c.operation,
+					Consumed:  c.ConsumedTotal(),
+					Closed:    true, // purgé : dernier état, point final
+					Exp:       c.exp,
+				})
+			}
 			delete(l.counters, jti)
 		}
 	}

@@ -292,6 +292,78 @@ func TestQuotaLedgerBounded(t *testing.T) {
 	openPassport(t, l, jtiNum(9000), clock.Load()+120, 1024, 60)
 }
 
+// TestQuotaLedgerSnapshotSeesFinalStateOfEvictedCounter reproduit un trou
+// trouvé en revue T21 : un compteur purgé par le chemin chaud d'admission
+// (Open() → purgeLocked, §4.3 — la libération DOIT rester instantanée,
+// cf. TestQuotaLedgerBounded ci-dessus) entre deux appels Snapshot() de
+// l'exportateur disparaissait sans jamais avoir été vu dans son état
+// terminal : son dernier delta consommé n'était alors JAMAIS exportable
+// (aucun record IPFIX, aucune feuille) — une perte de preuve silencieuse
+// pour la voie de terminaison la plus commune (expiration naturelle du
+// TTL, par opposition au dépassement de quota qui ne court en général pas
+// contre son propre TTL). Le correctif (buffer `evicted` borné, purgé par
+// Snapshot()) ne doit RIEN changer à la vitesse de libération testée
+// ci-dessus — seul Snapshot() voit la différence.
+func TestQuotaLedgerSnapshotSeesFinalStateOfEvictedCounter(t *testing.T) {
+	sink := &stubSink{}
+	l, clock := newTestLedger(t, 8, sink, nil, nil)
+
+	jtiA := jtiNum(1)
+	cA := openPassport(t, l, jtiA, clock.Load()+10, 1024, 3600)
+	if err := cA.Consume(50); err != nil {
+		t.Fatalf("Consume A (50): %v", err)
+	}
+
+	// Premier instantané : établit la ligne de base (50 déjà vus).
+	snaps := l.Snapshot()
+	if len(snaps) != 1 || snaps[0].JTI != jtiA || snaps[0].Consumed != 50 {
+		t.Fatalf("snapshot initial = %+v, veut 1 entrée jti=A consumed=50", snaps)
+	}
+
+	// A consomme ENCORE avant expiration (30 de plus, jamais vus par un
+	// Snapshot() — c'est exactement ce que le correctif doit préserver).
+	if err := cA.Consume(30); err != nil {
+		t.Fatalf("Consume A (30): %v", err)
+	}
+
+	// Le TTL de A passe. Une admission SANS RAPPORT (B) déclenche purgeLocked
+	// et évince A du chemin chaud — la libération doit rester immédiate.
+	clock.Add(11)
+	openPassport(t, l, jtiNum(2), clock.Load()+100, 1024, 3600)
+	if _, ok := l.Counter(jtiA); ok {
+		t.Fatalf("A devrait avoir été évincé immédiatement par l'Open() de B (§4.3)")
+	}
+
+	// Snapshot() doit malgré tout rapporter l'état TERMINAL de A (Consumed
+	// total = 80, Closed = true) au moins une fois — le dernier delta
+	// (30) doit rester reconstituable par l'exportateur.
+	snaps = l.Snapshot()
+	var found *PassportSnapshot
+	for i := range snaps {
+		if snaps[i].JTI == jtiA {
+			found = &snaps[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("A absent du Snapshot() qui suit son éviction — delta final (30) perdu")
+	}
+	if found.Consumed != 80 {
+		t.Errorf("Consumed final de A = %d, veut 80 (50+30, le delta final doit rester visible)", found.Consumed)
+	}
+	if !found.Closed {
+		t.Errorf("A évincé devrait être rapporté Closed=true (dernier état)")
+	}
+
+	// Le buffer d'éviction se vide à chaque Snapshot() : A ne doit PAS
+	// réapparaître indéfiniment.
+	snaps = l.Snapshot()
+	for _, s := range snaps {
+		if s.JTI == jtiA {
+			t.Errorf("A réapparaît dans un second Snapshot() — le buffer d'éviction n'a pas été vidé")
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Ouvertures invalides — fail-closed dès l'entrée.
 // ---------------------------------------------------------------------------
