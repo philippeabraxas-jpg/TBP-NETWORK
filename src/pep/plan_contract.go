@@ -29,6 +29,7 @@
 package pep
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -469,6 +470,59 @@ func (s *ContractStore) Revoke(ctx context.Context, planHash [32]byte) error {
 	e.status = planStatusRevoked
 	return nil
 }
+
+// PendingPlan est la vue LECTURE SEULE d'un plan en attente d'arbitrage,
+// exposée à la console de supervision (T34c, issue #60, D81) : le hash
+// scellé, les bornes temporelles et le nombre d'étapes — JAMAIS les étapes
+// elles-mêmes ni les paramètres (hash-only : le plan en clair circule sur
+// le canal opérateur ; la console n'est pas un second canal de lecture du
+// plan, et la décision humaine reste une signature Approve sur ce canal,
+// pas une route HTTP — T30).
+type PendingPlan struct {
+	Hash        [32]byte
+	SubmittedAt time.Time
+	ExpiresAt   time.Time
+	Steps       int
+}
+
+// Snapshot renvoie les plans en attente d'arbitrage (pending, non expirés),
+// triés par submittedAt (ordre d'arrivée = ordre d'arbitrage), hash en
+// bris d'égalité pour un ordre déterministe sous horloge à pas grossier.
+// Lecture seule PAR CONSTRUCTION : aucune mutation, aucune feuille, aucune
+// alarme — lire la file ne peut ni la changer ni produire d'événement. Les
+// entrées dont expiresAt est passé mais dont la feuille d'expiration n'est
+// pas encore écrite (expireLocked n'a pas encore tourné) sont filtrées ici
+// sur l'horloge : la console ne montre jamais un plan déjà mort.
+func (s *ContractStore) Snapshot() []PendingPlan {
+	now := s.clock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]PendingPlan, 0, len(s.plans))
+	for h, e := range s.plans {
+		if e.status != planStatusPending || e.expired || !now.Before(e.expiresAt) {
+			continue
+		}
+		out = append(out, PendingPlan{
+			Hash:        h,
+			SubmittedAt: e.submittedAt,
+			ExpiresAt:   e.expiresAt,
+			Steps:       len(e.steps),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].SubmittedAt.Equal(out[j].SubmittedAt) {
+			return out[i].SubmittedAt.Before(out[j].SubmittedAt)
+		}
+		return bytes.Compare(out[i].Hash[:], out[j].Hash[:]) < 0
+	})
+	return out
+}
+
+// PolicyID renvoie le hash du bundle de règles sous lequel les plans sont
+// scellés (claim −1) : la console l'affiche pour que l'arbitre vérifie
+// qu'il arbitre sous la bonne politique (un plan approuvé sous P meurt
+// avec P).
+func (s *ContractStore) PolicyID() [32]byte { return s.policyID }
 
 // VerifyStep est la couture appelée par le broker (étape 7 de HandleAction,
 // D62) : la demande (binding opaque + action/resource traduites) est
