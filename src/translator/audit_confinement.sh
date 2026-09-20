@@ -128,8 +128,23 @@ esac
 
 # --- 5. propriétés systemd (si disponible, hors fixture) ---------------------
 
-if [ -z "$FIXTURE" ] && command -v systemctl >/dev/null; then
-	show() { systemctl show -p "$1" --value "$UNIT" 2>/dev/null; }
+# systemd_usable : le binaire systemctl peut être présent (image minimale,
+# CI, chroot) sans qu'un systemd tourne en PID 1 — « command -v systemctl »
+# seul ne le détecte pas. Appelée UNIQUEMENT en position de condition (if) :
+# sous set -e, un $(sous-shell) qui échoue hors condition/||/&& fait
+# avorter tout le script (vérifié empiriquement) — ce qui, en pratique,
+# faisait sauter silencieusement toute la section 6 (l'honnêteté netns) et
+# le verdict final dès la 1ère propriété interrogée sur un hôte sans
+# systemd fonctionnel, avec un code de sortie confondant crash d'outil et
+# violation réelle (contrat documenté en tête de fichier : 2 = erreur
+# d'environnement, pas 1).
+systemd_usable() { systemctl show -p Id --value "$UNIT" >/dev/null 2>&1; }
+
+if [ -z "$FIXTURE" ] && command -v systemctl >/dev/null && systemd_usable; then
+	# 2>/dev/null || true : défense en profondeur — même la garde ci-dessus
+	# passée, une requête de propriété individuelle ne doit jamais faire
+	# avorter le script sous set -e (même raison que systemd_usable).
+	show() { systemctl show -p "$1" --value "$UNIT" 2>/dev/null || true; }
 	check_prop() { # check_prop <Propriété> <attendu>
 		local got; got=$(show "$1")
 		if [ "$got" = "$2" ]; then ok "$1=$2"; else ko "$1='$got' — attendu '$2'"; fi
@@ -162,7 +177,7 @@ if [ -z "$FIXTURE" ] && command -v systemctl >/dev/null; then
 elif [ -n "$FIXTURE" ]; then
 	echo "  (fixture : propriétés systemd non vérifiées — par construction)"
 else
-	warn "systemctl absent : propriétés d'unit non vérifiées (seules les preuves /proc le sont)"
+	warn "systemctl absent ou non fonctionnel (pas de systemd en PID 1) : propriétés d'unit non vérifiées (seules les preuves /proc le sont)"
 fi
 
 # --- 6. netns et routes — honnêteté sur l'égress ----------------------------

@@ -92,11 +92,17 @@ DeviceAllow=/dev/nvidia-uvm-tools rw
 DeviceAllow=/dev/nvidia0 rw
 
 # --- Kernel : tout ce qui n'est pas nécessaire est fermé -----------------
-# NB : ProtectKernelTunnels est volontairement ABSENT — systemd ≤ 252
-# (bookworm, cible de déploiement du dépôt) ignore cette clé en silence
-# (vérifié par systemd-analyze verify) ; une directive ignorée en silence
-# est pire qu'une directive absente (§5.3). Les tunnels exigeraient de
-# toute façon AF_NETLINK, déjà refusé par RestrictAddressFamilies.
+# NB : ProtectKernelTunnels est volontairement ABSENT — CE N'EST PAS une
+# clé systemd reconnue (aucune version ne l'a jamais eue ; à ne pas
+# confondre avec ProtectKernelTunables ci-dessous, qui EST réelle et
+# active). Reproduit par `systemd-analyze verify` : la clé inconnue est
+# rejetée avec « Unknown key name 'ProtectKernelTunnels' in section
+# 'Service', ignoring » — visible sur stderr/journal à la vérification,
+# mais qui NE bloque PAS le démarrage et n'apparaît PAS dans `systemctl
+# status` : une directive ainsi ignorée à l'exécution reste facile à
+# manquer opérationnellement, donc toujours pire qu'une directive absente
+# et documentée (§5.3). Les tunnels exigeraient de toute façon AF_NETLINK,
+# déjà refusé par RestrictAddressFamilies.
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

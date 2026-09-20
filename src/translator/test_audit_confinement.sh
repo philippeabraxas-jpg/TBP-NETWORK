@@ -141,6 +141,25 @@ else
 	# non-root mais non confiné : CapEff/Seccomp doivent mordre
 	check "processus non-root non confiné rejeté" 1 "$OUT"
 fi
+# Preuve que le script va JUSQU'AU BOUT (section 6 + verdict), pas
+# seulement jusqu'à la 1re assertion qui mord. Trouvé en revue de #64 :
+# sur un hôte où `systemctl` est présent mais non fonctionnel (systemd pas
+# en PID 1 — image minimale, CI, chroot ; cas fréquent, distinct de
+# « systemctl absent » qui était déjà géré), la section 5 (propriétés
+# systemd) faisait avorter tout le script via set -e à la toute première
+# requête `systemctl show`, AVANT la section 6 (l'honnêteté netns/egress —
+# la contribution la plus spécifique de cet outil) et avant la ligne de
+# verdict — silencieusement, avec un code de sortie qui ressemble à
+# « violation trouvée » (1) sans l'être (contrat documenté : 2 = erreur
+# d'environnement). Cette assertion aurait échoué avant le correctif.
+check "le script va jusqu'au verdict final (pas de crash mi-parcours)" 1 "$OUT" "violation(s)"
+case "$OUT" in
+*"netns partagé"* | *"netns dédié"*)
+	echo "ok   section 6 (netns/egress) atteinte" ; PASS=$((PASS + 1)) ;;
+*)
+	echo "FAIL section 6 (netns/egress) jamais atteinte — le script s'est arrêté avant"
+	FAIL=$((FAIL + 1)) ;;
+esac
 
 # Processus setpriv : non-root, caps vidées, no_new_privs — tout doit passer
 # SAUF Seccomp (=0 : setpriv ne pose pas de filtre). Preuve que l'assertion
