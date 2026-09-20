@@ -58,7 +58,7 @@ func TestLeafMarshalUnmarshalRoundTrip(t *testing.T) {
 	for _, kind := range []byte{
 		KindDecision, KindTelemetry, KindBackpressure, KindAnchor,
 		KindRetentionPurge, KindTelemetryAlert,
-		KindEpoch, KindQuorum, KindPromotion,
+		KindEpoch, KindQuorum, KindPromotion, KindContract,
 	} {
 		leaf := Leaf{
 			Kind:        kind,
