@@ -1,10 +1,16 @@
 ; ---------------------------------------------------------------------------
-; TBP-NETWORK — schéma formel du jeton signé, version 1 (tâche T8, issue #10)
+; TBP-NETWORK — schéma formel du jeton signé, version 2 (tâche T8, issue #10 ;
+; v2 : tâche T30, issue #31 — clé −8 plan_seal, voir schema.md §12).
 ; Spec : v1.4.10 — §4.1 (jeton d'action), §4.1-bis (passeport à quota),
-; §4.4(2) (object-capabilities), §4.3 (anti-rejeu), §7.2 (fencing d'époque),
-; §11.3 (déterminisme), §12 (Ed25519).
+; §4.2 (arbitrage = contrat de plan), §4.4(2) (object-capabilities),
+; §4.3 (anti-rejeu), §7.2 (fencing d'époque), §11.3 (déterminisme),
+; §12 (Ed25519).
 ;
 ; Enveloppe : COSE_Sign1 (RFC 9052), alg = EdDSA (-8), Ed25519 (§12).
+;             ATTENTION : ce « -8 » est l'identifiant d'ALGORITHME du registre
+;             COSE (RFC 9053), dans l'en-tête protégé — sans aucun rapport
+;             avec la claim de payload -8 (plan_seal) ci-dessous, qui vit dans
+;             l'espace des claims CWT du schéma TBP (revue #31).
 ; Payload   : CWT (RFC 8392) — les clés 1, 2, 4, 6, 7 relèvent du registre
 ;             CWT IANA ; les clés négatives sont à usage privé TBP.
 ; Encodage  : CBOR déterministe (RFC 8949 §4.2.1, tri longueur-d'abord) —
@@ -33,9 +39,12 @@ tbp-claims = {
   ? -5: hash32,              ; object_seal — hash objet/champ/valeur (§4.4(2)) ;
                              ;             présent = capacité scellée
   -6: uint,                  ; epoch     — N de l'époque d'émission (§7.2) ;
-                             ;             l'épouse mourante tue le jeton (§7.3)
+                             ;             l'époque révoquée tue le jeton (§7.3)
   ? -7: quota,               ; passeport — présent = ouverture de chemin lourd
                              ;             (§4.1-bis)
+  ? -8: hash32,              ; plan_seal — hash du plan arbitré approuvé (§4.2,
+                             ;             T30) ; v >= 2 UNIQUEMENT (v1 : cette
+                             ;             clé est inconnue, donc rejetée)
   -9: schema-version,        ; v         — version du présent schéma
 }
 
@@ -45,7 +54,9 @@ jti = bstr .size 16          ; 128 bits tirés crypto (§4.3 : unique par jeton)
 hash32 = bstr .size 32       ; SHA-256
 class = uint .lt 4           ; 0 = F (financier), 1 = I (infrastructure),
                              ; 2 = W (survie), 3 = hors F/I/W (§5.3)
-schema-version = 1           ; v1 — tout changement non compatible incrémente
+schema-version = 1 / 2       ; v1 = schéma initial (T8) — claim -8 INTERDITE
+                             ; v2 = v1 + claim -8 plan_seal optionnelle (T30)
+                             ; toute autre valeur = rejet (fail-closed)
 
 ; --- passeport à quota (§4.1-bis) ------------------------------------------
 ; Vecteur (ressource, opération, volume_max, fenêtre, TTL, jti) : le TTL est
