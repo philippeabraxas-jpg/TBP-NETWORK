@@ -15,6 +15,7 @@ doctrine, jamais une nouvelle boîte noire » — son propre log est un
 | `watcher.go` | `ChainWatcher` : lecture vérifiée d'un log POSIX Tessera (signature de checkpoint, consistance O(log n), re-hash des feuilles) |
 | `monitor.go` | `Monitor` : orchestre les vérificateurs, feuille + alarme chaque divergence |
 | `failover.go` | détection de chute (ET strict) + déclenchement borné de bascule (T34b, D80) |
+| `console.go` | console HTTP lecture seule PAR CONSTRUCTION (T34c, D81/D82) |
 
 Les trois vérificateurs continus (§6.2, D78) :
 
@@ -81,11 +82,39 @@ feuille event=4 verdict=Notice (constat d'acte pré-autorisé, feuillé comme
 toute alerte). Une chute n'est traitée qu'une fois par épisode ; la
 reprise (feuille nouvelle ou ancrage frais) réarme le détecteur.
 
-## À venir sur cette issue
+## Livré (T34c) — console lecture seule (D81/D82)
 
-- **T34c** — console read-only (aucune route mutante par construction) :
-  file d'arbitrage (plans scellés T30), inspection de politique
-  (`policy_id`, bundle ancré §7.4), indicateurs §9.1 exportables.
+La console est un serveur HTTP **sans aucune route mutante** : seuls trois
+patterns `GET` sont enregistrés — une requête POST/PUT/DELETE reçoit 405
+**du mux**, un chemin inconnu 404. Le refus n'est pas un code de garde qui
+pourrait être oublié : c'est l'absence matérielle de la route (mutation
+M13 prouvée létale — une route mutante ajoutée fait échouer
+`TestConsoleReadOnlyByConstruction` immédiatement).
+
+- **`GET /v1/arbitration`** — file d'arbitrage (T30) : `policy_id` (hex,
+  claim −1) et plans en attente — **hash scellé**, `submitted_at`,
+  `expires_at`, nombre d'étapes. Jamais les étapes ni les paramètres :
+  le plan en clair circule sur le canal opérateur, la console n'est pas
+  un second canal de lecture (hash-only §6.2). La décision humaine reste
+  une signature Ed25519 `Approve` sur ce canal (§4.2) — **la console ne
+  peut ni approuver, ni révoquer, ni clore**.
+- **`GET /v1/epoch`** — état du suivi d'époque T29 (autorité, bornes,
+  quarantaines, bascules auto de l'heure), lisible même en quarantaine.
+- **`GET /v1/indicators`** — indicateurs §9.1 :
+  `tier1_supervision_latency_added_ns: 0` (mesuré par construction : rien
+  de la supervision n'est sur le chemin chaud), taux d'arbitrage
+  (`plan_denies/requests` + file en attente), et par cellule taille de
+  chaîne vérifiée, fraîcheur d'ancrage (§6.2) et état de chute (T34b).
+  Les faits sont bruts, les drapeaux dérivés (`anchor_stale`) marqués
+  comme tels.
+
+Lecture **pure** : aucune feuille, aucune alarme, aucune mutation —
+l'instantané moniteur est pris sous le même verrou que `CheckOnce`,
+jamais à moitié reconstruit. Transport : socket Unix de cellule
+(`broker.ListenUnix`, 0660 — l'accès au socket EST le contrôle d'accès,
+doctrine v1) ; l'exposition réseau relève de T35. Couture côté T30 :
+`ContractStore.Snapshot()`/`PolicyID()`, accesseurs de lecture ajoutés
+sans toucher aux feuilles.
 
 ## Hors périmètre (rappel #60)
 
