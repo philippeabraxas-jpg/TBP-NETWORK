@@ -687,6 +687,9 @@ func TestStructuralMetadataOnly(t *testing.T) {
 	allowedImports := map[string]bool{
 		"context": true, "crypto/sha256": true, "encoding/binary": true,
 		"errors": true, "net": true, "net/netip": true, "sync": true, "time": true,
+		// T22 : tri déterministe du top-k (§11.3) et stats atomiques (§5.3)
+		// — purement locaux, aucun accès paquet.
+		"sort": true, "sync/atomic": true,
 		"github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep":      true,
 		"github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry": true,
 	}
