@@ -8,7 +8,7 @@
 // Sérialisation binaire à layout fixe (déterministe, §11.3) :
 //
 //	offset 0      version      1 octet   = 0x01
-//	offset 1      kind         1 octet   (KindDecision=1, KindTelemetry=2, KindBackpressure=3, KindAnchor=4, KindRetentionPurge=5)
+//	offset 1      kind         1 octet   (KindDecision=1, KindTelemetry=2, KindBackpressure=3, KindAnchor=4, KindRetentionPurge=5, KindTelemetryAlert=6)
 //	offset 2      timestamp    8 octets  int64 big-endian, ns depuis epoch Unix (horloge NTS de la cellule)
 //	offset 10     cellIDLen    1 octet   longueur de cellID (≤ 255)
 //	offset 11     cellID       cellIDLen octets (UTF-8)
@@ -33,6 +33,7 @@ const (
 	KindBackpressure   byte = 3 // arrêt propre avant engagement du backpressure (T5)
 	KindAnchor         byte = 4 // ancrage master chain : hash(broker_id, tête, TSA) — T6, §6.2
 	KindRetentionPurge byte = 5 // purge de rétention télémétrie tracée : hash du manifeste du lot détruit — T22, §6.2
+	KindTelemetryAlert byte = 6 // alerte anti-dribble : hash du manifeste score+signaux versionnés — T23, §4.1-bis
 )
 
 // leafVersion est la version du format de sérialisation.
@@ -44,7 +45,7 @@ const maxCellIDLen = 255
 // Leaf est une feuille du registre — hash-only, jamais de contenu en clair.
 // KindAnchor : ancrage d'une cellule dans la master chain — §6.2, T6.
 type Leaf struct {
-	Kind        byte     // KindDecision | KindTelemetry | KindBackpressure | KindAnchor | KindRetentionPurge
+	Kind        byte     // KindDecision | KindTelemetry | KindBackpressure | KindAnchor | KindRetentionPurge | KindTelemetryAlert
 	CellID      string   // identité de la cellule émettrice
 	PayloadHash [32]byte // sha256(salt ‖ contenu métier) — le sel reste chez le producteur
 	Timestamp   int64    // ns depuis epoch Unix, horloge NTS de la cellule
@@ -68,7 +69,7 @@ func (l Leaf) Marshal() ([]byte, error) {
 		return nil, fmt.Errorf("cellID : longueur %d hors [1, %d]", len(l.CellID), maxCellIDLen)
 	}
 	switch l.Kind {
-	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge:
+	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert:
 	default:
 		return nil, fmt.Errorf("kind %d inconnu", l.Kind)
 	}
@@ -92,7 +93,7 @@ func UnmarshalLeaf(data []byte) (Leaf, error) {
 	}
 	l.Kind = data[1]
 	switch l.Kind {
-	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge:
+	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert:
 	default:
 		return l, fmt.Errorf("kind %d inconnu", l.Kind)
 	}
