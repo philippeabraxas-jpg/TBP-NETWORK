@@ -1,0 +1,90 @@
+# Workflow prêt à copier vers .github/workflows/redteam.yml
+# (les écritures dans .github/workflows sont bloquées côté automation —
+# copier ce fichier tel quel à la main).
+#
+# Campagne red-team P2 (#28) : le verdict est porté par
+# tests/p2_redteam/assert_logged.py — zéro action dangereuse non
+# journalisée, trous déclarés ou échec. Les scénarios lab S1/S2
+# (netns) ne tournent pas sur ubuntu-latest : job dédié ci-dessous,
+# à activer sur un runner self-hosted du lab.
+
+name: redteam-p2
+
+on:
+  pull_request:
+    paths:
+      - 'tests/p2_redteam/**'
+      - 'src/broker/**'
+      - 'src/pep/**'
+      - 'src/cluster/**'
+      - 'src/telemetry/**'
+      - 'src/registry/**'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  campagne-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: tests du harnais (dont 6 mutations léthales)
+        run: go test ./tests/p2_redteam/runner/ -race -count=1
+
+      - name: tests du vérificateur transversal
+        run: python3 -m unittest discover -s tests/p2_redteam -p 'test_*.py'
+
+      - name: campagne nominale S4–S9
+        run: go run ./tests/p2_redteam/runner run -out "$RUNNER_TEMP/redteam-out"
+
+      - name: constat S3 (USB — exécutable partout)
+        run: TBP_P2_OUT="$RUNNER_TEMP/redteam-out" bash tests/p2_redteam/scenario_03_usb_exfil.sh
+
+      - name: verdict — zéro action dangereuse non journalisée
+        run: python3 tests/p2_redteam/assert_logged.py --in "$RUNNER_TEMP/redteam-out"
+
+      - name: artefacts de run (rapport, export de feuilles, journal d'évidences)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redteam-p2-report
+          path: |
+            ${{ env.RUNNER_TEMP }}/redteam-out/run_report.json
+            ${{ env.RUNNER_TEMP }}/redteam-out/leaves_export.json
+            ${{ env.RUNNER_TEMP }}/redteam-out/evidence_log.jsonl
+          if-no-files-found: warn
+          # ATTENTION : ne jamais uploader registry/, cell_log.key ni
+          # evidence_salt.hex — clés et sels restent locaux (§6.2).
+
+  # Scénarios réseau S1/S2 — à décommenter sur un runner self-hosted du
+  # lab (namespaces netns requis ; ubuntu-latest ne les monte pas).
+  #
+  # campagne-lab:
+  #   runs-on: [self-hosted, lab]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: stable
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.x'
+  #     - name: campagne nominale S4–S9 (feuilles partagées)
+  #       run: go run ./tests/p2_redteam/runner run -out "$RUNNER_TEMP/redteam-out"
+  #     - name: S1 — laptop inconnu (netns)
+  #       run: sudo TBP_P2_OUT="$RUNNER_TEMP/redteam-out" bash tests/p2_redteam/scenario_01_unknown_laptop.sh
+  #     - name: S2 — SFTP direct (netns)
+  #       run: sudo TBP_P2_OUT="$RUNNER_TEMP/redteam-out" bash tests/p2_redteam/scenario_02_direct_sftp.sh
+  #     - name: S3 — constat USB
+  #       run: TBP_P2_OUT="$RUNNER_TEMP/redteam-out" bash tests/p2_redteam/scenario_03_usb_exfil.sh
+  #     - name: verdict final lab-inclus (bloquant)
+  #       run: python3 tests/p2_redteam/assert_logged.py --in "$RUNNER_TEMP/redteam-out" --require-lab-evidence
