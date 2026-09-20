@@ -559,4 +559,53 @@ func TestCellLogConcurrentAppend(t *testing.T) {
 			t.Fatalf("index %d obtenu %d fois", idx, count)
 		}
 	}
+	_, size, err := log.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if size != n {
+		t.Fatalf("taille finale %d, attendu %d", size, n)
+	}
+}
+
+// TestOpenVerifierMismatch : Verifier qui ne correspond pas à la paire de
+// clés du Signer — Head doit refuser le checkpoint plutôt que de faire
+// confiance à une signature qu'il ne peut pas authentifier (fail-closed).
+func TestOpenVerifierMismatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	skey, _, err := GenerateCellKey(testOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Origine différente = clé publique sans rapport avec celle du signataire.
+	_, wrongVkey, err := GenerateCellKey("tbp/registry/cell-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := note.NewSigner(skey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongVerifier, err := NewVerifier(wrongVkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := Open(ctx, Options{
+		Dir: t.TempDir(), Signer: signer, Verifier: wrongVerifier,
+		BatchSize: 1, BatchAge: 10 * time.Millisecond, CheckpointInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Open : %v", err)
+	}
+	defer log.Close(ctx)
+
+	if _, err := log.Append(ctx, Leaf{Kind: KindDecision, CellID: "c", Timestamp: 1}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, _, err := log.Head(ctx); err == nil {
+		t.Fatal("Head accepté malgré un Verifier ne correspondant pas au Signer")
+	}
 }
