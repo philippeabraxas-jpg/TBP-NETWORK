@@ -1,4 +1,4 @@
-# Broker de cellule (T33)
+# Broker de cellule (T33 + câblage T29)
 
 Le broker est le **point d'entrée unique** du flux de décision d'une
 cellule TBP (spec §5.1 : « no direct client → server path ; the server
@@ -7,11 +7,18 @@ de l'agent au jeton/passeport signé — ou au refus tracé.
 
 ## Périmètre
 
-Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/59)) :
+Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/59), câblage fencing/quorum de [#30](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/30)) :
 
 - **L'orchestration** (`broker.go`) — pour chaque demande, dans l'ordre
-  strict, sans raccourci : bornes d'entrée → tirage du `jti` → traduction
-  (couture) → évaluation OPA (client T11, réutilisé tel quel) → enveloppe
+  strict, sans raccourci : bornes d'entrée → tirage du `jti` → **époque**
+  (§7.2, T29 : `CurrentEpoch() (uint64, error)` — une erreur refuse
+  `epoch-unavailable` AVANT la traduction, avec feuille et alarme ; une
+  implémentation ne peut jamais servir une époque périmée en silence) →
+  traduction (couture) → évaluation OPA (client T11, réutilisé tel quel) →
+  **quorum classe W** (§7.5, T29 : toute demande classée W — claim −4=W
+  **ou absent**, défaut §5.3 — sans quorum satisfait est refusée
+  `quorum-required`/`quorum-insufficient`, même patron
+  optionnel-mais-fail-closed qu'`Envelope`/`Ledger`) → enveloppe
   d'émission §4.1-bis si passeport → signature → feuilles. Fail-closed à
   chaque étape : la moindre faute bascule en refus avec feuille, **jamais
   d'émission partielle**.
@@ -41,9 +48,14 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
 - **La validation de jeton côté ressource** — T8–T17 (`src/pep/`). Le test
   croisé `broker_test.go` fait valider chaque jeton émis par le
   validateur T9 : un seul format, vérifié des deux côtés.
-- **Le fencing d'époque** — T29 (#30). `StaticEpoch` est marqué **dev
-  mono-cellule** ; en déploiement multi-cellule l'époque vient du fencing
-  (§7.2 : seule la détentrice sert).
+- **Le fencing d'époque et le quorum eux-mêmes** — T29 (#30,
+  `src/cluster/`) livre `cluster.Tracker` (implémente `EpochProvider`) et
+  `cluster.QuorumGate` (implémente `QuorumGate`) ; ici les coutures et leur
+  câblage fail-closed. `StaticEpoch` reste marqué **dev mono-cellule** ;
+  en déploiement multi-cellule l'époque vient du fencing (§7.2 : seule la
+  détentrice sert). La preuve de quorum transite en blob opaque
+  (`quorum_proof`, hex, borné 4096 o) dans l'intention structurée — relayée
+  telle quelle au gate, jamais interprétée ici (no-DPI).
 - **L'escalade vers l'arbitrage humain** (§4.5 degraded modes, tier « à
   arbitrer ») — couture ultérieure (T25/T30) : aujourd'hui un « je ne sais
   pas traduire » ou un deny OPA est un refus, point.
@@ -74,20 +86,22 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
   déterminisme §11.3 porte sur les **verdicts et raisons**, pas sur les
   identifiants.
 - Raisons stables, machine-readable : `request-invalid`,
-  `translation-failed`, `opa-*` (T11), `envelope-deny`,
+  `epoch-unavailable` (faute, alarmée), `translation-failed`, `opa-*`
+  (T11), `quorum-required`, `quorum-insufficient` (§7.5 — le gate trace en
+  plus sa propre feuille `KindQuorum`), `envelope-deny`,
   `envelope-unverified`, `envelope-saturated`, `envelope-timeout`,
   `envelope-unreachable`, `envelope-error`, `envelope-bad-response`,
   `issuance-failed`, `leaf-write-failed`.
-- Les fautes système (émission impossible, feuille impossible, fautes
-  d'enveloppe) déclenchent la couture d'alarme `OnTrip` vers T14 ; les
-  verdicts sains (deny métier, « je ne sais pas traduire ») non — même
-  distinction que T11.
+- Les fautes système (époque indisponible, émission impossible, feuille
+  impossible, fautes d'enveloppe) déclenchent la couture d'alarme `OnTrip`
+  vers T14 ; les verdicts sains (deny métier, refus de quorum, « je ne sais
+  pas traduire ») non — même distinction que T11.
 
 ## Mesures
 
 `Broker.Stats()` expose les compteurs (requêtes, émissions, refus, échecs
-de traduction, évaluations et refus d'enveloppe, fautes d'émission et de
-feuille) — intrant du harnais de friction T27 (§9.1) et de la supervision
-T34 (#60). La latence par étape est mesurable via `pep.OPADecision.Elapsed`
+de traduction, refus de quorum, évaluations et refus d'enveloppe, fautes
+d'émission et de feuille) — intrant du harnais de friction T27 (§9.1) et
+de la supervision T34 (#60). La latence par étape est mesurable via `pep.OPADecision.Elapsed`
 (évaluation) et `EnvelopeDecision.Elapsed` (enveloppe) ; la signature
 Ed25519 a été mesurée ~70 µs par T8.

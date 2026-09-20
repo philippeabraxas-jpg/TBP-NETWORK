@@ -6,7 +6,8 @@
 // confiance) : chaque demande d'action d'un agent traverse la même chaîne,
 // dans l'ordre, sans raccourci :
 //
-//	bornes d'entrée → jti → traducteur → OPA (T11) → enveloppe (§4.1-bis)
+//	bornes d'entrée → jti → époque (§7.2, T29) → traducteur → OPA (T11)
+//	→ quorum classe W (§7.5, T29) → enveloppe (§4.1-bis)
 //	→ signature (Issuer) → jeton/passeport + feuilles
 //
 // Doctrine fail-closed (§1) : la moindre faute à n'importe quelle étape —
@@ -36,13 +37,21 @@ import (
 // ne transite que par le traducteur ; les feuilles restent hash-only §6.2).
 const maxIntentBytes = 4096
 
+// maxQuorumProofBytes borne la preuve de quorum (§7.5) : statement
+// canonique + n signatures Ed25519 — quelques centaines d'octets en
+// pratique ; la borne écarte les blobs sans lien avec un quorum.
+const maxQuorumProofBytes = 4096
+
 // Raisons de décision propres au broker. translation-failed est un verdict
 // sain (le traducteur dit « je ne sais pas », §4.5 — pas d'alarme) ;
 // issuance-failed et leaf-write-failed sont des FAUTES système (alarme
 // OnTrip, couture T14). Les raisons d'enveloppe sont celles d'envelope.go.
 const (
 	ReasonRequestInvalid     = "request-invalid"
+	ReasonEpochUnavailable   = "epoch-unavailable"
 	ReasonTranslationFailed  = "translation-failed"
+	ReasonQuorumRequired     = "quorum-required"
+	ReasonQuorumInsufficient = "quorum-insufficient"
 	ReasonEnvelopeUnverified = "envelope-unverified"
 	ReasonEnvelopeSaturated  = "envelope-saturated"
 	ReasonIssuanceFailed     = "issuance-failed"
@@ -53,11 +62,12 @@ const (
 // friction, pas de sécurité : l'action produite sera jugée par les règles
 // (OPA) sans exception, default-deny.
 type Translation struct {
-	Action     string     // action autorisée candidate (claim −2)
-	Resource   string     // ressource exacte (claim −3)
-	Class      *pep.Class // classe F/I/W explicite — nil ⇒ claim absent ⇒ W (§5.3)
-	ObjectSeal *[32]byte  // sceau objet-capacité (§4.4(2)), si le traducteur le scelle
-	Quota      *pep.Quota // demande de passeport (§4.1-bis) — non nil ⇒ chemin lourd
+	Action      string     // action autorisée candidate (claim −2)
+	Resource    string     // ressource exacte (claim −3)
+	Class       *pep.Class // classe F/I/W explicite — nil ⇒ claim absent ⇒ W (§5.3)
+	ObjectSeal  *[32]byte  // sceau objet-capacité (§4.4(2)), si le traducteur le scelle
+	Quota       *pep.Quota // demande de passeport (§4.1-bis) — non nil ⇒ chemin lourd
+	QuorumProof []byte     // preuve k-of-n classe W (§7.5) — octets opaques, vérifiés par QuorumGate, jamais interprétés ici (no-DPI)
 }
 
 // Translator est la couture du traducteur (T24–T26 construisent son
@@ -69,11 +79,18 @@ type Translator interface {
 	Translate(ctx context.Context, subject, intent string) (Translation, error)
 }
 
-// EpochProvider est la couture d'époque de la cellule (§7.2). T29 (#30)
-// construira la rotation réelle ; en mono-cellule dev, StaticEpoch suffit
-// — MARQUÉ dev, comme l'issue #59 le prévoit explicitement.
+// EpochProvider est la couture d'époque de la cellule (§7.2). Le fencing
+// réel est cluster.Tracker (T29, #30) — il rend une erreur dès que la
+// cellule n'a pas d'époque valide dont elle est l'autorité : « seul le
+// détenteur sert ». En mono-cellule dev, StaticEpoch suffit — MARQUÉ dev,
+// comme l'issue #59 le prévoit explicitement.
+//
+// L'erreur fait partie du contrat (revue #30) : une signature sans erreur
+// ne peut pas exprimer « pas d'autorité en ce moment » et pousserait une
+// implémentation réelle à renvoyer une époque périmée en silence —
+// l'exact inverse du fail-closed (§1).
 type EpochProvider interface {
-	CurrentEpoch() uint64
+	CurrentEpoch() (uint64, error)
 }
 
 // StaticEpoch est un EpochProvider fixe — DEV MONO-CELLULE UNIQUEMENT.
@@ -81,8 +98,19 @@ type EpochProvider interface {
 // détentrice sert, l'ancienne expire seule.
 type StaticEpoch uint64
 
-// CurrentEpoch rapporte l'époque fixe de dev.
-func (e StaticEpoch) CurrentEpoch() uint64 { return uint64(e) }
+// CurrentEpoch rapporte l'époque fixe de dev — jamais d'erreur (le dev
+// mono-cellule n'a pas de fencing, §7.2 : une cellule seule peut différer).
+func (e StaticEpoch) CurrentEpoch() (uint64, error) { return uint64(e), nil }
+
+// QuorumGate est la couture de co-signature k-of-n de la classe W
+// (§7.5, T29 — implémentée par cluster.QuorumGate). « A single cell,
+// adversarial or captured, cannot authorize the maximal irreversible » :
+// optionnelle en configuration (comme Envelope/Ledger), mais fail-closed
+// dès qu'elle s'applique — toute demande classée W sans quorum satisfait
+// est refusée (quorum-required / quorum-insufficient).
+type QuorumGate interface {
+	VerifyClassW(ctx context.Context, proof []byte, action, resource string, epoch uint64) error
+}
 
 // StructuredTranslator est le traducteur du MODE STRUCTURÉ (§4.5 degraded
 // modes : quand le modèle est indisponible, seul le structuré passe — la
@@ -95,11 +123,12 @@ type StructuredTranslator struct{}
 // structuredIntent est le langage structuré : l'agent déclare l'action
 // exacte qu'il veut voir évaluer — le traducteur ne fait que la typer.
 type structuredIntent struct {
-	Action     string `json:"action"`
-	Resource   string `json:"resource"`
-	Class      *uint8 `json:"class,omitempty"`
-	ObjectSeal string `json:"object_seal,omitempty"` // hex, 32 octets
-	Quota      *struct {
+	Action      string `json:"action"`
+	Resource    string `json:"resource"`
+	Class       *uint8 `json:"class,omitempty"`
+	ObjectSeal  string `json:"object_seal,omitempty"`  // hex, 32 octets
+	QuorumProof string `json:"quorum_proof,omitempty"` // hex — preuve k-of-n classe W (§7.5), blob opaque
+	Quota       *struct {
 		Resource  string `json:"resource"`
 		Operation string `json:"operation"`
 		VolumeMax uint64 `json:"volume_max"`
@@ -139,6 +168,18 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 			VolumeMax: s.Quota.VolumeMax,
 			WindowS:   s.Quota.WindowS,
 		}
+	}
+	if s.QuorumProof != "" {
+		// Blob opaque (no-DPI) : décodé de son enveloppe hex, borné, puis
+		// remis tel quel au QuorumGate — seul le gate l'interprète (§7.5).
+		if len(s.QuorumProof) > 2*maxQuorumProofBytes {
+			return Translation{}, errors.New("broker: quorum_proof hors bornes (§7.5)")
+		}
+		proof, err := hex.DecodeString(s.QuorumProof)
+		if err != nil {
+			return Translation{}, fmt.Errorf("broker: quorum_proof non hexadécimal : %w", err)
+		}
+		tr.QuorumProof = proof
 	}
 	return tr, nil
 }
@@ -184,8 +225,16 @@ type BrokerOptions struct {
 	// Issuer est l'émetteur de jetons (issuer.go). Requis.
 	Issuer *Issuer
 	// Epochs est la couture d'époque (§7.2) — StaticEpoch en dev
-	// mono-cellule, le fencing T29 en déploiement. Requis.
+	// mono-cellule, cluster.Tracker (T29) en déploiement. Requis. Une
+	// erreur de CurrentEpoch refuse la demande (epoch-unavailable, feuille
+	// + alarme) AVANT toute traduction : pas d'autorité, pas de service.
 	Epochs EpochProvider
+	// Quorum est la couture de co-signature k-of-n de la classe W (§7.5,
+	// T29 — cluster.QuorumGate). Optionnelle, mais fail-closed dès
+	// qu'elle s'applique : toute demande classée W (claim −4=W OU absent,
+	// §5.3) sans quorum satisfait est refusée — même doctrine
+	// qu'Envelope/Ledger (la règle sans le contrôle ne ferme rien).
+	Quorum QuorumGate
 	// Envelope est l'évaluateur d'enveloppe §4.1-bis, avec son Ledger
 	// d'état borné. Les deux sont requis ENSEMBLE ou absents ensemble ;
 	// absents, toute demande de passeport est refusée (envelope-unverified
@@ -211,6 +260,7 @@ type Broker struct {
 	translator Translator
 	issuer     *Issuer
 	epochs     EpochProvider
+	quorum     QuorumGate
 	envelope   *HTTPEnvelopeEvaluator
 	ledger     *EnvelopeLedger
 	onTrip     func(reason string)
@@ -229,6 +279,7 @@ type BrokerStats struct {
 	TranslationFailures uint64 // « je ne sais pas traduire » (§4.5)
 	EnvelopeEvals       uint64 // évaluations d'enveloppe (§4.1-bis)
 	EnvelopeDenies      uint64 // refus d'enveloppe (agrégat plein)
+	QuorumDenies        uint64 // refus de quorum classe W (§7.5)
 	IssuanceFailures    uint64 // fautes de signature/émission (alarmées)
 	LeafFailures        uint64 // feuilles propres impossibles (alarmées)
 }
@@ -274,6 +325,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		translator: opts.Translator,
 		issuer:     opts.Issuer,
 		epochs:     opts.Epochs,
+		quorum:     opts.Quorum,
 		envelope:   opts.Envelope,
 		ledger:     opts.Ledger,
 		onTrip:     opts.OnTrip,
@@ -318,7 +370,18 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.fault(ctx, jti, ReasonIssuanceFailed, fmt.Errorf("broker: tirage jti : %w", err))
 	}
 
-	// Étape 3 — traduction (§4.5) : « je ne sais pas » est un verdict
+	// Étape 3 — époque (§7.2) : le fencing (T29) rend une erreur dès que
+	// cette cellule n'a pas d'époque valide dont elle est l'autorité.
+	// FAUTE système (pas d'autorité, pas de service) : refus + feuille +
+	// alarme AVANT même d'atteindre le traducteur — jamais d'émission sur
+	// une base fausse (revue #30 : une époque périmée servie en silence
+	// est l'exact inverse du fail-closed).
+	epoch, err := b.epochs.CurrentEpoch()
+	if err != nil {
+		return b.fault(ctx, jti, ReasonEpochUnavailable, err)
+	}
+
+	// Étape 4 — traduction (§4.5) : « je ne sais pas » est un verdict
 	// SAIN — refus sans alarme (même distinction qu'opa-deny dans T11).
 	tr, err := b.translator.Translate(ctx, subject, intent)
 	if err != nil {
@@ -328,10 +391,9 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.deny(ctx, jti, ReasonTranslationFailed, nil)
 	}
 
-	// Étape 4 — évaluation OPA via le client T11 : fail-closed,
+	// Étape 5 — évaluation OPA via le client T11 : fail-closed,
 	// circuit-breaker 5 ms et feuille « TBPD1 » sont hérités — le broker
 	// n'y touche pas (D34 : on réutilise, on ne réécrit pas).
-	epoch := b.epochs.CurrentEpoch()
 	class := pep.DefaultClass // claim −4 absent ⇒ W (§5.3)
 	if tr.Class != nil {
 		class = *tr.Class
@@ -351,7 +413,30 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return Result{Allow: false, Reason: dec.Reason, JTI: jti, LeafWritten: dec.LeafWritten, LeafErr: dec.LeafErr, OPADecision: &dec}
 	}
 
-	// Étape 5 — enveloppe d'émission (§4.1-bis) : UNIQUEMENT pour les
+	// Étape 6 — quorum classe W (§7.5, T29) : « a single cell, adversarial
+	// or captured, cannot authorize the maximal irreversible ». Placé
+	// APRÈS l'allow OPA — la preuve lie l'action traduite admise, et les
+	// demandes qu'OPA refuse ne consomment aucune vérification de quorum
+	// (friction §9.1) — et AVANT toute réservation d'enveloppe ou
+	// émission. Sans gate configuré ou sans preuve : quorum-required ;
+	// preuve insuffisante : quorum-insufficient. Le gate trace sa propre
+	// feuille KindQuorum ; le broker trace le refus final (KindDecision).
+	if class == pep.ClassW {
+		if b.quorum == nil || len(tr.QuorumProof) == 0 {
+			b.mu.Lock()
+			b.stats.QuorumDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonQuorumRequired, &dec)
+		}
+		if err := b.quorum.VerifyClassW(ctx, tr.QuorumProof, tr.Action, tr.Resource, epoch); err != nil {
+			b.mu.Lock()
+			b.stats.QuorumDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonQuorumInsufficient, &dec)
+		}
+	}
+
+	// Étape 7 — enveloppe d'émission (§4.1-bis) : UNIQUEMENT pour les
 	// passeports. Réservation pessimiste AVANT l'appel OPA (envelope.go) ;
 	// libérée sur tout refus ou échec aval.
 	if tr.Quota != nil {
@@ -388,7 +473,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		// si la signature échoue — jamais de sur-émission.
 	}
 
-	// Étape 6 — émission : signature via la couture (HSM en production).
+	// Étape 8 — émission : signature via la couture (HSM en production).
 	wire, err := b.issuer.Issue(IssueParams{
 		Subject:    subject,
 		Action:     tr.Action,
@@ -410,7 +495,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.fault(ctx, jti, ReasonIssuanceFailed, err)
 	}
 
-	// Étape 7 — feuille propre du broker pour l'ÉMISSION elle-même (§4.1 :
+	// Étape 9 — feuille propre du broker pour l'ÉMISSION elle-même (§4.1 :
 	// chaque décision laisse une feuille). La feuille OPA de l'étape 4 ne
 	// prouve que l'évaluation de l'action ; elle ne porte ni l'enveloppe
 	// (§4.1-bis, OPAInput ne transporte aucun champ quota) ni le fait qu'un

@@ -51,7 +51,15 @@ func TestHashPayload(t *testing.T) {
 }
 
 func TestLeafMarshalUnmarshalRoundTrip(t *testing.T) {
-	for _, kind := range []byte{KindDecision, KindTelemetry, KindBackpressure} {
+	// TOUS les kinds définis — le round-trip est le garde-fou contre un
+	// kind ajouté à la const sans être admis par Marshal/UnmarshalLeaf
+	// (trou trouvé en T29 : les kinds 7/8/9 écrivaient des feuilles que
+	// Marshal refusait — fail-closed, mais la cellule se taisait).
+	for _, kind := range []byte{
+		KindDecision, KindTelemetry, KindBackpressure, KindAnchor,
+		KindRetentionPurge, KindTelemetryAlert,
+		KindEpoch, KindQuorum, KindPromotion,
+	} {
 		leaf := Leaf{
 			Kind:        kind,
 			CellID:      "cell-alpha-01",
