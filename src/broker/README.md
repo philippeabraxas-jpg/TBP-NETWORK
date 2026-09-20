@@ -59,7 +59,17 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
   : l'évaluation OPA laisse la sienne via T11 (record « TBPD1 ») ; les
   refus de niveau broker (entrée, traduction, enveloppe, émission) laissent
   la leur avec le même format de record et le même `jti` — tiré **avant**
-  l'évaluation pour la traçabilité bout-en-bout (§4.3).
+  l'évaluation pour la traçabilité bout-en-bout (§4.3). **L'émission
+  elle-même laisse aussi sa propre feuille broker**, sur le chemin allow :
+  la feuille OPA de l'étape 4 ne prouve que l'évaluation de l'action, ni
+  l'enveloppe (§4.1-bis — `OPAInput` ne transporte aucun champ quota) ni le
+  fait qu'un jeton ait réellement été signé et remis ; sans elle, un
+  passeport approuvé par l'enveloppe n'aurait aucune trace de registre
+  portant son volume. Même doctrine « pas de preuve, pas d'accès » que
+  T9/T11 : si cette feuille d'émission échoue, l'allow re-bascule en refus
+  et le jeton n'est jamais rendu à l'appelant — sans libérer la réservation
+  d'enveloppe déjà commise (la libérer ouvrirait un canal de sondage ;
+  fail-closed va toujours vers plus de restriction, jamais moins).
 - Le `jti` est aléatoire par construction (§4 du schéma) : le profil de
   déterminisme §11.3 porte sur les **verdicts et raisons**, pas sur les
   identifiants.

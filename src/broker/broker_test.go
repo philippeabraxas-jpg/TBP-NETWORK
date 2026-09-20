@@ -39,13 +39,28 @@ type leafRecorder struct {
 	mu     sync.Mutex
 	leaves []registry.Leaf
 	err    error
+
+	// calls/failFromCall isolent une écriture précise (p.ex. la 2e — la
+	// feuille d'émission du broker — après la 1re qui réussit, la feuille
+	// OPA de T11) sans casser err (utilisé ailleurs pour un échec
+	// inconditionnel dès le premier appel).
+	calls        int
+	failFromCall int   // 0 = désactivé ; sinon échoue à partir de cet appel (1-based)
+	failErr      error // erreur rendue une fois failFromCall atteint
 }
 
 func (r *leafRecorder) Append(_ context.Context, l registry.Leaf) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.calls++
 	if r.err != nil {
 		return 0, r.err
+	}
+	if r.failFromCall > 0 && r.calls >= r.failFromCall {
+		if r.failErr != nil {
+			return 0, r.failErr
+		}
+		return 0, errors.New("leafRecorder: échec simulé (failFromCall)")
 	}
 	r.leaves = append(r.leaves, l)
 	return uint64(len(r.leaves)), nil
@@ -996,5 +1011,51 @@ func TestLeafFailureFailsClosed(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("alarmes %v — une feuille broker impossible alarme (T14)", trips2.all())
+	}
+}
+
+// TestIssuanceLeafFailureRevokesAllow vérifie que le chemin ALLOW écrit
+// SA PROPRE feuille d'émission (§4.1), distincte de la feuille OPA de
+// l'étape 4 : la feuille OPA (T11) ne prouve que l'évaluation de l'action,
+// ni l'enveloppe (§4.1-bis, OPAInput ne porte aucun champ quota) ni le
+// fait qu'un jeton ait réellement été signé et remis. Le registre laisse
+// réussir la 1re écriture (celle d'OPA) et échoue à partir de la 2e (celle
+// de l'émission) : si le broker n'attemptait qu'une seule écriture, ce
+// test ne verrait qu'un allow avec jeton — exactement le trou trouvé en
+// revue de #63 (writeLeaf n'était jamais appelé sur le chemin Allow de
+// HandleAction).
+func TestIssuanceLeafFailureRevokesAllow(t *testing.T) {
+	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
+	defer srv.Close()
+
+	tr := staticTranslator{tr: Translation{Action: "a", Resource: "r"}}
+	b, _, leaves, trips := newTestBroker(t, srv.URL, tr)
+	leaves.failFromCall = 2 // laisse passer la feuille OPA, échoue sur celle du broker
+
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+
+	if leaves.calls != 2 {
+		t.Fatalf("Append() appelé %d fois, veut 2 (feuille OPA + feuille broker d'émission)", leaves.calls)
+	}
+	if res.Allow {
+		t.Fatal("jeton émis malgré l'échec de la feuille d'émission du broker — pas de preuve, pas d'accès")
+	}
+	if res.Reason != pep.ReasonLeafWriteFailed {
+		t.Fatalf("reason=%q, veut %q", res.Reason, pep.ReasonLeafWriteFailed)
+	}
+	if len(res.Token) != 0 {
+		t.Fatal("un refus ne doit jamais porter un jeton exploitable")
+	}
+	if res.LeafErr == nil {
+		t.Fatal("LeafErr doit rapporter l'échec d'écriture")
+	}
+	found := false
+	for _, r := range trips.all() {
+		if r == pep.ReasonLeafWriteFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("alarmes %v — une feuille d'émission impossible alarme (T14)", trips.all())
 	}
 }

@@ -410,10 +410,31 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.fault(ctx, jti, ReasonIssuanceFailed, err)
 	}
 
+	// Étape 7 — feuille propre du broker pour l'ÉMISSION elle-même (§4.1 :
+	// chaque décision laisse une feuille). La feuille OPA de l'étape 4 ne
+	// prouve que l'évaluation de l'action ; elle ne porte ni l'enveloppe
+	// (§4.1-bis, OPAInput ne transporte aucun champ quota) ni le fait qu'un
+	// jeton ait réellement été signé et remis. Sans cet appel, un passeport
+	// approuvé par l'enveloppe n'a AUCUNE trace de registre portant son
+	// volume — même trou que si le validateur T9 rendait un allow sans
+	// écrire sa propre feuille. Même doctrine ici : un allow sans preuve
+	// redevient un refus (writeLeaf). La réservation d'enveloppe déjà
+	// commise N'EST PAS libérée sur cet échec précis : la libérer ouvrirait
+	// un canal de sondage (retenter pour regonfler le budget) — le
+	// fail-closed va toujours vers PLUS de restriction, jamais moins
+	// (même principe que le non-rollback de envelope.go).
+	res = Result{Allow: true, Reason: pep.ReasonOK, Token: wire, JTI: jti, OPADecision: &dec}
+	b.writeLeaf(ctx, &res)
+	if !res.Allow {
+		b.mu.Lock()
+		b.stats.Denies++
+		b.mu.Unlock()
+		return res
+	}
 	b.mu.Lock()
 	b.stats.Allows++
 	b.mu.Unlock()
-	return Result{Allow: true, Reason: pep.ReasonOK, Token: wire, JTI: jti, LeafWritten: dec.LeafWritten, OPADecision: &dec}
+	return res
 }
 
 // deny épilogue un refus de niveau broker : feuille KindDecision propre
@@ -469,6 +490,7 @@ func (b *Broker) writeLeaf(ctx context.Context, r *Result) {
 		if r.Allow { // pas de preuve, pas d'accès (même doctrine que T9/T11)
 			r.Allow = false
 			r.Reason = pep.ReasonLeafWriteFailed
+			r.Token = nil // un refus ne doit jamais porter un jeton exploitable
 		}
 		b.mu.Lock()
 		b.stats.LeafFailures++
