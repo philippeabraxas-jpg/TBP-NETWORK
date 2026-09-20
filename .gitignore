@@ -53,3 +53,8 @@ Thumbs.db
 # Figures sources volumineuses non versionnées (garder les PNG exportés, pas les binaires lourds d'édition)
 figs/src/*.psd
 figs/src/*.ai
+
+# Harnais de friction T27 (#29) — artefacts de run : registre tessera local,
+# clés de cellule, sels de rapport, mesures. Régénérés à chaque run, jamais
+# commités (le sel des feuilles reste chez le producteur, §6.2)
+tests/p1_friction/out/
