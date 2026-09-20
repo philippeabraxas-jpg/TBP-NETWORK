@@ -44,11 +44,11 @@ const (
 	// illisible ou rejetée par VerifyManifestChain (T31, §6.3).
 	AlertEventManifestFault byte = 3
 	// AlertEventFailoverTrigger : bascule miroir déclenchée par le
-	// moniteur (T34b, D80) — réservé, attribué maintenant pour figer la
-	// numérotation.
+	// moniteur (T34b, D80, failover.go) — numérotation attribuée en T34a
+	// pour figer le format.
 	AlertEventFailoverTrigger byte = 4
 	// AlertEventFailoverRefused : déclenchement REFUSÉ (budget épuisé,
-	// escalade humaine — T34b, D80) — réservé, même raison.
+	// couture absente ou en faute — escalade humaine, T34b, D80).
 	AlertEventFailoverRefused byte = 5
 )
 
