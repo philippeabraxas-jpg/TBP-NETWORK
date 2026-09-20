@@ -35,8 +35,14 @@ const (
 	maxTTLSec = 60
 )
 
-// tokenVersion est la version de schéma acceptée (claim −9).
-const tokenVersion = 1
+// Versions de schéma acceptées (claim −9, schema.md §10/§12) : v1 = schéma
+// initial (T8) ; v2 = v1 + clé −8 plan_seal optionnelle (T30, §4.2). Toute
+// autre version = rejet (fail-closed). En v1, la clé −8 est INCONNUE :
+// un jeton v1 portant −8 est un schema-violation, pas un v2 déguisé.
+const (
+	tokenVersionV1 = 1
+	tokenVersionV2 = 2
+)
 
 // Bornes de taille des champs texte (schema.cddl : `tstr .size (a..b)`).
 const (
@@ -82,6 +88,13 @@ type Token struct {
 	ObjectSeal *[32]byte
 	Epoch      uint64
 	Quota      *Quota
+	// PlanSeal est le hash du plan arbitré approuvé (claim −8, schéma v2,
+	// §4.2) : présent ⇒ le jeton a été émis comme étape consommée d'un
+	// contrat de plan (T30). Le validateur n'a pas d'état de plan — il
+	// RECOPIE le sceau dans sa feuille d'exécution (record « TBPD2 ») :
+	// la preuve du lien jeton ↔ plan vit dans l'objet signé, vérifiable
+	// indépendamment des feuilles du broker (résidu §7.6).
+	PlanSeal *[32]byte
 }
 
 // Request est la demande d'accès confrontée au jeton.
@@ -411,11 +424,23 @@ func (v *Validator) writeLeaf(ctx context.Context, d *Decision, now time.Time) {
 		verdict = 0x01
 	}
 	// record = "TBPD1" ‖ jti(16) ‖ verdict(1) ‖ u8 len(reason) ‖ reason
-	record := make([]byte, 0, 5+16+1+1+len(d.Reason))
-	record = append(record, "TBPD1"...)
+	// ou, quand le jeton porte un sceau de plan (claim −8, v2, §4.2) :
+	// record = "TBPD2" ‖ jti(16) ‖ verdict(1) ‖ u8 len(reason) ‖ reason ‖ planSeal(32)
+	// Le sceau est RECOPIÉ dans la feuille d'exécution : la preuve du lien
+	// jeton ↔ plan approuvé ne dépend alors pas des feuilles du broker
+	// (résidu §7.6 — le broker ne peut pas mentir après coup sur ce lien).
+	record := make([]byte, 0, 5+16+1+1+len(d.Reason)+32)
+	if d.Token != nil && d.Token.PlanSeal != nil {
+		record = append(record, "TBPD2"...)
+	} else {
+		record = append(record, "TBPD1"...)
+	}
 	record = append(record, d.JTI[:]...)
 	record = append(record, verdict, byte(len(d.Reason)))
 	record = append(record, d.Reason...)
+	if d.Token != nil && d.Token.PlanSeal != nil {
+		record = append(record, d.Token.PlanSeal[:]...)
+	}
 
 	leaf := registry.Leaf{
 		Kind:        registry.KindDecision,
@@ -466,7 +491,7 @@ func decodePayload(payload []byte) (*Token, string) {
 	}
 	for key := range claims {
 		switch key {
-		case 1, 2, 4, 6, 7, -1, -2, -3, -4, -5, -6, -7, -9:
+		case 1, 2, 4, 6, 7, -1, -2, -3, -4, -5, -6, -7, -8, -9:
 		default:
 			return nil, ReasonSchemaViolation // clé inconnue ⇒ rejet (§1)
 		}
@@ -532,12 +557,26 @@ func decodePayload(payload []byte) (*Token, string) {
 		}
 		tok.Quota = quota
 	}
+	if s, present := claims[-8]; present {
+		b, ok := bytesFromAny(s)
+		if !ok || len(b) != 32 {
+			return nil, ReasonSchemaViolation
+		}
+		var seal [32]byte
+		copy(seal[:], b)
+		tok.PlanSeal = &seal
+	}
 	ver, ok := uintClaim(claims, -9, true)
 	if !ok {
 		return nil, ReasonSchemaViolation
 	}
-	if ver != tokenVersion {
+	if ver != tokenVersionV1 && ver != tokenVersionV2 {
 		return nil, ReasonUnsupportedVer
+	}
+	if ver == tokenVersionV1 && tok.PlanSeal != nil {
+		// En v1 la clé −8 n'existait pas (jeu fermé de §4) : un jeton v1
+		// qui la porte est une violation de schéma, pas un v2 déguisé.
+		return nil, ReasonSchemaViolation
 	}
 	return tok, ""
 }

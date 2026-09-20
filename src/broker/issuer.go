@@ -13,7 +13,7 @@ package broker
 //
 // Doctrine : fail-closed dès la configuration (§1). TTL borné [30, 60] s
 // (§4.1, claim 4−6 du schéma) ; aucun champ hors du jeu fermé de clés
-// {1, 2, 4, 6, 7, −1, −2, −3, −4, −5, −6, −7, −9} ; taille fil bornée à
+// {1, 2, 4, 6, 7, −1, −2, −3, −4, −5, −6, −7, −8, −9} ; taille fil bornée à
 // 1024 octets (schema.md §8). « Jamais par nom, toujours par signature » :
 // le jeton ne transporte aucune clé publique, aucune URL, aucun jwk.
 //
@@ -42,8 +42,10 @@ const (
 	defaultTTLSec = 45
 )
 
-// Version du schéma de jeton émis (claim −9, schema.md §8).
-const tokenVersion = 1
+// Version du schéma de jeton émis (claim −9, schema.md §10/§12) : l'émetteur
+// à jour émet v2 SYSTÉMATIQUEMENT (v2 = v1 + clé −8 plan_seal optionnelle,
+// T30 §4.2). Le validateur T9 accepte v ∈ {1, 2} — v1 sans −8.
+const tokenVersion = 2
 
 // Bornes de taille des champs texte (schema.cddl : `tstr .size (a..b)`).
 const (
@@ -132,9 +134,14 @@ type IssueParams struct {
 	Class      *pep.Class // claim −4 — nil ⇒ claim absent ⇒ W au PEP (défaut fail-closed, §5.3)
 	ObjectSeal *[32]byte  // claim −5 — object-capability scellée (§4.4(2))
 	Quota      *pep.Quota // claim −7 — passeport à quota (§4.1-bis)
-	JTI        [16]byte   // claim 7 — tiré par le broker avant OPA
-	Epoch      uint64     // claim −6 — époque d'émission (§7.2/§7.3)
-	Iat        int64      // claim 6 — secondes unix (horloge NTS de la cellule)
+	// PlanSeal est le hash du plan arbitré approuvé (claim −8, schéma v2,
+	// §4.2, T30) — non nil ⇒ ce jeton est une étape consommée d'un contrat
+	// de plan ; le sceau est dans l'objet SIGNÉ, donc opposable au broker
+	// lui-même après coup (résidu §7.6). Fourni par le ContractGate.
+	PlanSeal *[32]byte
+	JTI      [16]byte // claim 7 — tiré par le broker avant OPA
+	Epoch    uint64   // claim −6 — époque d'émission (§7.2/§7.3)
+	Iat      int64    // claim 6 — secondes unix (horloge NTS de la cellule)
 }
 
 // Issuer émet les jetons CWT/COSE_Sign1 de la cellule. Sans état mutable
@@ -227,7 +234,7 @@ func (i *Issuer) Issue(p IssueParams) ([]byte, error) {
 		}
 	}
 
-	// Claims : le jeu fermé du schéma v1, rien d'autre (schema.md §4/§5).
+	// Claims : le jeu fermé du schéma v2, rien d'autre (schema.md §4/§5/§12).
 	claims := map[int64]any{
 		1:  i.cellID,
 		2:  p.Subject,
@@ -253,6 +260,12 @@ func (i *Issuer) Issue(p IssueParams) ([]byte, error) {
 			3: p.Quota.VolumeMax,
 			4: p.Quota.WindowS,
 		}
+	}
+	if p.PlanSeal != nil {
+		// Claim de payload −8 (espace des claims CWT TBP — sans rapport avec
+		// l'identifiant d'algorithme COSE −8 = EdDSA de l'en-tête, RFC 9053 ;
+		// distinction explicitée dans schema.md §12, revue #31).
+		claims[-8] = append([]byte(nil), p.PlanSeal[:]...)
 	}
 
 	// CBOR déterministe (profil §6 du schéma, RFC 8949 §4.2.1) : le

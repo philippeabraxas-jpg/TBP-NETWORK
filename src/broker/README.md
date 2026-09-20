@@ -1,4 +1,4 @@
-# Broker de cellule (T33 + câblage T29)
+# Broker de cellule (T33 + câblages T29, T30)
 
 Le broker est le **point d'entrée unique** du flux de décision d'une
 cellule TBP (spec §5.1 : « no direct client → server path ; the server
@@ -18,12 +18,19 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
   **quorum classe W** (§7.5, T29 : toute demande classée W — claim −4=W
   **ou absent**, défaut §5.3 — sans quorum satisfait est refusée
   `quorum-required`/`quorum-insufficient`, même patron
-  optionnel-mais-fail-closed qu'`Envelope`/`Ledger`) → enveloppe
+  optionnel-mais-fail-closed qu'`Envelope`/`Ledger`) → **contrat de plan**
+  (§4.2, T30 : si la demande porte un `plan_binding` — blob opaque « TBPB1 »
+  relayé tel quel, jamais interprété ici — le `ContractGate` la confronte
+  au plan SCELLÉ, curseur strict ; déviation = refus `plan-deviation`,
+  **même si OPA a autorisé l'action isolément** ; le sceau rendu part dans
+  le claim −8 du jeton, schéma v2) → enveloppe
   d'émission §4.1-bis si passeport → signature → feuilles. Fail-closed à
   chaque étape : la moindre faute bascule en refus avec feuille, **jamais
   d'émission partielle**.
 - **L'émetteur de jetons** (`issuer.go`) — CWT + COSE_Sign1 + CBOR
-  déterministe, strictement selon `src/pep/token/schema.md` (T8) : claims
+  déterministe, strictement selon `src/pep/token/schema.md` (T8, schéma
+  **v2** depuis T30 : l'émetteur émet `v = 2` systématiquement et porte le
+  claim −8 `plan_seal` quand le `ContractGate` a scellé l'étape) : claims
   fermées, TTL borné [30, 60] s (§4.1), `kid = SHA-256(clé publique)[0:16]`
   résolu dans le trousseau épinglé côté PEP. La signature est une couture
   (`Signer`) : HSM en production (§12) ; `DevSigner` est **dev/test
@@ -56,9 +63,16 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
   détentrice sert). La preuve de quorum transite en blob opaque
   (`quorum_proof`, hex, borné 4096 o) dans l'intention structurée — relayée
   telle quelle au gate, jamais interprétée ici (no-DPI).
+- **Le contrat de plan lui-même** — T30 (#31, `src/pep/plan_contract.go`)
+  livre `pep.ContractStore` (implémente `ContractGate`) : soumission,
+  approbation par signature d'opérateur épinglé, curseur strict, feuilles
+  `KindContract`. Ici la couture et son câblage fail-closed (binding sans
+  gate ⇒ `plan-unverified`). Le TRANSPORT opérateur (comment un humain
+  soumet/approuve réellement) reste ultérieur (T34/T35) : le store expose
+  les appels, l'interface homme-machine n'existe pas encore.
 - **L'escalade vers l'arbitrage humain** (§4.5 degraded modes, tier « à
-  arbitrer ») — couture ultérieure (T25/T30) : aujourd'hui un « je ne sais
-  pas traduire » ou un deny OPA est un refus, point.
+  arbitrer », file d'arbitrage #60/T34) — couture ultérieure : aujourd'hui
+  un « je ne sais pas traduire » ou un deny OPA est un refus, point.
 - **L'authentification réseau des agents** — v1 : socket Unix de cellule,
   pas de TLS ni d'auth applicative. L'admission réseau relève du NAC
   EAP-TLS (§5.1) et l'exposition multi-machine de T35. **Ne pas exposer ce
@@ -88,20 +102,28 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
 - Raisons stables, machine-readable : `request-invalid`,
   `epoch-unavailable` (faute, alarmée), `translation-failed`, `opa-*`
   (T11), `quorum-required`, `quorum-insufficient` (§7.5 — le gate trace en
-  plus sa propre feuille `KindQuorum`), `envelope-deny`,
+  plus sa propre feuille `KindQuorum`), `plan-unverified`,
+  `plan-binding-invalid`, `plan-unknown`, `plan-pending`, `plan-expired`,
+  `plan-revoked`, `plan-deviation` (§4.2, T30 — le gate trace en plus sa
+  propre feuille `KindContract`, record « TBPL1 »), `plan-store-fault`
+  (faute, alarmée), `envelope-deny`,
   `envelope-unverified`, `envelope-saturated`, `envelope-timeout`,
   `envelope-unreachable`, `envelope-error`, `envelope-bad-response`,
   `issuance-failed`, `leaf-write-failed`.
 - Les fautes système (époque indisponible, émission impossible, feuille
-  impossible, fautes d'enveloppe) déclenchent la couture d'alarme `OnTrip`
-  vers T14 ; les verdicts sains (deny métier, refus de quorum, « je ne sais
-  pas traduire ») non — même distinction que T11.
+  impossible, fautes d'enveloppe, faute du store de contrats) déclenchent
+  la couture d'alarme `OnTrip`
+  vers T14 ; les verdicts sains (deny métier, refus de quorum, déviation de
+  plan, « je ne sais pas traduire ») non — même distinction que T11.
 
 ## Mesures
 
 `Broker.Stats()` expose les compteurs (requêtes, émissions, refus, échecs
-de traduction, refus de quorum, évaluations et refus d'enveloppe, fautes
+de traduction, refus de quorum, refus de contrat de plan, évaluations et
+refus d'enveloppe, fautes
 d'émission et de feuille) — intrant du harnais de friction T27 (§9.1) et
 de la supervision T34 (#60). La latence par étape est mesurable via `pep.OPADecision.Elapsed`
 (évaluation) et `EnvelopeDecision.Elapsed` (enveloppe) ; la signature
-Ed25519 a été mesurée ~70 µs par T8.
+Ed25519 a été mesurée ~70 µs par T8. La vérification de contrat de plan
+est locale (comparaison de hash, µs) et ne coûte que sur les demandes
+portant un binding.

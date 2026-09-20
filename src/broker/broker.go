@@ -7,8 +7,8 @@
 // dans l'ordre, sans raccourci :
 //
 //	bornes d'entrée → jti → époque (§7.2, T29) → traducteur → OPA (T11)
-//	→ quorum classe W (§7.5, T29) → enveloppe (§4.1-bis)
-//	→ signature (Issuer) → jeton/passeport + feuilles
+//	→ quorum classe W (§7.5, T29) → contrat de plan (§4.2, T30)
+//	→ enveloppe (§4.1-bis) → signature (Issuer) → jeton/passeport + feuilles
 //
 // Doctrine fail-closed (§1) : la moindre faute à n'importe quelle étape —
 // traduction, évaluation, enveloppe, signature, écriture de feuille —
@@ -42,6 +42,10 @@ const maxIntentBytes = 4096
 // pratique ; la borne écarte les blobs sans lien avec un quorum.
 const maxQuorumProofBytes = 4096
 
+// maxPlanBindingBytes borne le binding de contrat de plan (§4.2, T30) :
+// préfixe + hash de plan (32) + paramètres opaques (≤ 4096, D57).
+const maxPlanBindingBytes = 5 + 32 + 2 + pep.MaxPlanParamsBytes
+
 // Raisons de décision propres au broker. translation-failed est un verdict
 // sain (le traducteur dit « je ne sais pas », §4.5 — pas d'alarme) ;
 // issuance-failed et leaf-write-failed sont des FAUTES système (alarme
@@ -52,6 +56,14 @@ const (
 	ReasonTranslationFailed  = "translation-failed"
 	ReasonQuorumRequired     = "quorum-required"
 	ReasonQuorumInsufficient = "quorum-insufficient"
+	ReasonPlanUnverified     = "plan-unverified" // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
+	ReasonPlanBindingInvalid = "plan-binding-invalid"
+	ReasonPlanUnknown        = "plan-unknown"
+	ReasonPlanPending        = "plan-pending"
+	ReasonPlanExpired        = "plan-expired"
+	ReasonPlanRevoked        = "plan-revoked"
+	ReasonPlanDeviation      = "plan-deviation"
+	ReasonPlanStoreFault     = "plan-store-fault" // FAUTE système (alarmée)
 	ReasonEnvelopeUnverified = "envelope-unverified"
 	ReasonEnvelopeSaturated  = "envelope-saturated"
 	ReasonIssuanceFailed     = "issuance-failed"
@@ -68,6 +80,7 @@ type Translation struct {
 	ObjectSeal  *[32]byte  // sceau objet-capacité (§4.4(2)), si le traducteur le scelle
 	Quota       *pep.Quota // demande de passeport (§4.1-bis) — non nil ⇒ chemin lourd
 	QuorumProof []byte     // preuve k-of-n classe W (§7.5) — octets opaques, vérifiés par QuorumGate, jamais interprétés ici (no-DPI)
+	PlanBinding []byte     // binding de contrat de plan (§4.2, T30) — octets opaques, vérifiés par ContractGate, jamais interprétés ici (no-DPI)
 }
 
 // Translator est la couture du traducteur (T24–T26 construisent son
@@ -112,12 +125,26 @@ type QuorumGate interface {
 	VerifyClassW(ctx context.Context, proof []byte, action, resource string, epoch uint64) error
 }
 
+// ContractGate est la couture de vérification du contrat de plan (§4.2,
+// T30 — implémentée par pep.ContractStore). « Le plan approuvé est un
+// contrat : l'exécution est vérifiée contre le hash du plan validé ;
+// déviation = refus ». Optionnelle en configuration (comme Envelope/
+// Ledger/Quorum), mais fail-closed dès qu'elle s'applique — toute demande
+// portant un binding sans gate câblé est refusée (plan-unverified), et
+// toute déviation du plan scellé est refusée (plan-deviation) MÊME si OPA
+// a autorisé l'action isolément. Le sceau rendu (hash du plan) part dans
+// le claim −8 du jeton émis (schéma v2) : le lien jeton ↔ plan vit dans
+// l'objet signé, opposable au broker lui-même après coup (§7.6).
+type ContractGate interface {
+	VerifyStep(ctx context.Context, binding []byte, action, resource string) (planSeal [32]byte, err error)
+}
+
 // StructuredTranslator est le traducteur du MODE STRUCTURÉ (§4.5 degraded
 // modes : quand le modèle est indisponible, seul le structuré passe — la
 // dégradation contrôlée de T25 s'appuiera sur cette brique). Il attend une
-// intention JSON {"action","resource","class"?,"object_seal"?,"quota"?} —
-// aucun modèle, aucune interprétation ; la validation des bornes reste à
-// l'Issuer (fail-closed à l'émission).
+// intention JSON {"action","resource","class"?,"object_seal"?,"quota"?,
+// "quorum_proof"?,"plan_binding"?} — aucun modèle, aucune interprétation ;
+// la validation des bornes reste à l'Issuer (fail-closed à l'émission).
 type StructuredTranslator struct{}
 
 // structuredIntent est le langage structuré : l'agent déclare l'action
@@ -128,6 +155,7 @@ type structuredIntent struct {
 	Class       *uint8 `json:"class,omitempty"`
 	ObjectSeal  string `json:"object_seal,omitempty"`  // hex, 32 octets
 	QuorumProof string `json:"quorum_proof,omitempty"` // hex — preuve k-of-n classe W (§7.5), blob opaque
+	PlanBinding string `json:"plan_binding,omitempty"` // hex — binding de contrat de plan (§4.2, T30), blob opaque
 	Quota       *struct {
 		Resource  string `json:"resource"`
 		Operation string `json:"operation"`
@@ -180,6 +208,18 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 			return Translation{}, fmt.Errorf("broker: quorum_proof non hexadécimal : %w", err)
 		}
 		tr.QuorumProof = proof
+	}
+	if s.PlanBinding != "" {
+		// Même discipline que quorum_proof (D62) : blob opaque relayé au
+		// ContractGate, borné, jamais interprété ici (no-DPI).
+		if len(s.PlanBinding) > 2*maxPlanBindingBytes {
+			return Translation{}, errors.New("broker: plan_binding hors bornes (§4.2)")
+		}
+		binding, err := hex.DecodeString(s.PlanBinding)
+		if err != nil {
+			return Translation{}, fmt.Errorf("broker: plan_binding non hexadécimal : %w", err)
+		}
+		tr.PlanBinding = binding
 	}
 	return tr, nil
 }
@@ -235,6 +275,12 @@ type BrokerOptions struct {
 	// §5.3) sans quorum satisfait est refusée — même doctrine
 	// qu'Envelope/Ledger (la règle sans le contrôle ne ferme rien).
 	Quorum QuorumGate
+	// Contract est la couture de contrat de plan (§4.2, T30 —
+	// pep.ContractStore). Optionnelle, mais fail-closed dès qu'elle
+	// s'applique : toute demande portant un binding de plan sans gate
+	// câblé est refusée (plan-unverified), et la déviation du plan scellé
+	// est refusée même si OPA a autorisé l'action isolément.
+	Contract ContractGate
 	// Envelope est l'évaluateur d'enveloppe §4.1-bis, avec son Ledger
 	// d'état borné. Les deux sont requis ENSEMBLE ou absents ensemble ;
 	// absents, toute demande de passeport est refusée (envelope-unverified
@@ -261,6 +307,7 @@ type Broker struct {
 	issuer     *Issuer
 	epochs     EpochProvider
 	quorum     QuorumGate
+	contract   ContractGate
 	envelope   *HTTPEnvelopeEvaluator
 	ledger     *EnvelopeLedger
 	onTrip     func(reason string)
@@ -280,6 +327,7 @@ type BrokerStats struct {
 	EnvelopeEvals       uint64 // évaluations d'enveloppe (§4.1-bis)
 	EnvelopeDenies      uint64 // refus d'enveloppe (agrégat plein)
 	QuorumDenies        uint64 // refus de quorum classe W (§7.5)
+	PlanDenies          uint64 // refus de contrat de plan (§4.2, T30)
 	IssuanceFailures    uint64 // fautes de signature/émission (alarmées)
 	LeafFailures        uint64 // feuilles propres impossibles (alarmées)
 }
@@ -326,6 +374,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		issuer:     opts.Issuer,
 		epochs:     opts.Epochs,
 		quorum:     opts.Quorum,
+		contract:   opts.Contract,
 		envelope:   opts.Envelope,
 		ledger:     opts.Ledger,
 		onTrip:     opts.OnTrip,
@@ -436,7 +485,41 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		}
 	}
 
-	// Étape 7 — enveloppe d'émission (§4.1-bis) : UNIQUEMENT pour les
+	// Étape 7 — contrat de plan (§4.2, T30) : si la demande porte un
+	// binding, elle prétend exécuter une étape d'un plan arbitré — le gate
+	// la confronte au plan SCELLÉ (curseur strict : action, resource et
+	// hash des paramètres exacts). Placé APRÈS le quorum (§7.5 est
+	// l'invariant dur de classe, vérifié d'abord) et AVANT l'enveloppe :
+	// une déviation ne consomme ni quota ni signature. Le gate trace sa
+	// propre feuille KindContract ; le broker trace le refus final
+	// (KindDecision). Le sceau rendu part dans le claim −8 du jeton.
+	var planSeal *[32]byte
+	if len(tr.PlanBinding) > 0 {
+		if b.contract == nil {
+			// Config sans gate : tout binding est refusé — même doctrine
+			// qu'envelope-unverified (T33) et quota-unverified (T9).
+			b.mu.Lock()
+			b.stats.PlanDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonPlanUnverified, &dec)
+		}
+		seal, err := b.contract.VerifyStep(ctx, tr.PlanBinding, tr.Action, tr.Resource)
+		if err != nil {
+			if errors.Is(err, pep.ErrPlanStoreFault) {
+				// FAUTE système (feuille de contrat impossible) : refus +
+				// feuille + alarme T14 — pas de preuve, pas de contrat.
+				return b.fault(ctx, jti, ReasonPlanStoreFault, err)
+			}
+			b.mu.Lock()
+			b.stats.PlanDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, planDenyReason(err), &dec)
+		}
+		s := seal
+		planSeal = &s
+	}
+
+	// Étape 8 — enveloppe d'émission (§4.1-bis) : UNIQUEMENT pour les
 	// passeports. Réservation pessimiste AVANT l'appel OPA (envelope.go) ;
 	// libérée sur tout refus ou échec aval.
 	if tr.Quota != nil {
@@ -473,7 +556,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		// si la signature échoue — jamais de sur-émission.
 	}
 
-	// Étape 8 — émission : signature via la couture (HSM en production).
+	// Étape 9 — émission : signature via la couture (HSM en production).
 	wire, err := b.issuer.Issue(IssueParams{
 		Subject:    subject,
 		Action:     tr.Action,
@@ -481,6 +564,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		Class:      tr.Class,
 		ObjectSeal: tr.ObjectSeal,
 		Quota:      tr.Quota,
+		PlanSeal:   planSeal,
 		JTI:        jti,
 		Epoch:      epoch,
 		Iat:        b.now().Unix(),
@@ -495,7 +579,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.fault(ctx, jti, ReasonIssuanceFailed, err)
 	}
 
-	// Étape 9 — feuille propre du broker pour l'ÉMISSION elle-même (§4.1 :
+	// Étape 10 — feuille propre du broker pour l'ÉMISSION elle-même (§4.1 :
 	// chaque décision laisse une feuille). La feuille OPA de l'étape 4 ne
 	// prouve que l'évaluation de l'action ; elle ne porte ni l'enveloppe
 	// (§4.1-bis, OPAInput ne transporte aucun champ quota) ni le fait qu'un
@@ -522,9 +606,35 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 	return res
 }
 
+// planDenyReason mappe les erreurs de verdict du ContractGate (§4.2, T30)
+// en raisons machine-readable stables. Les fautes système
+// (ErrPlanStoreFault) sont traitées à part — ici, uniquement des verdicts
+// sains (pas d'alarme, même distinction qu'opa-deny).
+func planDenyReason(err error) string {
+	switch {
+	case errors.Is(err, pep.ErrPlanBindingInvalid):
+		return ReasonPlanBindingInvalid
+	case errors.Is(err, pep.ErrPlanUnknown):
+		return ReasonPlanUnknown
+	case errors.Is(err, pep.ErrPlanPending):
+		return ReasonPlanPending
+	case errors.Is(err, pep.ErrPlanExpired):
+		return ReasonPlanExpired
+	case errors.Is(err, pep.ErrPlanRevoked):
+		return ReasonPlanRevoked
+	case errors.Is(err, pep.ErrPlanDeviation):
+		return ReasonPlanDeviation
+	default:
+		// Erreur de verdict inconnue : on refuse quand même, sous la raison
+		// générique — jamais de passage silencieux (§1).
+		return ReasonPlanDeviation
+	}
+}
+
 // deny épilogue un refus de niveau broker : feuille KindDecision propre
-// (la feuille OPA de l'étape 4 existe déjà si atteinte — la feuille du
-// broker porte la raison du refus FINAL : enveloppe, entrée, traduction).
+// (la feuille OPA de l'étape 5 existe déjà si atteinte — la feuille du
+// broker porte la raison du refus FINAL : quorum, contrat, enveloppe,
+// entrée, traduction).
 func (b *Broker) deny(ctx context.Context, jti [16]byte, reason string, opaDec *pep.OPADecision) Result {
 	r := Result{Allow: false, Reason: reason, JTI: jti, OPADecision: opaDec}
 	b.writeLeaf(ctx, &r)

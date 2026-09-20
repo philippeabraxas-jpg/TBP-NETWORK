@@ -84,6 +84,7 @@ type testClaims struct {
 	objectSeal []byte
 	epoch      int
 	quota      map[int]any
+	planSeal   []byte // claim −8 (schéma v2, T30) — interdite en v1
 	version    int
 	kid        []byte
 }
@@ -128,6 +129,9 @@ func claimsPayload(c testClaims) map[int]any {
 	}
 	if c.quota != nil {
 		m[-7] = c.quota
+	}
+	if c.planSeal != nil {
+		m[-8] = c.planSeal
 	}
 	return m
 }
@@ -460,8 +464,11 @@ func TestFailClosedBattery(t *testing.T) {
 		{name: "quota.window_s = 0 (viole schema.cddl .gt 0)", reason: "schema-violation", wire: mint(func(c *testClaims) {
 			c.quota = map[int]any{1: "storage.artifacts", 2: "append", 3: 536870912, 4: 0}
 		})},
-		{name: "v = 2", reason: "unsupported-version", wire: mint(func(c *testClaims) {
-			c.version = 2
+		{name: "v = 3", reason: "unsupported-version", wire: mint(func(c *testClaims) {
+			c.version = 3
+		})},
+		{name: "v = 1 avec plan_seal (clé −8 inconnue en v1)", reason: "schema-violation", wire: mint(func(c *testClaims) {
+			c.planSeal = sealOK
 		})},
 		{name: "kid inconnu", reason: "unknown-kid", wire: mint(func(c *testClaims) {
 			c.kid = bytesOf(0x99, 16)
