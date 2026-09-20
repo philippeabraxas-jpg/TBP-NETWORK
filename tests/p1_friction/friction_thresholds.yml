@@ -52,6 +52,16 @@ jobs:
         run: python3 tests/p1_friction/leading_indicators.py --in tests/p1_friction/out
 
       - name: Alarme leafée (D90)
+        # if: always() — sans ça, GitHub Actions SAUTE cette étape dès que
+        # l'étape « Verdict de seuils » échoue (exit 1), c'est-à-dire
+        # exactement quand il y a quelque chose à alarmer : le rapport
+        # existe déjà sur disque (leading_indicators.py l'écrit AVANT de
+        # décider du code de sortie) mais ne serait jamais inscrit en
+        # feuille KindTelemetry pour les runs qui franchissent un seuil —
+        # l'inverse de ce que D90 promet (« l'alarme n'est jamais
+        # silencieuse »). Le statut rouge/vert du job reste correctement
+        # porté par l'étape « Verdict de seuils », pas par celle-ci.
+        if: always()
         run: go run ./tests/p1_friction leaf-report -out tests/p1_friction/out
 
       - uses: actions/upload-artifact@v4

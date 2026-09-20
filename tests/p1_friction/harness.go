@@ -343,7 +343,13 @@ func mintTier1Tokens(st *pepStack, cfg Config, n int) (tokens [][]byte, jtis []s
 			exp: now.Add(ttl).Unix(), iat: now.Add(-time.Second).Unix(),
 			jti: jti[:], policyID: st.policyID[:],
 			action: "read.list", resource: "registry/docs/42",
-			class: 0, epoch: 0, version: 1, kid: frictionKID[:],
+			// ClassOut (hors F/I/W) : D87 définit tier1 comme « jeton
+			// valide classe hors-FIW » — pas ClassF. Sans effet sur les
+			// chiffres mesurés aujourd'hui (le seul branchement sur la
+			// classe dans src/pep, failclosed.go, ne teste que ClassW),
+			// mais la mesure doit rester fidèle à ce qu'elle prétend
+			// exercer plutôt que de dépendre de cette invariance.
+			class: int(pep.ClassOut), epoch: 0, version: 1, kid: frictionKID[:],
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("menthe %d: %w", i, err)
