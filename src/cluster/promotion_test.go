@@ -302,7 +302,8 @@ func TestPromotionAllowWithoutLeafFailsClosed(t *testing.T) {
 	clk := newClock(t0)
 	bundle := [32]byte{0x42}
 	src := &fakeAnchors{
-		bundles: map[uint64][2]time.Time{2: {t0.Add(-time.Hour), t0.Add(time.Hour)}},
+		bundles: map[uint64][32]byte{2: bundle},
+		windows: map[uint64][2]time.Time{2: {t0.Add(-time.Hour), t0.Add(time.Hour)}},
 	}
 	c := newPromotion(t, clk, &leafRecorder{err: errors.New("disque plein simulé")}, src)
 	receipt := mintReceipt(t, privs, "cell-b", 2, bundle, t0)
