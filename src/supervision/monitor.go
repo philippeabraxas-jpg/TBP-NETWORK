@@ -56,6 +56,16 @@ const DefaultMaxAnchorLag = 120 * time.Second
 // reste chez le moniteur — même doctrine que T6/T31).
 const supervisionSaltLen = 16
 
+// ErrAlarmSinkFault distingue un échec du sink T14 (notification refusée
+// ou indisponible) d'une faute de feuillage du moniteur (raise ci-dessous) :
+// dans le premier cas la preuve existe déjà — la feuille EST écrite avant
+// que le sink soit appelé (§5.3) — dans le second non. CheckOnce ne doit
+// interrompre le passage QUE dans le second cas (voir sa doc) : un simple
+// accroc de notification sur UNE alerte ne doit ni faire perdre cette
+// alerte déjà prouvée du retour de CheckOnce, ni empêcher la vérification
+// des cellules suivantes du même passage (revue de #68).
+var ErrAlarmSinkFault = errors.New("supervision: notification T14 en échec (feuille néanmoins écrite)")
+
 // CellSpec décrit une cellule à surveiller. La configuration est
 // fail-closed : tout champ requis manquant est une erreur de construction,
 // pas une vérification silencieusement sautée.
@@ -193,7 +203,11 @@ func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
 	var alerts []Alert
 	raise := func(cellID string, event byte, reason string, detail []byte) error {
 		a, err := m.raise(ctx, cellID, event, reason, detail)
-		if err != nil {
+		// Une faute de SINK n'abandonne pas la feuille déjà écrite (a est
+		// alors valide, LeafIndex compris) : elle reste dans les alertes
+		// rendues et le passage continue. Seule une faute de feuillage
+		// (a resté à zéro) interrompt CheckOnce — voir ErrAlarmSinkFault.
+		if err != nil && !errors.Is(err, ErrAlarmSinkFault) {
 			return err
 		}
 		alerts = append(alerts, a)
@@ -351,8 +365,10 @@ func (m *Monitor) raise(ctx context.Context, cellID string, event byte, reason s
 		if err := m.sink.Raise(ctx, a); err != nil {
 			// La feuille EST écrite : la preuve existe. Un sink en faute
 			// est une erreur de notification, pas une perte d'alerte — on
-			// rend l'alerte ET l'erreur au-dessus via une faute dédiée.
-			return a, fmt.Errorf("supervision: alarme T14 : %w", err)
+			// rend l'alerte ET l'erreur au-dessus, marquée ErrAlarmSinkFault
+			// pour que l'appelant (CheckOnce) la distingue d'une faute de
+			// feuillage et ne perde ni n'interrompe rien pour autant.
+			return a, fmt.Errorf("%w : %v", ErrAlarmSinkFault, err)
 		}
 	}
 	return a, nil

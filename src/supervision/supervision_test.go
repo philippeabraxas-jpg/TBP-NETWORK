@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -430,6 +431,46 @@ func TestChainWatcherDetectsCheckpointTamper(t *testing.T) {
 	}
 }
 
+// TestChainWatcherTransientCheckpointReadRecovers : trouvé en revue de #68
+// — un checkpoint temporairement ILLISIBLE (fichier absent le temps d'un
+// tick — NFS qui bégaie, remplacement atomique surpris par l'écrivain)
+// n'est PAS une preuve de divergence : tracker.Update() peut échouer pour
+// ça sans qu'aucune preuve de consistance n'ait jamais été confrontée. Ce
+// cas ne doit PAS verrouiller le watcher — contrairement à une vraie
+// ErrInconsistency (preuve de consistance qui échoue, elle, prouve une
+// divergence et reste sticky, cf. TestChainWatcherDetectsEntryCorruption
+// et TestChainWatcherDetectsCheckpointTamper, qui restent inchangés).
+func TestChainWatcherTransientCheckpointReadRecovers(t *testing.T) {
+	clk := &fakeClock{t: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+	cell := openCellFixture(t, "cell-epsilon-05")
+	cell.appendLeaf(t, registry.KindDecision, "d0", clk.t)
+	waitCheckpoint(t, cell.dir, cell.verifier, 1)
+	_, w, err := NewChainWatcher(testCtx, cell.cellID, cell.dir, cell.origin, cell.verifier, 1)
+	if err != nil {
+		t.Fatalf("NewChainWatcher: %v", err)
+	}
+
+	cpPath := filepath.Join(cell.dir, "checkpoint")
+	movedPath := cpPath + ".moved-away"
+	if err := os.Rename(cpPath, movedPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := w.Tick(testCtx); err == nil {
+		t.Fatal("tick attendu en échec pendant l'indisponibilité transitoire du checkpoint")
+	} else if strings.Contains(err.Error(), ErrChainDivergence.Error()) {
+		t.Fatalf("checkpoint temporairement illisible classé comme divergence prouvée (sticky à tort) : %v", err)
+	}
+
+	// Panne transitoire terminée : le fichier revient EXACTEMENT tel quel
+	// (aucune corruption, juste une indisponibilité passagère).
+	if err := os.Rename(movedPath, cpPath); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := w.Tick(testCtx); err != nil {
+		t.Fatalf("tick après rétablissement : %v, veut succès (l'incident était transitoire, pas une preuve de corruption)", err)
+	}
+}
+
 // corruptAllFiles inverse le premier ET le dernier octet de CHAQUE fichier
 // sous root — le driver POSIX laisse les anciens bundles partiels à côté
 // du courant (tile/entries/000.p/1, 000.p/2…) : corrompre « un » fichier
@@ -618,6 +659,60 @@ func TestMonitorAlertLeafedBeforeSink(t *testing.T) {
 	rec, err := ParseAlertRecord(a.Raw)
 	if err != nil || rec != a.Record {
 		t.Fatalf("record non reparseable : %v", err)
+	}
+}
+
+// TestMonitorSinkFaultDoesNotAbortPass : un sink T14 en échec n'est PAS
+// une faute de feuillage (revue de #68 — doc de CheckOnce : « err non nil
+// UNIQUEMENT si le moniteur lui-même a fauté (feuillage impossible) »).
+// La feuille existe déjà quand le sink est appelé (raise, ordre §5.3) ;
+// un accroc de notification ne doit ni faire perdre l'alerte déjà prouvée
+// du retour de CheckOnce, ni interrompre le passage en cours.
+func TestMonitorSinkFaultDoesNotAbortPass(t *testing.T) {
+	fx := newMonitorFixture(t)
+	sinkCalled := 0
+	failing := AlarmSinkFunc(func(ctx context.Context, a Alert) error {
+		sinkCalled++
+		return errors.New("T14 indisponible")
+	})
+	mon, err := NewMonitor(testCtx, MonitorOptions{
+		MonitorCellID: fx.sup.cellID,
+		Log:           fx.sup.log,
+		Cells: []CellSpec{{
+			CellID: fx.cell.cellID, LogDir: fx.cell.dir, Origin: fx.cell.origin,
+			Verifier: fx.cell.verifier, ManifestDir: fx.manifDir,
+		}},
+		Master: MasterSpec{CellID: fx.master.cellID, LogDir: fx.master.dir, Origin: fx.master.origin, Verifier: fx.master.verifier},
+		Sink:   failing,
+		Now:    fx.clk.now,
+	})
+	if err != nil {
+		t.Fatalf("NewMonitor: %v", err)
+	}
+	// Pas d'ancrage frais pour cell-alpha-01 dans le fixture ⇒ une alerte
+	// anchor-missing attendue (même hypothèse que TestMonitorAlertLeafedBeforeSink).
+	alerts, err := mon.CheckOnce(testCtx)
+	if err != nil {
+		t.Fatalf("CheckOnce: un échec du sink T14 (notification) n'est pas une faute de feuillage — contrat violé : %v", err)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("alerte déjà feuillée perdue par un accroc de notification : %d alertes rendues", len(alerts))
+	}
+	if sinkCalled != 1 {
+		t.Fatalf("sink non appelé : %d", sinkCalled)
+	}
+	// La feuille existe réellement dans le log de supervision (dogfood),
+	// indépendamment du succès de la notification.
+	fx.sup.n++
+	leaves := fx.supervisionLeaves(t)
+	found := false
+	for _, l := range leaves {
+		if l.Kind == registry.KindSupervision && l.PayloadHash == alerts[0].LeafHash {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("feuille d'alerte absente du log de supervision malgré l'échec du sink")
 	}
 }
 

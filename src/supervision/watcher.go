@@ -48,6 +48,17 @@ var ErrChainDivergence = errors.New("supervision: divergence de chaîne")
 // vérifié — une chaîne append-only ne recule jamais.
 var ErrChainRewind = errors.New("supervision: régression de taille de chaîne")
 
+// ErrChainFetchFault : une lecture a échoué (checkpoint/tuile/bundle
+// injoignable ou momentanément indisponible) SANS qu'aucune preuve
+// cryptographique n'ait été confrontée — ni consistance, ni re-hash, ni
+// signature. Contrairement à ErrChainDivergence, ce n'est PAS sticky (voir
+// Tick) : un NFS qui bégaie, un fichier surpris en cours de remplacement
+// atomique par l'écrivain, ne sont pas une preuve de corruption — les
+// traiter comme telle verrouillerait le watcher pour de bon sur un
+// incident purement transitoire, ce qui est exactement le genre de fausse
+// alerte permanente qui use la confiance dans le moniteur (revue de #68).
+var ErrChainFetchFault = errors.New("supervision: lecture de chaîne indisponible (I/O transitoire)")
+
 // ChainWatcher suit un log de cellule (ou la master chain) en lecture
 // seule vérifiée. Zéro écriture dans la chaîne surveillée : les seuls
 // accès sont FileFetcher (ReadCheckpoint/ReadTile/ReadEntryBundle).
@@ -132,7 +143,15 @@ func (w *ChainWatcher) Tick(ctx context.Context) ([]registry.Leaf, error) {
 
 func (w *ChainWatcher) tick(ctx context.Context) ([]registry.Leaf, error) {
 	if _, _, _, err := w.tracker.Update(ctx); err != nil {
-		return nil, fmt.Errorf("%w : %s : %v", ErrChainDivergence, w.cellID, err)
+		// Update() rend soit une ErrInconsistency typée (preuve de
+		// consistance ÉCHOUÉE — une vraie divergence), soit une erreur de
+		// lecture brute (checkpoint/tuile injoignable pendant la mise à
+		// jour) — les deux ne se traitent pas pareil, voir ErrChainFetchFault.
+		var incons client.ErrInconsistency
+		if errors.As(err, &incons) {
+			return nil, fmt.Errorf("%w : %s : %v", ErrChainDivergence, w.cellID, err)
+		}
+		return nil, fmt.Errorf("%w : %s : %v", ErrChainFetchFault, w.cellID, err)
 	}
 	newSize := w.tracker.Latest().Size
 	if newSize < w.size {
@@ -156,6 +175,21 @@ func (w *ChainWatcher) tick(ctx context.Context) ([]registry.Leaf, error) {
 // (version, whitelist de kinds, longueurs — leçon #65, la symétrie est
 // déjà fail-closed côté registre).
 func (w *ChainWatcher) fetchAndVerifyLeaves(ctx context.Context, from, to uint64) ([]registry.Leaf, error) {
+	// NB (revue de #68) : contrairement à tracker.Update() ci-dessus,
+	// FetchLeafHashes/GetEntryBundle ne rendent AUCUNE distinction typée
+	// entre « lecture brute échouée » et « octets lus mais illisibles
+	// comme tuile/bundle » — le client Tessera (v1.0.4) enveloppe les deux
+	// avec fmt.Errorf(%v) (pas %w), donc même le TEXTE de la cause profonde
+	// ne survit que par accident de formatage, et les deux préfixes
+	// connus (« failed to fetch » / « failed to parse ») ne sont pas un
+	// contrat de la bibliothèque. Distinguer ici demanderait du
+	// filtrage sur ce texte non contractuel — fragile face à une
+	// bibliothèque tierce. Choix assumé : les deux restent
+	// ErrChainDivergence (sticky) — conservateur, pas silencieux, au prix
+	// qu'un incident d'I/O purement transitoire sur CE chemin précis
+	// (fichier de tuile/bundle temporairement injoignable, jamais son
+	// checkpoint) verrouille le watcher comme le ferait une vraie
+	// corruption. Résiduel documenté, pas un oubli.
 	hashes, err := client.FetchLeafHashes(ctx, w.fetcher.ReadTile, from, to-from, to)
 	if err != nil {
 		return nil, fmt.Errorf("%w : %s : nœuds feuilles [%d,%d) : %v", ErrChainDivergence, w.cellID, from, to, err)
