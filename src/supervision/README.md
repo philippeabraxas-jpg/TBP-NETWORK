@@ -1,0 +1,72 @@
+# src/supervision — moniteur indépendant (T34, issue #60, §2/§6.2/§7.1)
+
+Le moniteur de supervision est un **processus à clé et log propres** (§2 :
+« at least one independent monitor » dans la base de confiance) qui
+surveille les chaînes des cellules et la master chain **sans jamais y
+écrire**. §7.1 : « cellule à périmètre élargi — mêmes mécaniques, même
+doctrine, jamais une nouvelle boîte noire » — son propre log est un
+`CellLog` ordinaire (T7), ses feuilles suivent le format hash-only de §6.2.
+
+## Livré (T34a) — moniteurs d'intégrité
+
+| fichier | rôle |
+|---|---|
+| `alert.go` | record d'alerte canonique « TBPS1 » + couture `AlarmSink` (T14) |
+| `watcher.go` | `ChainWatcher` : lecture vérifiée d'un log POSIX Tessera (signature de checkpoint, consistance O(log n), re-hash des feuilles) |
+| `monitor.go` | `Monitor` : orchestre les trois vérificateurs, feuille + alarme chaque divergence |
+
+Les trois vérificateurs continus (§6.2, D78) :
+
+1. **Continuité/intégrité des chaînes** — à chaque tick, preuve de
+   consistance Merkle du checkpoint N-1 → N (`LogStateTracker`, client
+   Tessera) + re-hash RFC 6962 des nouvelles feuilles contre les tuiles.
+   Toute discontinuité inexpliquée = corruption = alarme (§3). Une faute
+   prouvée est **sticky** : le watcher la rend à chaque tick, sans amnésie
+   (§5.3).
+2. **Fraîcheur d'ancrage** — lag depuis la dernière feuille `KindAnchor`
+   de la cellule dans la master chain (kind + timestamp en clair, payload
+   salé opaque : **le sel T6 n'est jamais requis**). Borne par défaut
+   120 s (§6.2). « Jamais observé » est une faute comme « trop vieux ».
+3. **Cohérence des manifestes** — `VerifyManifestChain` (T31, §6.3) sur
+   les artefacts publiés de la cellule, rejouée depuis la genèse à chaque
+   passage (artefacts petits et rares ; l'intégrité est la signature).
+
+Chaque divergence = feuille `KindSupervision` (kind 12) dans le log de
+supervision, record « TBPS1 » hashé-salé (le sel reste chez le moniteur),
+**puis** alarme vers la couture T14 (`AlarmSink`). Jamais l'inverse,
+jamais sans la feuille : §5.3 — une alerte non feuillée est une alerte
+silencieuse.
+
+## Chemin froid (§9.1)
+
+`CheckOnce` lit des fichiers et vérifie des preuves — il n'est appelé par
+aucun composant du chemin chaud (broker/pep n'importent pas ce package,
+testé par `TestNoHotPathImport`). Latence ajoutée au tier-1 : **0**. La
+cadence de tick est un choix de déploiement (l'appelant boucle).
+
+## Lecture vérifiée d'un log qu'on n'écrit pas
+
+`ChainWatcher` est construit sur le côté lecture du client Tessera v1.0.4
+(`FileFetcher` local, `LogStateTracker`, `GetEntryBundle`,
+`FetchLeafHashes`) — aucun serveur HTTP requis en P1 (même machine). Le
+checkpoint initial est vérifié à la construction (fail-closed) ; un
+`bootstrapFrom` permet un audit complet O(n) à l'ouverture (utilisé pour
+la master chain et les cellules — borne assumée du pilote P1), puis le
+régime permanent est incrémental O(log n).
+
+## À venir sur cette issue
+
+- **T34b** — détection de chute (chaîne figée ET ancrage échu — le ET
+  compte : une cellule inactive mais vivante continue d'ancrer) et
+  déclenchement borné de bascule pré-autorisée (budget moniteur, distinct
+  du budget d'acceptation T29 côté cellule), escalade humaine au-delà.
+- **T34c** — console read-only (aucune route mutante par construction) :
+  file d'arbitrage (plans scellés T30), inspection de politique
+  (`policy_id`, bundle ancré §7.4), indicateurs §9.1 exportables.
+
+## Hors périmètre (rappel #60)
+
+Fencing/quorum/promotion (#30 — appelés, pas réimplémentés), scellement
+des plans (T30 — présenté, pas refait), construction des manifestes (T31 —
+vérifiée, pas refaite), dashboarding générique, distribution réseau au-delà
+du socket Unix local.
