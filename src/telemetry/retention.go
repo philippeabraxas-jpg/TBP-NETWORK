@@ -47,7 +47,7 @@ const (
 const ReasonStoreFull = "retention-store-full"
 
 var (
-	ErrTTLInvalid        = errors.New("telemetry: TTL de rétention invalide (≤ 0)")
+	ErrTTLInvalid        = errors.New("telemetry: TTL de rétention invalide (≥ 1 ms requis)")
 	ErrMaxBatchesInvalid = errors.New("telemetry: borne de lots invalide (≤ 0)")
 	ErrStoreFull         = errors.New("telemetry: store de rétention plein — purge requise (§4.3)")
 	ErrBatchGone         = errors.New("telemetry: lot brut purgé ou inconnu — correspondance non re-vérifiable (§6.2)")
@@ -117,7 +117,13 @@ func NewRetentionStore(opts RetentionOptions) (*RetentionStore, error) {
 	if ttl == 0 {
 		ttl = defaultRetentionTTL
 	}
-	if ttl < 0 {
+	// PurgeExpired compare via ttl.Milliseconds() : un TTL positif mais
+	// < 1 ms (typo d'unité plausible — oublier "* time.Hour"/"* time.Second"
+	// est un piège classique de time.Duration) arrondit à 0 et purge tout
+	// lot dès son premier PurgeExpired(), quel que soit son âge réel — la
+	// politique de rétention se trouve silencieusement annulée (§6.2), sans
+	// le moindre refus à la configuration (§1, D26). Constaté par test.
+	if ttl < time.Millisecond {
 		return nil, ErrTTLInvalid
 	}
 	max := opts.MaxBatches

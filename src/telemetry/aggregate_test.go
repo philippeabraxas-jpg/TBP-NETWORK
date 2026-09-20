@@ -79,6 +79,11 @@ func TestAggregatorOptionsFailClosed(t *testing.T) {
 		{"sel < 16 o", func(o *AggregatorOptions) { o.Salt = make([]byte, 8) }, ErrSaltTooShort},
 		{"registre manquant", func(o *AggregatorOptions) { o.Leaves = nil }, ErrLeavesRequired},
 		{"fenêtre négative", func(o *AggregatorOptions) { o.Window = -time.Second }, ErrWindowInvalid},
+		// revue T22 : positive mais < 1 ms (typo d'unité plausible, ex.
+		// time.Microsecond au lieu de time.Millisecond) — passait la seule
+		// borne "< 0" pour ensuite paniquer (division par zéro) au premier
+		// Feed()/Tick()/Seal(), au lieu d'un refus net à la configuration.
+		{"fenêtre positive mais < 1 ms", func(o *AggregatorOptions) { o.Window = 500 * time.Microsecond }, ErrWindowInvalid},
 		{"top-k négatif", func(o *AggregatorOptions) { o.TopK = -1 }, ErrTopKInvalid},
 		{"top-k > 255", func(o *AggregatorOptions) { o.TopK = 256 }, ErrTopKInvalid},
 	}
@@ -110,6 +115,13 @@ func TestRetentionOptionsFailClosed(t *testing.T) {
 		{"sel < 16 o", func(o *RetentionOptions) { o.Salt = make([]byte, 8) }, ErrSaltTooShort},
 		{"registre manquant", func(o *RetentionOptions) { o.Leaves = nil }, ErrLeavesRequired},
 		{"TTL négatif", func(o *RetentionOptions) { o.TTL = -time.Hour }, ErrTTLInvalid},
+		// revue T22 : positif mais < 1 ms — même piège que le TTL négatif,
+		// mais silencieux : PurgeExpired() (comparaison en millisecondes)
+		// purgeait alors tout lot dès son premier appel, quel que soit son
+		// âge réel — la politique de rétention (§6.2) annulée sans le
+		// moindre refus à la configuration. Ex. réaliste : "TTL: 24" en
+		// voulant 24h, en oubliant "* time.Hour" (24 devient 24 ns).
+		{"TTL positif mais < 1 ms", func(o *RetentionOptions) { o.TTL = 24 }, ErrTTLInvalid},
 		{"borne négative", func(o *RetentionOptions) { o.MaxBatches = -1 }, ErrMaxBatchesInvalid},
 	}
 	for _, tc := range cases {

@@ -50,7 +50,7 @@ const (
 )
 
 var (
-	ErrWindowInvalid = errors.New("telemetry: fenêtre d'agrégation invalide (≤ 0)")
+	ErrWindowInvalid = errors.New("telemetry: fenêtre d'agrégation invalide (≥ 1 ms requis)")
 	ErrTopKInvalid   = errors.New("telemetry: top-k hors [1, 255]")
 )
 
@@ -129,7 +129,12 @@ func NewAggregator(opts AggregatorOptions) (*Aggregator, error) {
 	if w == 0 {
 		w = defaultWindow
 	}
-	if w < 0 {
+	// windowID() divise par w.Milliseconds() : toute durée positive mais
+	// < 1 ms (ex. 500*time.Microsecond, un typo d'unité plausible côté
+	// appelant) passerait un simple test "w < 0", pour ensuite paniquer
+	// (division par zéro) au premier Feed()/Tick()/Seal() — un refus
+	// différé, pas fail-closed à la configuration comme promis (§1, D26).
+	if w < time.Millisecond {
 		return nil, ErrWindowInvalid
 	}
 	k := opts.TopK
