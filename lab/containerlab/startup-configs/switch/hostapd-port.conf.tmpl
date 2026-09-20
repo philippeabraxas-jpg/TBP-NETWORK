@@ -7,6 +7,10 @@ interface=@PORT@
 logger_stdout=-1
 ieee8021x=1
 eap_server=0
+# D14 (v1) : pas de ré-authentification périodique — une session établie
+# persiste jusqu'à déconnexion, même si RADIUS tombe ensuite (politique
+# documentée, lab/tests/README.md). Toute NOUVELLE auth exige RADIUS.
+eap_reauth_period=0
 nas_identifier=switch-p1-@PORT@
 auth_server_addr=@RADIUS_IP@
 auth_server_port=1812

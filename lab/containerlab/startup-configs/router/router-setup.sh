@@ -46,18 +46,31 @@ fi
 # invalide) alors que router-setup.sh remonte quand même un succès.
 TRUNK=${TRUNK_IF:-$($IP -o link show | awk -F': ' '$2 != "lo" { sub(/[@.].*/, "", $2); print $2; exit }')}
 RUNNFT="$WORK/router-p1.nft"
-sed -e "s/= eth0\.10/= $TRUNK.10/" -e "s/= eth0\.20/= $TRUNK.20/" \
-	-e "s/= eth0\.66/= $TRUNK.66/" -e "s/= eth0\.99/= $TRUNK.99/" \
-	"$LAB/config/nftables/router-p1.nft" > "$RUNNFT"
+SEDEXPR=
+for v in 10 20 33 66 77 99; do
+	SEDEXPR="$SEDEXPR;s/= eth0\\.$v/= $TRUNK.$v/"
+done
+sed -e "${SEDEXPR#;}" "$LAB/config/nftables/router-p1.nft" > "$RUNNFT"
 $NFT -f "$RUNNFT"
 echo "router-setup: mur nftables chargé (router-p1.nft, trunk $TRUNK)"
 
-# --- service d'enrôlement : la SEULE voie offerte au captif ----------------------
+# --- services hébergés : les SEULES voies offertes aux VLANs fermés ------------
 # bannière lue depuis un fichier (socat SYSTEM avec un message quoté
 # multi-mots échoue silencieusement — constaté au test).
-echo "TBP-ENROLL: presentez la machine a l enrolement (PKI du handshake)" \
-	> "$WORK/enroll-banner.txt"
-socat TCP4-LISTEN:8080,bind=10.66.66.1,reuseaddr,fork \
-	SYSTEM:"cat $WORK/enroll-banner.txt" >/dev/null 2>&1 &
-echo $! >> "$WORK/pids"
-echo "router-setup: service d'enrôlement sur 10.66.66.1:8080 (VLAN captif)"
+banner() { # banner <fichier> <message>
+	echo "$2" > "$WORK/$1"
+}
+banner enroll-banner.txt "TBP-ENROLL: presentez la machine a l enrolement (PKI du handshake)"
+banner rem-banner.txt "TBP-REMEDIATION: verification du certificat indisponible (CRL/OCSP) — contactez l exploitant, aucun acces production"
+banner telemetry-banner.txt "TBP-TELEMETRY: collecteur IoT (placeholder T21)"
+serve() { # serve <ip> <port> <fichier>
+	socat TCP4-LISTEN:$2,bind=$1,reuseaddr,fork \
+		SYSTEM:"cat $WORK/$3" >/dev/null 2>&1 &
+	echo $! >> "$WORK/pids"
+}
+# captif → enrôlement ; remédiation → feedback explicite (§5.3) ;
+# IoT → télémétrie uniquement (canal instrumenté, jamais silencieux).
+serve 10.66.66.1 8080 enroll-banner.txt
+serve 10.77.77.1 8080 rem-banner.txt
+serve 10.33.33.1 8888 telemetry-banner.txt
+echo "router-setup: enrôlement 10.66.66.1:8080, remédiation 10.77.77.1:8080, télémétrie IoT 10.33.33.1:8888"
