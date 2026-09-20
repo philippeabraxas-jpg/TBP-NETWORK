@@ -17,6 +17,11 @@
 //     artefacts publiés de chaque cellule (leur intégrité est la
 //     signature, D70 — ils ne sont pas un secret).
 //
+// T34b ajoute la détection de chute et le déclenchement borné de bascule
+// (failover.go, D80) : chaîne figée ET ancrage échu ⇒ couture
+// FailoverTrigger vers #30, budget glissant d'une heure, escalade humaine
+// au-delà.
+//
 // Chaque divergence = feuille KindSupervision dans le log de supervision
 // (record « TBPS1 » hashé-salé, alert.go) PUIS alarme vers la couture T14
 // (AlarmSink). Jamais l'inverse, jamais sans la feuille : §5.3 — une
@@ -118,21 +123,48 @@ type MonitorOptions struct {
 	Sink AlarmSink
 	// Now : horloge du moniteur. Nil ⇒ time.Now (dev).
 	Now func() time.Time
+	// Trigger : couture de déclenchement de bascule vers #30
+	// (cluster.Tracker / PromotionController — T34 détecte et déclenche,
+	// ne fence pas, D83). Nil = bascule automatique désactivée : chaque
+	// chute confirmée est REFUSÉE (feuille event=5, escalade humaine) —
+	// jamais silencieuse (failover.go).
+	Trigger FailoverTrigger
+	// FallDelay : durée sans progression de chaîne NI ancrage frais avant
+	// de conclure à la chute (D80). Zéro = défaut (2 × borne d'ancrage).
+	// Doit être STRICTEMENT supérieur à MaxAnchorLag — l'alarme
+	// anchor-stale précède toujours une bascule automatique — sinon
+	// erreur de construction.
+	FallDelay time.Duration
+	// MaxFailoverTriggers : budget de déclenchements par fenêtre glissante
+	// d'une heure. Zéro = défaut 2 ; négatif = erreur. Pour interdire
+	// toute bascule automatique : Trigger nil (le refus est feuillé,
+	// l'humain escaladé) — pas un budget à zéro.
+	// NB (revue Claude sur #60) : ce budget borne ce que le MONITEUR
+	// DÉCLENCHE ; MaxAutoFailoversPerHour=3 (src/cluster/epoch.go, T29)
+	// borne ce qu'une CELLULE ACCEPTE. Deux couches, pas de contradiction
+	// — le budget moniteur (2 < 3) est de facto la borne effective, la
+	// plus stricte (moins d'intervention automatique, pas plus).
+	MaxFailoverTriggers int
 }
 
 // Monitor orchestre les vérificateurs. Pas de goroutine propre en T34a :
 // CheckOnce est le cœur testable ; la cadence est un choix de déploiement
 // (l'appelant boucle — la latence de détection est réglée là, pas ici).
 type Monitor struct {
-	cellID     string
-	log        *registry.CellLog
-	sink       AlarmSink
-	now        func() time.Time
-	maxLag     time.Duration
-	master     *ChainWatcher
-	cells      []CellSpec
-	watchers   map[string]*ChainWatcher // par CellID
-	lastAnchor map[string]time.Time     // par CellID, max observé (monotone)
+	cellID       string
+	log          *registry.CellLog
+	sink         AlarmSink
+	now          func() time.Time
+	maxLag       time.Duration
+	master       *ChainWatcher
+	cells        []CellSpec
+	watchers     map[string]*ChainWatcher // par CellID
+	lastAnchor   map[string]time.Time     // par CellID, max observé (monotone)
+	trigger      FailoverTrigger
+	fallDelay    time.Duration
+	maxTriggers  int
+	triggerTimes []time.Time           // déclenchements dans la fenêtre glissante (borné)
+	falls        map[string]*fallState // par CellID
 }
 
 // NewMonitor construit les watchers (checkpoint initial de chaque chaîne
@@ -150,21 +182,40 @@ func NewMonitor(ctx context.Context, opts MonitorOptions) (*Monitor, error) {
 	if opts.Master.LogDir == "" || opts.Master.Verifier == nil || opts.Master.Origin == "" || opts.Master.CellID == "" {
 		return nil, errors.New("supervision: master chain complète requise (dir, origin, verifier, cellID) — l'ancrage (§6.2) n'est pas optionnel")
 	}
+	if opts.FallDelay < 0 {
+		return nil, errors.New("supervision: FallDelay négatif")
+	}
+	if opts.MaxFailoverTriggers < 0 {
+		return nil, errors.New("supervision: MaxFailoverTriggers négatif — pour interdire toute bascule automatique, laissez Trigger nil")
+	}
 	m := &Monitor{
-		cellID:     opts.MonitorCellID,
-		log:        opts.Log,
-		sink:       opts.Sink,
-		now:        opts.Now,
-		maxLag:     opts.MaxAnchorLag,
-		cells:      opts.Cells,
-		watchers:   make(map[string]*ChainWatcher, len(opts.Cells)),
-		lastAnchor: make(map[string]time.Time, len(opts.Cells)),
+		cellID:      opts.MonitorCellID,
+		log:         opts.Log,
+		sink:        opts.Sink,
+		now:         opts.Now,
+		maxLag:      opts.MaxAnchorLag,
+		cells:       opts.Cells,
+		watchers:    make(map[string]*ChainWatcher, len(opts.Cells)),
+		lastAnchor:  make(map[string]time.Time, len(opts.Cells)),
+		trigger:     opts.Trigger,
+		fallDelay:   opts.FallDelay,
+		maxTriggers: opts.MaxFailoverTriggers,
+		falls:       make(map[string]*fallState, len(opts.Cells)),
 	}
 	if m.now == nil {
 		m.now = time.Now
 	}
 	if m.maxLag <= 0 {
 		m.maxLag = DefaultMaxAnchorLag
+	}
+	if m.fallDelay == 0 {
+		m.fallDelay = DefaultFallDelay
+	}
+	if m.fallDelay <= m.maxLag {
+		return nil, fmt.Errorf("supervision: FallDelay (%s) doit être strictement supérieur à MaxAnchorLag (%s) — l'alarme anchor-stale précède toujours une bascule automatique", m.fallDelay, m.maxLag)
+	}
+	if m.maxTriggers == 0 {
+		m.maxTriggers = DefaultMaxFailoverTriggers
 	}
 	// Master chain : bootstrap depuis 0 — l'état de fraîcheur d'ancrage
 	// existe avant le premier tick (un ancrage échu ne doit pas attendre
@@ -191,18 +242,23 @@ func NewMonitor(ctx context.Context, opts MonitorOptions) (*Monitor, error) {
 			return nil, err
 		}
 		m.watchers[c.CellID] = w
+		// Détection de chute (T34b) : point de départ conservateur — une
+		// chaîne figée AVANT l'arrivée du moniteur n'est déclarée en chute
+		// qu'après FallDelay de surveillance effective.
+		m.falls[c.CellID] = &fallState{lastSize: w.Size(), lastProgress: m.now()}
 	}
 	return m, nil
 }
 
-// CheckOnce exécute un passage des trois vérificateurs. Rend les alertes
-// levées (chacune déjà feuillée puis notifiée). err non nil UNIQUEMENT si
+// CheckOnce exécute un passage des vérificateurs (trois de T34a + la
+// détection de chute/bascule bornée de T34b). Rend les alertes levées
+// (chacune déjà feuillée puis notifiée). err non nil UNIQUEMENT si
 // le moniteur lui-même a fauté (feuillage impossible) — les fautes des
 // chaînes surveillées sont des ALERTES, pas des erreurs de CheckOnce.
 func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
 	var alerts []Alert
-	raise := func(cellID string, event byte, reason string, detail []byte) error {
-		a, err := m.raise(ctx, cellID, event, reason, detail)
+	raise := func(cellID string, event byte, verdict byte, reason string, detail []byte) error {
+		a, err := m.raise(ctx, cellID, event, verdict, reason, detail)
 		// Une faute de SINK n'abandonne pas la feuille déjà écrite (a est
 		// alors valide, LeafIndex compris) : elle reste dans les alertes
 		// rendues et le passage continue. Seule une faute de feuillage
@@ -217,7 +273,7 @@ func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
 	// 1+2. Master chain : intégrité, puis récolte des ancrages.
 	masterLeaves, err := m.master.Tick(ctx)
 	if err != nil {
-		if rerr := raise(m.master.cellID, AlertEventChainFault, "master-chain-fault", []byte(err.Error())); rerr != nil {
+		if rerr := raise(m.master.cellID, AlertEventChainFault, AlertVerdictAlarm, "master-chain-fault", []byte(err.Error())); rerr != nil {
 			return alerts, rerr
 		}
 	} else {
@@ -228,7 +284,7 @@ func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
 	for _, c := range m.cells {
 		w := m.watchers[c.CellID]
 		if _, err := w.Tick(ctx); err != nil {
-			if rerr := raise(c.CellID, AlertEventChainFault, "cell-chain-fault", []byte(err.Error())); rerr != nil {
+			if rerr := raise(c.CellID, AlertEventChainFault, AlertVerdictAlarm, "cell-chain-fault", []byte(err.Error())); rerr != nil {
 				return alerts, rerr
 			}
 			// Chaîne fautive : les deux autres vérificateurs restent
@@ -238,6 +294,11 @@ func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
 			return alerts, err
 		}
 		if err := m.checkManifests(c, raise); err != nil {
+			return alerts, err
+		}
+		// T34b : chute (chaîne figée ET ancrage échu) ⇒ bascule bornée ou
+		// escalade humaine (failover.go, D80).
+		if err := m.checkFall(ctx, c.CellID, raise); err != nil {
 			return alerts, err
 		}
 	}
@@ -264,16 +325,16 @@ func (m *Monitor) observeAnchors(leaves []registry.Leaf) {
 // borne §6.2. « Jamais observé » est une faute comme « trop vieux » : une
 // cellule surveillée qui n'ancre pas est indistinguable d'une cellule
 // morte (§6.2 : l'ancrage est cadencé par le TEMPS, pas par l'activité).
-func (m *Monitor) checkAnchorFreshness(cellID string, raise func(string, byte, string, []byte) error) error {
+func (m *Monitor) checkAnchorFreshness(cellID string, raise func(string, byte, byte, string, []byte) error) error {
 	last, ok := m.lastAnchor[cellID]
 	now := m.now()
 	if !ok {
-		return raise(cellID, AlertEventAnchorStale, "anchor-missing",
+		return raise(cellID, AlertEventAnchorStale, AlertVerdictAlarm, "anchor-missing",
 			[]byte(fmt.Sprintf("cellule=%s aucun ancrage observé now=%s", cellID, now.UTC().Format(time.RFC3339Nano))))
 	}
 	lag := now.Sub(last)
 	if lag > m.maxLag {
-		return raise(cellID, AlertEventAnchorStale, "anchor-stale",
+		return raise(cellID, AlertEventAnchorStale, AlertVerdictAlarm, "anchor-stale",
 			[]byte(fmt.Sprintf("cellule=%s dernier=%s lag=%s borne=%s", cellID, last.UTC().Format(time.RFC3339Nano), lag, m.maxLag)))
 	}
 	return nil
@@ -283,13 +344,13 @@ func (m *Monitor) checkAnchorFreshness(cellID string, raise func(string, byte, s
 // cellule à chaque passage : la vérification est O(n) sur des artefacts
 // petits et rares (une transition par changement de composant, §6.3) —
 // rejouer depuis la genèse est le niveau de preuve de §6.3, pas un luxe.
-func (m *Monitor) checkManifests(c CellSpec, raise func(string, byte, string, []byte) error) error {
+func (m *Monitor) checkManifests(c CellSpec, raise func(string, byte, byte, string, []byte) error) error {
 	chain, err := loadManifestChain(c.ManifestDir)
 	if err == nil {
 		err = registry.VerifyManifestChain(chain, c.Verifier)
 	}
 	if err != nil {
-		return raise(c.CellID, AlertEventManifestFault, "manifest-chain-fault", []byte(err.Error()))
+		return raise(c.CellID, AlertEventManifestFault, AlertVerdictAlarm, "manifest-chain-fault", []byte(err.Error()))
 	}
 	return nil
 }
@@ -333,13 +394,15 @@ func loadManifestChain(dir string) ([]registry.SignedManifest, error) {
 // salé — §6.2) PUIS notifie le sink. Ordre obligatoire (§5.3) : une alerte
 // est d'abord une feuille. Feuille impossible ⇒ erreur (faute du moniteur)
 // et PAS de notification d'une alerte qui n'existe pas encore comme
-// preuve.
-func (m *Monitor) raise(ctx context.Context, cellID string, event byte, reason string, detail []byte) (Alert, error) {
+// preuve. Le verdict est un paramètre : Alarm pour les divergences (T34a),
+// Notice pour un acte pré-autorisé du moniteur (déclenchement de bascule
+// dans le budget — T34b).
+func (m *Monitor) raise(ctx context.Context, cellID string, event byte, verdict byte, reason string, detail []byte) (Alert, error) {
 	rec := AlertRecord{
 		Event:      event,
 		CellID:     cellID,
 		DetailHash: sha256.Sum256(detail),
-		Verdict:    AlertVerdictAlarm,
+		Verdict:    verdict,
 		Reason:     reason,
 	}
 	raw, err := MarshalAlertRecord(rec)
