@@ -1,0 +1,65 @@
+# friction_thresholds.yml — T27 (issue #29), D91 : CI bloquante sur les
+# seuils de friction §9.1.
+#
+# ⚠ Fichier PRÊT-À-COPIER : les écritures sous .github/workflows/ ne sont
+# pas poussables par l'agent (403) — copier ce fichier tel quel vers
+# .github/workflows/friction_thresholds.yml pour l'activer.
+#
+# Bloquant (exit 1) : tier1 p95 ajoutée ≥ 5 ms (bras « décision », §9.1) ;
+# tier2 verify p95 > 50 ms (borne haute §9) ; arbitrage ≥ 10 % (danger
+# ≥ 20 %) ; trou d'instrumentation > 0. Le bras « durabilité » (production
+# réelle, synchrone — issue #71) est rapporté et surveillé, hors budget §9.1.
+
+name: friction-thresholds
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/pep/**'
+      - 'src/registry/**'
+      - 'src/supervision/**'
+      - 'tests/p1_friction/**'
+  pull_request:
+    paths:
+      - 'src/pep/**'
+      - 'src/registry/**'
+      - 'src/supervision/**'
+      - 'tests/p1_friction/**'
+
+jobs:
+  friction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Tests du harnais (mutations létales incluses)
+        run: go test ./tests/p1_friction/ -race -count=1
+
+      - name: Tests unitaires des indicateurs
+        run: python3 -m unittest discover -s tests/p1_friction -p 'test_*.py' -v
+
+      - name: Mesure (runner Go — deux bras, D85/D88)
+        run: go run ./tests/p1_friction run -out tests/p1_friction/out
+
+      - name: Verdict de seuils (bloquant, D89/D91)
+        run: python3 tests/p1_friction/leading_indicators.py --in tests/p1_friction/out
+
+      - name: Alarme leafée (D90)
+        run: go run ./tests/p1_friction leaf-report -out tests/p1_friction/out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: friction-report
+          path: |
+            tests/p1_friction/out/measurements.json
+            tests/p1_friction/out/leaves_export.json
+            tests/p1_friction/out/friction_report.json
+          retention-days: 30
