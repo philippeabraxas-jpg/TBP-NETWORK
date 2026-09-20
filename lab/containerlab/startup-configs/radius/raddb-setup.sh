@@ -75,4 +75,13 @@ client localhost {
 }
 EOF
 
+# MAB (D16) : si TBP_MAB_FILE pointe un fichier d'autorisations MAC (format
+# « files » : '<mac>' Cleartext-Password := '<mac>'), il est inclus dans
+# l'authorize — canal MAB instrumenté, jamais silencieux (§5.3).
+if [ -n "${TBP_MAB_FILE:-}" ] && [ -f "$TBP_MAB_FILE" ]; then
+	cat "$TBP_MAB_FILE" >> "$CONF/mods-config/files/authorize"
+	CNT=$(grep -c Cleartext-Password "$TBP_MAB_FILE")
+	echo "raddb-setup: MAB — $CNT MAC autorisée(s)"
+fi
+
 echo "raddb-setup: $CONF prêt (EAP-TLS, PKI du handshake, check_crl=yes)"

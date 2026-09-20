@@ -19,16 +19,23 @@ table inet tbp_p1 {
     # Interfaces (VLAN sub-interfaces du trunk vers le switch)
     define IF_SRV  = eth0.10    # VLAN serveur : brokers/cells
     define IF_AUTH = eth0.20    # VLAN endpoints authentifiés
+    define IF_IOT  = eth0.33    # VLAN IoT (MAB instrumenté, §5.3 — T20)
     define IF_CAPT = eth0.66    # VLAN captif (non enregistrés / remediation)
+    define IF_REM  = eth0.77    # VLAN remédiation (vérification dégradée — T20)
     define IF_MGMT = eth0.99    # mgmt switch <-> radius
 
     # Port du service d'enrôlement hébergé par le routeur (captif)
     define ENROLL_PORT = 8080
+    # Port du collecteur de télémétrie IoT (placeholder T21) — seule voie IoT
+    define TELEMETRY_PORT = 8888
 
     # Compteurs nommés — la preuve d'observabilité du scénario minimal
     counter mur_captif_serveur { }   # tentatives captif -> serveur (bloquées)
     counter mur_captif_autre   { }   # captif -> toute autre destination
+    counter mur_iot_serveur    { }   # tentatives IoT -> serveur (bloquées, T20)
+    counter mur_rem_serveur    { }   # tentatives remédiation -> serveur (T20)
     counter voie_auth_serveur  { }   # trafic authentifié -> serveur (légitime)
+    counter voie_iot_telemetry { }   # télémétrie IoT reçue (instrumentation)
 
     chain forward {
         type filter hook forward priority filter; policy drop;
@@ -44,6 +51,16 @@ table inet tbp_p1 {
             log prefix "tbp-mur captif->serveur: " drop
         iifname $IF_CAPT counter name mur_captif_autre \
             log prefix "tbp-mur captif: " drop
+
+        # IoT (MAB) : jamais vers le serveur — compté et bloqué (§5.3).
+        iifname $IF_IOT oifname $IF_SRV counter name mur_iot_serveur \
+            log prefix "tbp-mur iot->serveur: " drop
+        iifname $IF_IOT counter log prefix "tbp-mur iot: " drop
+
+        # Remédiation : quarantaine — aucun forward, compté et bloqué.
+        iifname $IF_REM oifname $IF_SRV counter name mur_rem_serveur \
+            log prefix "tbp-mur remediation->serveur: " drop
+        iifname $IF_REM counter log prefix "tbp-mur remediation: " drop
 
         # MGMT (switch <-> radius) : pas de forwarding.
         iifname $IF_MGMT counter log prefix "tbp-mur mgmt: " drop
@@ -61,5 +78,14 @@ table inet tbp_p1 {
         # La SEULE voie du captif : l'enrôlement (§5.1 — « atterrit dans le
         # VLAN captif, seule route : enrôlement »).
         iifname $IF_CAPT tcp dport $ENROLL_PORT accept
+
+        # La SEULE voie de l'IoT : le collecteur de télémétrie (instrumenté,
+        # compté — « MAB = canal instrumenté », §5.3 ; placeholder T21).
+        iifname $IF_IOT tcp dport $TELEMETRY_PORT \
+            counter name voie_iot_telemetry accept
+
+        # La SEULE voie de la remédiation : le feedback explicite (§5.3 —
+        # « VLAN de remédiation avec feedback », jamais de rejet aveugle).
+        iifname $IF_REM tcp dport $ENROLL_PORT accept
     }
 }
