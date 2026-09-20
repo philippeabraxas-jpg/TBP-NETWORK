@@ -828,3 +828,79 @@ func TestTombstonesAreBounded(t *testing.T) {
 		t.Fatalf("store.plans contient %d entrées après %d soumissions expirées — attendu ≤ %d (MaxTombstones=%d), la carte grossit sans borne", n, rounds, maxTombstones+1, maxTombstones)
 	}
 }
+
+// TestContractStoreSnapshot couvre la couture T34c (D81) : la console
+// affiche la file d'arbitrage — pending vivants seuls, triés par
+// submittedAt, avec hash scellé et bornes temporelles ; un plan approuvé
+// ou expiré disparaît ; la lecture ne mute rien (aucune feuille).
+func TestContractStoreSnapshot(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	trips := &contractTrips{}
+	s := newContractStore(t, sink, clock, trips, nil)
+
+	if got := s.Snapshot(); len(got) != 0 {
+		t.Fatalf("snapshot initial non vide : %d plans", len(got))
+	}
+	if got := s.PolicyID(); got != arr32(policyV1) {
+		t.Fatalf("PolicyID : %x — attendu %x (claim −1)", got, arr32(policyV1))
+	}
+
+	steps1 := []PlanStep{stepOf("db.write", "users", []byte("p1")), stepOf("db.read", "audit", []byte("p2"))}
+	h1, err := s.Submit(context.Background(), steps1)
+	if err != nil {
+		t.Fatalf("submit 1 : %v", err)
+	}
+	submitted1 := clock.now()
+	clock.advance(time.Minute) // ordre d'arrivée distinct
+	steps2 := []PlanStep{stepOf("fs.delete", "/tmp/x", []byte("p3"))}
+	h2, err := s.Submit(context.Background(), steps2)
+	if err != nil {
+		t.Fatalf("submit 2 : %v", err)
+	}
+	submitted2 := clock.now()
+
+	got := s.Snapshot()
+	if len(got) != 2 {
+		t.Fatalf("snapshot : %d plans — attendu 2", len(got))
+	}
+	// Tri par submittedAt : h1 (plus ancien) en tête.
+	if got[0].Hash != h1 || got[1].Hash != h2 {
+		t.Fatalf("ordre de la file : [%x %x] — attendu [%x %x] (ordre d'arrivée = ordre d'arbitrage)",
+			got[0].Hash[:4], got[1].Hash[:4], h1[:4], h2[:4])
+	}
+	if got[0].Steps != 2 || got[1].Steps != 1 {
+		t.Fatalf("nombre d'étapes : %d et %d — attendu 2 et 1", got[0].Steps, got[1].Steps)
+	}
+	if !got[0].SubmittedAt.Equal(submitted1) || !got[1].SubmittedAt.Equal(submitted2) {
+		t.Fatalf("submittedAt : %v / %v — attendu %v / %v", got[0].SubmittedAt, got[1].SubmittedAt, submitted1, submitted2)
+	}
+	wantExpiry := submitted1.Add(DefaultPendingTTL)
+	if !got[0].ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("expiresAt : %v — attendu %v (submittedAt + PendingTTL)", got[0].ExpiresAt, wantExpiry)
+	}
+
+	// La lecture est pure : aucune feuille, aucune mutation, résultat
+	// stable à l'appel répété.
+	leavesBefore := len(sink.leaves)
+	if again := s.Snapshot(); len(again) != 2 || again[0].Hash != h1 || again[1].Hash != h2 {
+		t.Fatalf("snapshot répété instable : %+v", again)
+	}
+	if len(sink.leaves) != leavesBefore {
+		t.Fatalf("Snapshot a écrit %d feuille(s) — une lecture ne produit aucun événement", len(sink.leaves)-leavesBefore)
+	}
+
+	// Un plan approuvé sort de la file d'arbitrage.
+	approveNominal(t, s, clock, h1)
+	if got := s.Snapshot(); len(got) != 1 || got[0].Hash != h2 {
+		t.Fatalf("snapshot après approbation : %+v — attendu [h2] seul", got)
+	}
+
+	// Un plan dont la vie est passée n'apparaît plus, MÊME si la feuille
+	// d'expiration n'est pas encore écrite (filtre horloge, D81 : la
+	// console ne montre jamais un plan déjà mort).
+	clock.advance(DefaultPendingTTL) // submitted2 + 15 min pile
+	if got := s.Snapshot(); len(got) != 0 {
+		t.Fatalf("snapshot après expiration : %d plans — attendu 0 (expiresAt atteint)", len(got))
+	}
+}
