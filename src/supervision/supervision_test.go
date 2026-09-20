@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,10 +29,25 @@ import (
 var testCtx = context.Background()
 
 // fakeClock : horloge contrôlée (même patron que les autres packages).
-type fakeClock struct{ t time.Time }
+// Mutex : la console T34c lit l'heure depuis des goroutines HTTP pendant
+// que le test avance l'horloge (TestConsoleConcurrentWithCheckOnce,
+// sous -race).
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *fakeClock) now() time.Time          { return c.t }
-func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 // cellFixture : une cellule réelle — log POSIX, clé, ancreur simulé par
 // écriture directe de feuilles KindAnchor dans la master chain.
@@ -255,6 +271,23 @@ func (fx *monitorFixture) check(t *testing.T) []Alert {
 	}
 	fx.sup.n += uint64(len(alerts))
 	return alerts
+}
+
+// cellViewOf trouve la CellView d'une cellule dans un MonitorView — accès
+// lecture seule sous verrou (View()), contrairement aux anciens
+// accesseurs Watcher()/LastAnchor() qui lisaient l'état du moniteur sans
+// son verrou et entraient en course avec CheckOnce dès qu'un lecteur
+// concurrent existe (revue de #70 — c'est exactement ce que fait la
+// console T34c depuis des goroutines HTTP).
+func cellViewOf(t *testing.T, mv MonitorView, cellID string) CellView {
+	t.Helper()
+	for _, cv := range mv.Cells {
+		if cv.CellID == cellID {
+			return cv
+		}
+	}
+	t.Fatalf("cellule %q absente de la vue moniteur", cellID)
+	return CellView{}
 }
 
 // anchorAt écrit un ancrage de la cellule à ts dans la master chain et
@@ -534,8 +567,9 @@ func TestMonitorAnchorStale(t *testing.T) {
 	}
 	// L'ancrage observé reste le vieux — la fraîcheur ne recule pas mais
 	// n'avance pas non plus sans nouvel ancrage.
-	if ts, ok := fx.monitor.LastAnchor(fx.cell.cellID); !ok || !ts.Equal(fx.clk.t.Add(-10*time.Minute)) {
-		t.Fatalf("LastAnchor = %v, %v", ts, ok)
+	cv := cellViewOf(t, fx.monitor.View(), fx.cell.cellID)
+	if cv.AnchorLag < 0 || !cv.LastAnchor.Equal(fx.clk.t.Add(-10*time.Minute)) {
+		t.Fatalf("LastAnchor = %v, lag = %v", cv.LastAnchor, cv.AnchorLag)
 	}
 }
 
@@ -547,6 +581,79 @@ func TestMonitorAnchorMissing(t *testing.T) {
 	alerts := fx.check(t)
 	if len(alerts) != 1 || alerts[0].Record.Reason != "anchor-missing" {
 		t.Fatalf("attendu anchor-missing seul, %+v", alerts)
+	}
+}
+
+// TestMonitorViewRaceFreeUnderConcurrentCheckOnce : la console (T34c) lit
+// depuis des goroutines HTTP pendant que le driver boucle CheckOnce dans
+// la sienne — View() doit être la SEULE façon de lire l'état du moniteur
+// depuis l'extérieur (revue de #70). Les anciens accesseurs
+// Watcher()/LastAnchor() lisaient m.watchers[*].size et la map
+// m.lastAnchor SANS le verrou de Monitor : sous -race, une lecture
+// concurrente pendant que CheckOnce fait grossir la chaîne de la cellule
+// (pas seulement la master chain — Tick() n'écrit w.size QUE quand la
+// taille change, voir watcher.go) détectait une vraie course, prouvée
+// avant ce correctif. Ce test grossit la chaîne de la CELLULE (pas
+// seulement les ancrages) pendant que View() est lu en boucle : garde
+// contre la réintroduction d'un accesseur non verrouillé.
+func TestMonitorViewRaceFreeUnderConcurrentCheckOnce(t *testing.T) {
+	fx := newMonitorFixture(t)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	errs := make(chan error, 2)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			fx.clk.mu.Lock()
+			fx.clk.t = fx.clk.t.Add(time.Second)
+			now := fx.clk.t
+			fx.clk.mu.Unlock()
+			if _, err := fx.cell.log.Append(testCtx, registry.Leaf{
+				Kind:        registry.KindDecision,
+				CellID:      fx.cell.cellID,
+				PayloadHash: registry.HashPayload(fx.cell.salt, []byte("concurrent")),
+				Timestamp:   now.UnixNano(),
+			}); err != nil {
+				errs <- fmt.Errorf("append: %w", err)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+			if _, err := fx.monitor.CheckOnce(testCtx); err != nil {
+				errs <- fmt.Errorf("CheckOnce: %w", err)
+				return
+			}
+			if i > 50 {
+				return
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = fx.monitor.View()
+		}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 

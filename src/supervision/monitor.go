@@ -22,6 +22,10 @@
 // FailoverTrigger vers #30, budget glissant d'une heure, escalade humaine
 // au-delà.
 //
+// T34c ajoute View() : instantané lecture seule pour la console (D82),
+// pris sous le même verrou que CheckOnce — jamais un état à moitié
+// reconstruit. Le moniteur reste SANS goroutine propre.
+//
 // Chaque divergence = feuille KindSupervision dans le log de supervision
 // (record « TBPS1 » hashé-salé, alert.go) PUIS alarme vers la couture T14
 // (AlarmSink). Jamais l'inverse, jamais sans la feuille : §5.3 — une
@@ -47,6 +51,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/mod/sumdb/note"
@@ -147,7 +152,7 @@ type MonitorOptions struct {
 	MaxFailoverTriggers int
 }
 
-// Monitor orchestre les vérificateurs. Pas de goroutine propre en T34a :
+// Monitor orchestre les vérificateurs. Pas de goroutine propre :
 // CheckOnce est le cœur testable ; la cadence est un choix de déploiement
 // (l'appelant boucle — la latence de détection est réglée là, pas ici).
 type Monitor struct {
@@ -165,6 +170,14 @@ type Monitor struct {
 	maxTriggers  int
 	triggerTimes []time.Time           // déclenchements dans la fenêtre glissante (borné)
 	falls        map[string]*fallState // par CellID
+
+	// mu sérialise CheckOnce et View (console T34c) : le moniteur reste
+	// SANS goroutine propre (le driver cadence CheckOnce), mais la console
+	// lit depuis les goroutines HTTP — l'instantané est pris sous le même
+	// verrou que le passage de vérification, jamais à moitié reconstruit.
+	// Un sink d'alarme ne doit JAMAIS rappeler le moniteur (CheckOnce
+	// tient le verrou pendant la notification — ce serait un interblocage).
+	mu sync.Mutex
 }
 
 // NewMonitor construit les watchers (checkpoint initial de chaque chaîne
@@ -256,6 +269,8 @@ func NewMonitor(ctx context.Context, opts MonitorOptions) (*Monitor, error) {
 // le moniteur lui-même a fauté (feuillage impossible) — les fautes des
 // chaînes surveillées sont des ALERTES, pas des erreurs de CheckOnce.
 func (m *Monitor) CheckOnce(ctx context.Context) ([]Alert, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var alerts []Alert
 	raise := func(cellID string, event byte, verdict byte, reason string, detail []byte) error {
 		a, err := m.raise(ctx, cellID, event, verdict, reason, detail)
@@ -437,13 +452,65 @@ func (m *Monitor) raise(ctx context.Context, cellID string, event byte, verdict 
 	return a, nil
 }
 
-// LastAnchor rend le dernier ancrage observé pour une cellule (console
-// T34c, tests). ok=false : jamais observé.
-func (m *Monitor) LastAnchor(cellID string) (time.Time, bool) {
-	ts, ok := m.lastAnchor[cellID]
-	return ts, ok
+// CellView est la lecture figée d'une cellule surveillée (console T34c,
+// D82) : des FAITS bruts seulement — la logique de détection (fraîcheur
+// §6.2, chute D80) n'est pas rejouée ici pour ne jamais dériver des
+// vérificateurs. L'interprétation (stale, chute) est faite à l'affichage,
+// clairement marquée comme dérivée.
+type CellView struct {
+	CellID         string
+	ChainSize      uint64        // taille vérifiée de la chaîne lue
+	LastAnchor     time.Time     // dernier ancrage observé — zéro si jamais
+	AnchorLag      time.Duration // âge du dernier ancrage — −1 si jamais observé
+	LastProgress   time.Time     // dernière progression de la chaîne lue
+	EpisodeHandled bool          // épisode de chute traité (bascule déclenchée ou refusée) — la reprise le réarme
 }
 
-// Watcher rend le ChainWatcher d'une cellule (taille vérifiée — console
-// T34c, détection de chute T34b). nil si inconnue.
-func (m *Monitor) Watcher(cellID string) *ChainWatcher { return m.watchers[cellID] }
+// MonitorView est l'instantané lecture seule du moniteur (console T34c) :
+// pris sous le même verrou que CheckOnce — jamais un état à moitié
+// reconstruit. Lecture rare (console d'opérateur) : bloquer un passage de
+// vérification quelques millisecondes est le prix d'une copie cohérente.
+type MonitorView struct {
+	Now          time.Time
+	MaxAnchorLag time.Duration // borne de fraîcheur d'ancrage (§6.2)
+	FallDelay    time.Duration // seuil de chute (T34b, D80)
+	MaxTriggers  int           // budget de bascules (fenêtre glissante 1 h)
+	TriggersHour int           // bascules déclenchées dans la fenêtre courante
+	Cells        []CellView    // dans l'ordre de configuration — déterministe
+}
+
+// View rend l'instantané. Pur : aucune feuille, aucune alarme, aucune
+// mutation — la console ne peut pas changer ce qu'elle observe (D81).
+func (m *Monitor) View() MonitorView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	v := MonitorView{
+		Now:          now,
+		MaxAnchorLag: m.maxLag,
+		FallDelay:    m.fallDelay,
+		MaxTriggers:  m.maxTriggers,
+		Cells:        make([]CellView, 0, len(m.cells)),
+	}
+	for _, ts := range m.triggerTimes {
+		if ts.After(now.Add(-failoverWindow)) {
+			v.TriggersHour++
+		}
+	}
+	for _, c := range m.cells {
+		fs := m.falls[c.CellID]
+		cv := CellView{
+			CellID:         c.CellID,
+			ChainSize:      m.watchers[c.CellID].Size(),
+			LastProgress:   fs.lastProgress,
+			EpisodeHandled: fs.episodeHandled,
+			AnchorLag:      -1,
+		}
+		if last, ok := m.lastAnchor[c.CellID]; ok {
+			cv.LastAnchor = last
+			cv.AnchorLag = now.Sub(last)
+		}
+		v.Cells = append(v.Cells, cv)
+	}
+	return v
+}
