@@ -1,0 +1,139 @@
+# tbp-translator.service — unit systemd durcie du traducteur (T24, spec §4.5).
+#
+# Le traducteur (vLLM/PyTorch, modèle open-weights 7–8B local) est un
+# paramètre de FRICTION, pas de sécurité (§4.5 : « the executed action is
+# the translated action » — l'action produite sera jugée par les règles,
+# sans exception). Ce fichier confine le PROCESSUS : il ne protège pas le
+# verdict, il réduit ce qu'un traducteur compromis peut toucher.
+#
+# RAPPEL DE SPEC : dm-verity protège l'image AU REPOS, pas la surface
+# runtime — une image vérifiée peut être compromise une fois le processus
+# lancé. Ce fichier est la couche runtime ; dm-verity reste la couche
+# repos. Ne pas confondre les deux dans la doc de déploiement.
+#
+# Installation :
+#   useradd --system --home-dir /var/lib/tbp-translator --shell /usr/sbin/nologin tbp-translator
+#   install -m 0644 tbp-translator.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now tbp-translator
+#   src/translator/audit_confinement.sh            # vérification post-déploiement
+#
+# L'égress réseau n'est PAS garanti par cette unit (pas de netns dédié en
+# v1 : le service partage le netns hôte pour joindre le broker en boucle
+# locale). Le déni de sortie est porté par nftables hôte (config/nftables/)
+# — audit_confinement.sh vérifie et RAPPORTE cette dépendance au lieu de
+# la prétendre fermée (§5.3 : un trou non instrumenté est une porte).
+
+[Unit]
+Description=TBP translator (vLLM local, confiné — spec §4.5)
+After=local-fs.target
+# Le modèle doit être présent AVANT le démarrage — fail-closed, jamais de
+# téléchargement au runtime (HF_HUB_OFFLINE=1 ci-dessous, §4.5 : local).
+ConditionPathExists=/var/lib/tbp-translator/model
+# Le budget de redémarrage vit dans [Unit] (StartLimitIntervalSec y est
+# reconnu ; dans [Service] il est ignoré par les systemd ≤ 252).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tbp-translator
+Group=tbp-translator
+
+# vLLM sert en boucle locale UNIQUEMENT : seul le broker de la cellule le
+# consomme (§5.1). --enforce-eager : pas de JIT Triton/Inductor — c'est ce
+# qui rend MemoryDenyWriteExecute=yes possible (voir l'exception documentée
+# plus bas). Adapter le chemin du binaire au déploiement (venv, /usr/local…).
+ExecStart=/usr/local/bin/vllm serve /var/lib/tbp-translator/model \
+	--host 127.0.0.1 --port 8100 --enforce-eager
+
+# Local par doctrine : jamais de fallback cloud (§4.5). Le cache HF vit
+# dans le StateDirectory, en lecture/écriture explicite.
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=HF_HOME=/var/lib/tbp-translator/hf-cache
+Environment=HOME=/var/lib/tbp-translator
+
+# --- Capacités : CAP_DROP_ALL (spec §4.5) -------------------------------
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# --- Appels système : seccomp strict ------------------------------------
+# @system-service = base stricte de systemd ; EPERM (pas SIGSYS) pour
+# laisser aux bibliothèques leurs fallbacks propres. À affiner par
+# calibration (procédure dans le README) — jamais à élargir en silence.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# --- Réseau : familles restreintes --------------------------------------
+# Boucle locale TCP (broker → traducteur) + sockets Unix internes de vLLM.
+# PAS d'AF_NETLINK/AF_PACKET en v1 mono-nœud. EXCEPTION DOCUMENTÉE : NCCL
+# (multi-GPU) utilise netlink — ajouter AF_NETLINK seulement si NCCL est
+# effectivement déployé, et le noter dans la doc du déploiement.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# --- Système de fichiers -------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+StateDirectory=tbp-translator
+ReadWritePaths=/var/lib/tbp-translator
+UMask=0077
+
+# --- Périphériques : GPU par liste explicite ----------------------------
+# EXCEPTION DOCUMENTÉE (justifiée, pas silencieuse) : PyTorch/CUDA exige
+# les nœuds /dev/nvidia*. PrivateDevices=yes masque tout le reste de /dev.
+# Déploiement CPU-only : retirer les DeviceAllow ci-dessous.
+PrivateDevices=yes
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+DeviceAllow=/dev/nvidia0 rw
+
+# --- Kernel : tout ce qui n'est pas nécessaire est fermé -----------------
+# NB : ProtectKernelTunnels est volontairement ABSENT — CE N'EST PAS une
+# clé systemd reconnue (aucune version ne l'a jamais eue ; à ne pas
+# confondre avec ProtectKernelTunables ci-dessous, qui EST réelle et
+# active). Reproduit par `systemd-analyze verify` : la clé inconnue est
+# rejetée avec « Unknown key name 'ProtectKernelTunnels' in section
+# 'Service', ignoring » — visible sur stderr/journal à la vérification,
+# mais qui NE bloque PAS le démarrage et n'apparaît PAS dans `systemctl
+# status` : une directive ainsi ignorée à l'exécution reste facile à
+# manquer opérationnellement, donc toujours pire qu'une directive absente
+# et documentée (§5.3). Les tunnels exigeraient de toute façon AF_NETLINK,
+# déjà refusé par RestrictAddressFamilies.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# --- Mémoire W^X ---------------------------------------------------------
+# yes PAR DÉFAUT : rendu possible par --enforce-eager (D41). EXCEPTION
+# DOCUMENTÉE : un déploiement qui exige torch.compile (JIT Triton/Inductor,
+# qui écrit du code exécutable au runtime) doit passer cette directive à
+# no, le justifier dans sa doc de déploiement, et compenser (profil seccomp
+# conteneur seccomp-translator.json, surveillance renforcée). Ne jamais
+# basculer en silence : c'est un élargissement de surface, pas un réglage.
+MemoryDenyWriteExecute=yes
+
+# --- Ressources et cycle de vie ------------------------------------------
+# vLLM ouvre beaucoup de descripteurs (workers, mmap du modèle) — borne
+# haute explicite, à dimensionner à la cellule.
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tbp-translator
+
+[Install]
+WantedBy=multi-user.target
