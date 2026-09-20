@@ -692,7 +692,7 @@ func TestContractStoreSaturation(t *testing.T) {
 		sink := &stubSink{}
 		clock := &contractClock{t: contractEpochT0}
 		trips := &contractTrips{}
-		s := newContractStore(t, sink, clock, &contractTrips{}, func(o *ContractOptions) { o.MaxApproved = 1 })
+		s := newContractStore(t, sink, clock, trips, func(o *ContractOptions) { o.MaxApproved = 1 })
 		h1, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r1", nil)})
 		if err != nil {
 			t.Fatalf("Submit 1: %v", err)
