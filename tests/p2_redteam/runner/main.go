@@ -71,6 +71,15 @@ func cmdRun(args []string) int {
 			return 1
 		}
 	}
+	if report.CorrelationFault != "" {
+		// Trou de couverture qu'aucun scénario n'a pu s'attribuer (ex.
+		// feuille orpheline après le dernier scénario exécuté) — un
+		// scénario ne peut pas être marqué NON TENU pour une faute qui
+		// n'est pas la sienne, mais le rapport ne doit jamais dire
+		// « tenu » sans le dire aussi.
+		fmt.Printf("\nredteam: CORRÉLATION — %s — campagne ROUGE\n", report.CorrelationFault)
+		return 1
+	}
 	fmt.Println("\nredteam: mécanismes exécutés tenus — verdict transversal : assert_logged.py")
 	return 0
 }

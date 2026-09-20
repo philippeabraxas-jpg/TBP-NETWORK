@@ -118,7 +118,41 @@ func TestLeafCorrelationExact(t *testing.T) {
 			t.Errorf("%s : comptes sink ≠ scan", s.ID)
 		}
 	}
+	if r.CorrelationFault != "" {
+		t.Errorf("CorrelationFault non vide en nominal : %q", r.CorrelationFault)
+	}
 }
+
+// TestOrphanLeafNeverSilentlyDropped : un trou de couverture qui ne tombe
+// dans la plage d'AUCUN scénario (ex. feuille orpheline après le dernier
+// scénario exécuté) doit rester visible dans le rapport — jamais un
+// rapport qui dit « tout tenu » alors que correlate() a trouvé quelque
+// chose (revue #28). Synthétique : construit un cas que la campagne
+// nominale ne produit jamais (tous les scénarios s'attribuent leurs
+// propres feuilles), pour prouver que le filet existe indépendamment.
+func TestOrphanLeafNeverSilentlyDropped(t *testing.T) {
+	report := &RunReport{
+		Scenarios: []ScenarioResult{
+			{ID: "S4", Status: "executed", LeafFirst: 0, LeafLast: 2, Leaves: map[string]uint64{"1": 3}, Held: boolPtr(true)},
+			{ID: "S5", Status: "executed", LeafFirst: 3, LeafLast: 5, Leaves: map[string]uint64{"1": 3}, Held: boolPtr(true)},
+		},
+	}
+	leaves := make([]leafRecord, 7) // index 6 est orphelin : hors de toute plage de scénario
+	for i := range leaves {
+		leaves[i] = leafRecord{Seq: uint64(i), Kind: 1}
+	}
+	applyCorrelation(report, leaves)
+	if report.CorrelationFault == "" {
+		t.Fatal("feuille orpheline non reportée : CorrelationFault vide alors que le registre a une feuille non couverte")
+	}
+	for _, s := range report.Scenarios {
+		if s.Held == nil || !*s.Held {
+			t.Errorf("%s marqué non tenu pour une faute qui n'est pas la sienne : %+v", s.ID, s)
+		}
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 // TestMutationsLethal : chaque mutation bascule SON scénario — et ne fait
 // pas échouer la campagne pour une faute de harnais (err != nil).

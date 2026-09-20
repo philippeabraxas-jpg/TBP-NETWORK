@@ -97,6 +97,12 @@ type RunReport struct {
 	GeneratedAt   string           `json:"generated_at"`
 	Scenarios     []ScenarioResult `json:"scenarios"`
 	DeclaredHoles []DeclaredHole   `json:"declared_holes"`
+	// CorrelationFault porte un trou de couverture (correlate()) qu'AUCUN
+	// scénario n'a pu s'attribuer (ex. feuille orpheline en toute fin de
+	// registre, hors de la plage du dernier scénario exécuté) — voir Run().
+	// Non vide = le rapport ment s'il affiche encore tous les scénarios
+	// TENU : c'est le filet qui empêche ce cas de disparaître en silence.
+	CorrelationFault string `json:"correlation_fault,omitempty"`
 }
 
 // seed32 dérive une graine Ed25519 déterministe de 32 octets à partir
@@ -906,18 +912,7 @@ func Run(ctx context.Context, cfg Config) (*RunReport, error) {
 	// Auto-corrélation (D94, côté runner) : pour chaque scénario exécuté,
 	// les comptes par kind du sink doivent égaler le scan sur [first,last] ;
 	// l'union des plages doit couvrir le registre sans trou.
-	if bad := correlate(report, leaves); bad != "" {
-		// La corrélation fait partie des mécanismes : un trou la fait
-		// basculer le scénario fautif en non tenu — jamais masqué.
-		for i := range report.Scenarios {
-			s := &report.Scenarios[i]
-			if s.Status == "executed" && s.Held != nil && *s.Held && correlationFails(*s, leaves) {
-				f := false
-				s.Held = &f
-				s.Detail += " | CORRÉLATION : " + bad
-			}
-		}
-	}
+	applyCorrelation(report, leaves)
 
 	report.DeclaredHoles = []DeclaredHole{
 		{ID: "S3-usb", Description: "exfiltration USB — prévention hors réseau (compensation endpoint USBGuard/GPO/BIOS-IOMMU) ; constatée, non testable au niveau réseau"},
@@ -976,6 +971,31 @@ func correlate(report *RunReport, leaves []leafRecord) string {
 		return fmt.Sprintf("registre %d feuilles, plages couvrent %d — feuilles orphelines ou manquantes", len(leaves), covered)
 	}
 	return ""
+}
+
+// applyCorrelation recoupe le rapport au scan : un trou fait basculer le
+// scénario fautif en non tenu quand il est identifiable, mais un trou de
+// COUVERTURE (ex. feuille orpheline après le dernier scénario exécuté) ne
+// tombe dans la plage [first,last] d'AUCUN scénario — aucun ne bascule
+// alors, et le trou serait perdu s'il n'était reporté QUE via le
+// basculement individuel. report.CorrelationFault est le filet : porté
+// inconditionnellement, jamais subordonné à une attribution qui peut
+// échouer (revue #28 : un rapport qui dit « tout tenu » alors que
+// correlate() a trouvé quelque chose ment).
+func applyCorrelation(report *RunReport, leaves []leafRecord) {
+	bad := correlate(report, leaves)
+	if bad == "" {
+		return
+	}
+	report.CorrelationFault = bad
+	for i := range report.Scenarios {
+		s := &report.Scenarios[i]
+		if s.Status == "executed" && s.Held != nil && *s.Held && correlationFails(*s, leaves) {
+			f := false
+			s.Held = &f
+			s.Detail += " | CORRÉLATION : " + bad
+		}
+	}
 }
 
 // writeJSONFile sérialise indenté (artefact de preuve, relu humainement).
