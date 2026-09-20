@@ -45,12 +45,13 @@ Timestamp}` where `PayloadHash = HashPayload(salt, payload)` and the salt
 | 9    | promotion | — |
 | 10   | plan contract event (T30) | `TBPL1` (`src/pep/plan_contract.go`) |
 | 11   | attested state manifest event (T31, §6.3) | `TBPL2` (`manifest.go`, below) |
+| 12   | supervision alert — independent monitor's finding (T34, §6.2/§7.1) | `TBPS1` (`src/supervision/alert.go`) |
 
 (`—` = kind reserved in the whitelist; the producing subsystem lands with
 its own task. The record prefixes shown are the domain-separation strings
 of the hashed payloads, not file formats.)
 
-Marshal and unmarshal whitelists cover exactly kinds 1–11 — a kind unknown
+Marshal and unmarshal whitelists cover exactly kinds 1–12 — a kind unknown
 to the binary is rejected on read, never silently dropped (lesson of #65:
 both directions must agree).
 
