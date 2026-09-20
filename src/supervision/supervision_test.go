@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,10 +29,25 @@ import (
 var testCtx = context.Background()
 
 // fakeClock : horloge contrôlée (même patron que les autres packages).
-type fakeClock struct{ t time.Time }
+// Mutex : la console T34c lit l'heure depuis des goroutines HTTP pendant
+// que le test avance l'horloge (TestConsoleConcurrentWithCheckOnce,
+// sous -race).
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *fakeClock) now() time.Time          { return c.t }
-func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 // cellFixture : une cellule réelle — log POSIX, clé, ancreur simulé par
 // écriture directe de feuilles KindAnchor dans la master chain.
