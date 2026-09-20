@@ -258,6 +258,9 @@ d28455a20127045021fe31dfa154a261626bf854046fd227a0590114ad01781a7462702f72656769
   **optionnelles** nouvelles — et encore : les validateurs v1 rejetteront
   ces jetons (clé inconnue), donc tout ajout est de fait incompatible et
   exige `v+1`. Règle simple : **on ne touche pas v1, on écrit v2**.
+- Versions connues : **v1** = le schéma initial (T8) ; **v2** = v1 + clé
+  −8 `plan_seal` optionnelle (§12, T30). Un validateur à jour accepte
+  `v ∈ {1, 2}` — et rien d'autre.
 
 ## 11 · Non-buts
 
@@ -268,6 +271,37 @@ d28455a20127045021fe31dfa154a261626bf854046fd227a0590114ad01781a7462702f72656769
   trousseau est épinglé à la genèse.
 - Ce schéma ne couvre ni le handshake inter-entités (§3), ni le jeton
   d'époque (§7.2, genèse T3), ni les feuilles du registre (T4).
+
+## 12 · Addendum v2 — clé −8 `plan_seal` (T30, issue [#31](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/31), 2026-09-20)
+
+§4.2 : *« le plan approuvé est un contrat — l'exécution est vérifiée contre
+le hash du plan validé ; déviation = refus »*. Le lien jeton ↔ plan approuvé
+est porté **dans l'objet signé** (pas « à côté », en feuille seulement) : un
+broker compromis intra-époque (résidu assumé §7.6) contrôle ce qu'il écrit
+dans ses propres feuilles, mais pas la `Sig_structure` COSE une fois signée
+— l'artefact porte la preuve, vérifiable par quiconque détient la clé
+publique de la cellule (« a lied decision remains attributable », §1).
+
+| Clé | Nom | Type CDDL | Présence | Contraintes | Réf. |
+|---|---|---|---|---|---|
+| −8 | `plan_seal` | `bstr .size 32` | optionnel (v2 uniquement) | hash du plan approuvé (`TBPC1`, `plan_contract.go`) ; présent ⇒ le jeton a été émis comme étape consommée d'un plan arbitré ; le PEP le recopie dans sa feuille d'exécution (record `TBPD2`) | §4.2 |
+
+Règles de versionnement (application de §10) :
+
+- **v2 = v1 + clé −8 optionnelle.** Rien d'autre ne change : ni types, ni
+  bornes, ni sémantique des claims existantes.
+- L'émetteur à jour émet **`v = 2` systématiquement** (avec ou sans −8) ;
+  `v = 1` reste accepté par le validateur — mais **`v = 1` avec une clé −8
+  est un rejet** (en v1 cette clé est inconnue : `schema-violation`).
+- `v ∉ {1, 2}` = `unsupported-version`, comme avant.
+- **Deux « −8 » sans rapport** (revue #31) : l'en-tête protégé COSE porte
+  `alg = EdDSA` sous l'identifiant d'algorithme `−8` du registre COSE
+  (RFC 9053) ; la claim `−8` du payload vit dans l'espace des claims CWT
+  privées TBP. Aucune collision — deux espaces de noms disjoints — mais le
+  lecteur pressé est prévenu.
+- Taille fil : ≈ 402 octets avec `plan_seal` (370 + 32 + overhead CBOR) —
+  la borne de 1 024 octets (§4) est inchangée.
+- Le vecteur d'exemple §9 reste un jeton **v1** valide — figé, non réédité.
 
 ---
 
