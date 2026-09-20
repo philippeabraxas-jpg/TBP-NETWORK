@@ -41,10 +41,32 @@ content rather than metadata is off-doctrine, not just out of scope.
   fenêtre de mesure chaîne les intervalles, le post-traitement lit les
   trous. Borne `maxRecordsPerMsg` = 64 par datagramme (excédent compté).
 
+## État : pipeline d'agrégation implémenté (T22)
+
+`aggregate.go` + `retention.go` — décisions D21–D26 (plan et preuves sur
+l'issue [#27](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/27)) :
+
+- **Couture `RecordSink`** (D21) : l'agrégateur se branche sur
+  l'exporteur T21 sans le modifier.
+- **Fenêtres tumbling (défaut 60 s), exactement une feuille par fenêtre
+  scellée — y compris vide** (D22) : la continuité de la piste est un
+  signal, un trou de fenêtre est une anomalie détectable par T23.
+- **Agrégat hash-only « TBAG1 »** (D23, §4.5 par analogie) : flux,
+  octets, top-k de destinations **hachées+salées**, racine de Merkle des
+  engagements TBTM1 des records (le même engagement que la feuille record
+  de T21 — l'auditeur rattache chaque record à sa fenêtre).
+- **Rétention explicite et tracée** (D24, §6.2) : les bruts restent
+  locaux, store borné (1440 lots = 24 h à 60 s) à TTL (défaut 24 h) ;
+  chaque purge laisse une feuille `KindRetentionPurge` (manifeste
+  « TBRP1 » haché+salé). Pas de trace ⇒ pas de destruction (§9.1).
+- **Vérifiabilité auditeur** (D25) : `RetentionStore.Verify` rejoue
+  Merkle → TBAG1 → hash salé tant que le brut existe ; `ErrBatchGone`
+  après purge — c'est le sens de la rétention.
+- Fail-closed et borné partout (D26) : store plein ⇒ `ErrStoreFull` +
+  alarme `retention-store-full`, jamais de destruction pour faire de la
+  place ; erreurs de feuille propagées à l'appelant (§5.3).
+
 ## Not implemented here (remaining placeholders)
 
-- Aggregation pipeline before writing to the registry (**T22**) — the
-  `RecordSink` seam is ready (§4.5: "aggregates + corpus hash — content
-  never in the clear" applies here by analogy).
 - The "drip-feed" detection itself (**T23**) — thresholds, sliding
   windows, on aggregated metadata only.
