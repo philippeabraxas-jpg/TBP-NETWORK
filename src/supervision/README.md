@@ -38,6 +38,23 @@ supervision, record « TBPS1 » hashé-salé (le sel reste chez le moniteur),
 jamais sans la feuille : §5.3 — une alerte non feuillée est une alerte
 silencieuse.
 
+## Chemin froid (§9.1)
+
+`CheckOnce` lit des fichiers et vérifie des preuves — il n'est appelé par
+aucun composant du chemin chaud (broker/pep n'importent pas ce package,
+testé par `TestNoHotPathImport`). Latence ajoutée au tier-1 : **0**. La
+cadence de tick est un choix de déploiement (l'appelant boucle).
+
+## Lecture vérifiée d'un log qu'on n'écrit pas
+
+`ChainWatcher` est construit sur le côté lecture du client Tessera v1.0.4
+(`FileFetcher` local, `LogStateTracker`, `GetEntryBundle`,
+`FetchLeafHashes`) — aucun serveur HTTP requis en P1 (même machine). Le
+checkpoint initial est vérifié à la construction (fail-closed) ; un
+`bootstrapFrom` permet un audit complet O(n) à l'ouverture (utilisé pour
+la master chain et les cellules — borne assumée du pilote P1), puis le
+régime permanent est incrémental O(log n).
+
 ## Livré (T34b) — détection de chute et bascule bornée (D80)
 
 **Chute** = les DEUX signaux de vie perdus en même temps depuis
@@ -63,23 +80,6 @@ aucune bascule automatique supplémentaire. Un déclenchement accepté =
 feuille event=4 verdict=Notice (constat d'acte pré-autorisé, feuillé comme
 toute alerte). Une chute n'est traitée qu'une fois par épisode ; la
 reprise (feuille nouvelle ou ancrage frais) réarme le détecteur.
-
-## Chemin froid (§9.1)
-
-`CheckOnce` lit des fichiers et vérifie des preuves — il n'est appelé par
-aucun composant du chemin chaud (broker/pep n'importent pas ce package,
-testé par `TestNoHotPathImport`). Latence ajoutée au tier-1 : **0**. La
-cadence de tick est un choix de déploiement (l'appelant boucle).
-
-## Lecture vérifiée d'un log qu'on n'écrit pas
-
-`ChainWatcher` est construit sur le côté lecture du client Tessera v1.0.4
-(`FileFetcher` local, `LogStateTracker`, `GetEntryBundle`,
-`FetchLeafHashes`) — aucun serveur HTTP requis en P1 (même machine). Le
-checkpoint initial est vérifié à la construction (fail-closed) ; un
-`bootstrapFrom` permet un audit complet O(n) à l'ouverture (utilisé pour
-la master chain et les cellules — borne assumée du pilote P1), puis le
-régime permanent est incrémental O(log n).
 
 ## À venir sur cette issue
 
