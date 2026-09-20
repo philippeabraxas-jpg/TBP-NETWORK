@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
@@ -159,6 +160,14 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 	if err != nil {
 		t.Fatalf("NewOPAClient: %v", err)
 	}
+	// Les traducteurs fixes de test sans classe explicite empruntent le
+	// chemin classe W (défaut §5.3) : on attache une preuve de quorum
+	// valide pour rester sur le chemin nominal — les chemins de REFUS du
+	// quorum ont leurs tests dédiés (quorum_epoch_test.go).
+	if st, ok := tr.(staticTranslator); ok && st.err == nil && st.tr.Class == nil && len(st.tr.QuorumProof) == 0 {
+		st.tr.QuorumProof = mintTestProof(t, st.tr.Action, st.tr.Resource, 7)
+		tr = st
+	}
 	b, err := NewBroker(BrokerOptions{
 		CellID:     "tbp/registry/cell-test-01",
 		Salt:       testSalt,
@@ -167,6 +176,7 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 		Translator: tr,
 		Issuer:     issuer,
 		Epochs:     StaticEpoch(7),
+		Quorum:     newTestQuorumGate(t, leaves),
 		OnTrip:     trips.trip,
 	})
 	if err != nil {
@@ -200,14 +210,109 @@ func newTestValidator(t *testing.T, issuer *Issuer, signer *DevSigner, leaves *l
 	return v
 }
 
-// simpleIntent est une demande structurée minimale (action + resource).
-func simpleIntent(action, resource string) string {
-	return fmt.Sprintf(`{"action":%q,"resource":%q}`, action, resource)
+// simpleIntent est une demande structurée minimale (action + resource) —
+// avec preuve de quorum valide : la classe par défaut est W (§5.3) et le
+// chemin d'allow passe donc le QuorumGate (§7.5, T29).
+func simpleIntent(t *testing.T, action, resource string) string {
+	t.Helper()
+	return fmt.Sprintf(`{"action":%q,"resource":%q,"quorum_proof":%q}`, action, resource, mintTestProofHex(t, action, resource, 7))
 }
 
-// passportIntent est une demande structurée avec passeport (§4.1-bis).
-func passportIntent(resource string, volumeMax, windowS uint64) string {
-	return fmt.Sprintf(`{"action":"http.send","resource":%[1]q,"quota":{"resource":%[1]q,"operation":"POST","volume_max":%[2]d,"window_s":%[3]d}}`, resource, volumeMax, windowS)
+// passportIntent est une demande structurée avec passeport (§4.1-bis) —
+// même remarque : preuve de quorum valide attachée (classe W par défaut).
+func passportIntent(t *testing.T, resource string, volumeMax, windowS uint64) string {
+	t.Helper()
+	return fmt.Sprintf(`{"action":"http.send","resource":%[1]q,"quota":{"resource":%[1]q,"operation":"POST","volume_max":%[2]d,"window_s":%[3]d},"quorum_proof":%[4]q}`,
+		resource, volumeMax, windowS, mintTestProofHex(t, "http.send", resource, 7))
+}
+
+// ---------------------------------------------------------------------------
+// Couture quorum de test (§7.5, T29)
+// ---------------------------------------------------------------------------
+//
+// VRAI cluster.QuorumGate 2-of-3 — pas de double permissif : les chemins
+// d'allow des tests existants traversent la vérification cryptographique
+// réelle avec des preuves signées. Les clés sont déterministes (seeds
+// fixes de test, jamais de production). Les chemins de REFUS du quorum
+// (gate absent, preuve absente/insuffisante/mal liée) ont leurs tests
+// dédiés dans quorum_epoch_test.go.
+
+// testCtrlSeeds : trois seeds Ed25519 de test (aucune valeur — comme
+// testSeed, RFC 8032 §7.1 pour le signataire).
+var testCtrlSeeds = []string{
+	"4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+	"c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+	"833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42",
+}
+
+// testControllers dérive le trousseau des contrôleurs de test (key_id 1..3).
+func testControllers(t *testing.T) (pubs map[int]ed25519.PublicKey, privs map[int]ed25519.PrivateKey) {
+	t.Helper()
+	pubs = map[int]ed25519.PublicKey{}
+	privs = map[int]ed25519.PrivateKey{}
+	for i, s := range testCtrlSeeds {
+		seed, err := hex.DecodeString(s)
+		if err != nil || len(seed) != ed25519.SeedSize {
+			t.Fatalf("seed contrôleur %d illisible", i+1)
+		}
+		priv := ed25519.NewKeyFromSeed(seed)
+		privs[i+1] = priv
+		pubs[i+1] = priv.Public().(ed25519.PublicKey)
+	}
+	return pubs, privs
+}
+
+// newTestQuorumGate assemble un QuorumGate réel (2-of-3) sur le registre
+// de feuilles du test — les feuilles KindQuorum y sont donc observables.
+func newTestQuorumGate(t *testing.T, leaves *leafRecorder) *cluster.QuorumGate {
+	t.Helper()
+	pubs, _ := testControllers(t)
+	gate, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
+		CellID: "tbp/registry/cell-test-01", Salt: testSalt, Leaves: leaves,
+		Controllers: pubs, K: 2, PolicyID: testPolicyID,
+	})
+	if err != nil {
+		t.Fatalf("NewQuorumGate: %v", err)
+	}
+	return gate
+}
+
+// mintTestProof frappe une preuve de quorum liée à (action, resource,
+// epoch, testPolicyID), signée par les contrôleurs désignés (défaut 1 et
+// 2 — quorum 2-of-3), TTL 120 s.
+func mintTestProof(t *testing.T, action, resource string, epoch uint64, signers ...int) []byte {
+	t.Helper()
+	_, privs := testControllers(t)
+	if len(signers) == 0 {
+		signers = []int{1, 2}
+	}
+	st := cluster.QuorumStatement{
+		Action:   action,
+		Resource: resource,
+		PolicyID: hex.EncodeToString(testPolicyID[:]),
+		Epoch:    epoch,
+		Expiry:   time.Now().UTC().Add(120 * time.Second).Format(time.RFC3339),
+	}
+	canonical, err := json.Marshal(st)
+	if err != nil {
+		t.Fatalf("statement : %v", err)
+	}
+	proof := cluster.QuorumProof{Statement: st, Quorum: "2-of-3"}
+	for _, id := range signers {
+		sig := ed25519.Sign(privs[id], canonical)
+		proof.Signatures = append(proof.Signatures, cluster.ControllerSignature{KeyID: id, Sig: hex.EncodeToString(sig)})
+	}
+	data, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatalf("proof : %v", err)
+	}
+	return data
+}
+
+// mintTestProofHex est la forme enveloppe-hex pour les intents structurés.
+func mintTestProofHex(t *testing.T, action, resource string, epoch uint64) string {
+	t.Helper()
+	return hex.EncodeToString(mintTestProof(t, action, resource, epoch))
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +416,7 @@ func TestIssueValidateRoundTrip(t *testing.T) {
 	tr := staticTranslator{tr: Translation{Action: "http.send", Resource: "https://api.example.com/v1/messages"}}
 	b, issuer, leaves, _ := newTestBroker(t, srv.URL, tr)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test", simpleIntent("http.send", "https://api.example.com/v1/messages"))
+	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test", simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if !res.Allow || res.Reason != pep.ReasonOK {
 		t.Fatalf("allow=%v reason=%q, veut allow/ok", res.Allow, res.Reason)
 	}
@@ -384,13 +489,14 @@ func TestPassportOpensQuotaCounter(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
 
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://api.example.com/v1/messages", 1<<20, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://api.example.com/v1/messages", 1<<20, 60))
 	if !res.Allow {
 		t.Fatalf("passeport refusé : %q", res.Reason)
 	}
@@ -458,10 +564,10 @@ func TestRequestInvalidDenies(t *testing.T) {
 	b, _, leaves, _ := newTestBroker(t, srv.URL, tr)
 
 	for name, tc := range map[string]struct{ subject, intent string }{
-		"subject vide":      {"", simpleIntent("a", "r")},
+		"subject vide":      {"", simpleIntent(t, "a", "r")},
 		"intent vide":       {"agent-1", ""},
 		"intent trop grand": {"agent-1", strings.Repeat("x", maxIntentBytes+1)},
-		"subject trop long": {strings.Repeat("s", 256), simpleIntent("a", "r")},
+		"subject trop long": {strings.Repeat("s", 256), simpleIntent(t, "a", "r")},
 	} {
 		res := b.HandleAction(context.Background(), tc.subject, tc.intent)
 		if res.Allow || res.Reason != ReasonRequestInvalid {
@@ -481,7 +587,7 @@ func TestTranslationFailureDenies(t *testing.T) {
 	tr := staticTranslator{err: errors.New("je ne sais pas traduire")}
 	b, _, leaves, trips := newTestBroker(t, srv.URL, tr)
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if res.Allow || res.Reason != ReasonTranslationFailed {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonTranslationFailed)
 	}
@@ -502,7 +608,7 @@ func TestOPADenyPropagates(t *testing.T) {
 	tr := staticTranslator{tr: Translation{Action: "a", Resource: "r"}}
 	b, _, leaves, trips := newTestBroker(t, srv.URL, tr)
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if res.Allow || res.Reason != pep.ReasonOPADeny {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, pep.ReasonOPADeny)
 	}
@@ -528,7 +634,7 @@ func TestOPAUnreachableDeniesWithAlarm(t *testing.T) {
 	tr := staticTranslator{tr: Translation{Action: "a", Resource: "r"}}
 	b, _, _, trips := newTestBroker(t, url, tr)
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if res.Allow || res.Reason != pep.ReasonOPAUnreachable {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, pep.ReasonOPAUnreachable)
 	}
@@ -558,6 +664,7 @@ func TestSigningFailureDenies(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
 	if err != nil {
@@ -566,7 +673,7 @@ func TestSigningFailureDenies(t *testing.T) {
 
 	// Passeport : la réservation d'enveloppe doit être LIBÉRÉE après
 	// l'échec de signature — jamais de volume fantôme.
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1<<20, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1<<20, 60))
 	if res.Allow || res.Reason != ReasonIssuanceFailed {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonIssuanceFailed)
 	}
@@ -612,6 +719,7 @@ func TestEnvelopeExceededDenies(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
 	if err != nil {
@@ -620,14 +728,14 @@ func TestEnvelopeExceededDenies(t *testing.T) {
 
 	// 3 passeports de 1000 : agrégats 1000, 2000, 3000 — tous allow.
 	for i := 1; i <= 3; i++ {
-		res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+		res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 		if !res.Allow {
 			t.Fatalf("passeport %d refusé : %q", i, res.Reason)
 		}
 	}
 	// Le 4ᵉ porterait l'agrégat à 4000 > 3000 : refus À L'ÉMISSION —
 	// l'agrégation de passeports individuellement légitimes est fermée.
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 	if res.Allow || res.Reason != ReasonEnvelopeDeny {
 		t.Fatalf("4ᵉ passeport : allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonEnvelopeDeny)
 	}
@@ -654,12 +762,12 @@ func TestEnvelopeUnverifiedWithoutConfig(t *testing.T) {
 	defer srv.Close()
 	b, _, _, _ := newTestBroker(t, srv.URL, StructuredTranslator{})
 
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 	if res.Allow || res.Reason != ReasonEnvelopeUnverified {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonEnvelopeUnverified)
 	}
 	// Les actions simples (sans passeport) continuent de passer.
-	res2 := b.HandleAction(context.Background(), "agent-1", simpleIntent("http.get", "https://x"))
+	res2 := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "http.get", "https://x"))
 	if !res2.Allow {
 		t.Fatalf("action simple refusée : %q", res2.Reason)
 	}
@@ -679,24 +787,25 @@ func TestEnvelopeSaturationTrips(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)
 	}
 
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 	if !res.Allow {
 		t.Fatalf("premier passeport refusé : %q", res.Reason)
 	}
 	// Entité nouvelle, ledger plein : refus fail-closed — jamais
 	// d'éviction d'une entité vivante (§4.3).
-	res2 := b.HandleAction(context.Background(), "agent-2", passportIntent("https://x", 1000, 60))
+	res2 := b.HandleAction(context.Background(), "agent-2", passportIntent(t, "https://x", 1000, 60))
 	if res2.Allow || res2.Reason != ReasonEnvelopeSaturated {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res2.Allow, res2.Reason, ReasonEnvelopeSaturated)
 	}
 	// Alarme latchée : une seule fois, même après un second essai.
-	b.HandleAction(context.Background(), "agent-3", passportIntent("https://x", 1000, 60))
+	b.HandleAction(context.Background(), "agent-3", passportIntent(t, "https://x", 1000, 60))
 	reasons := trips.all()
 	if len(reasons) != 1 || reasons[0] != TripReasonEnvelopeSaturated {
 		t.Fatalf("alarmes %v, veut [%q] latchée une fois", reasons, TripReasonEnvelopeSaturated)
@@ -720,6 +829,7 @@ func TestEnvelopeFaultDeniesWithAlarm(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
 	if err != nil {
@@ -728,7 +838,7 @@ func TestEnvelopeFaultDeniesWithAlarm(t *testing.T) {
 
 	// Enveloppe injoignable = FAUTE : deny + alarme, réservation libérée,
 	// jamais de passeport émis sur enveloppe non évaluée (§4.1-bis).
-	res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+	res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 	if res.Allow || res.Reason != ReasonEnvelopeUnreachable {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonEnvelopeUnreachable)
 	}
@@ -750,7 +860,7 @@ func TestEpochChangeRevokes(t *testing.T) {
 	tr := staticTranslator{tr: Translation{Action: "a", Resource: "r"}}
 	b, issuer, leaves, _ := newTestBroker(t, srv.URL, tr)
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if !res.Allow {
 		t.Fatalf("émission refusée : %q", res.Reason)
 	}
@@ -794,7 +904,7 @@ func TestDeterministicVerdicts(t *testing.T) {
 
 	jtis := make(map[[16]byte]struct{})
 	for i := 0; i < 32; i++ {
-		res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+		res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 		if !res.Allow || res.Reason != pep.ReasonOK {
 			t.Fatalf("itération %d : allow=%v reason=%q", i, res.Allow, res.Reason)
 		}
@@ -828,6 +938,7 @@ func TestConcurrentBrokerNoOverIssue(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger,
 	})
 	if err != nil {
@@ -840,7 +951,7 @@ func TestConcurrentBrokerNoOverIssue(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res := b.HandleAction(context.Background(), "agent-1", passportIntent("https://x", 1000, 60))
+			res := b.HandleAction(context.Background(), "agent-1", passportIntent(t, "https://x", 1000, 60))
 			if res.Allow {
 				allows.Add(1)
 			}
@@ -874,7 +985,7 @@ func TestHTTPServerEndToEnd(t *testing.T) {
 	defer httpSrv.Close()
 
 	// Demande bien formée → 200, allow, jeton hex présent.
-	body := `{"subject":"agent-1","intent":` + fmt.Sprintf("%q", simpleIntent("a", "r")) + `}`
+	body := `{"subject":"agent-1","intent":` + fmt.Sprintf("%q", simpleIntent(t, "a", "r")) + `}`
 	resp, err := http.Post(httpSrv.URL+"/v1/actions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST : %v", err)
@@ -920,12 +1031,26 @@ func TestStructuredTranslatorBounds(t *testing.T) {
 	ctx := context.Background()
 
 	// Nominal minimal.
-	out, err := tr.Translate(ctx, "agent-1", simpleIntent("http.send", "https://x"))
+	out, err := tr.Translate(ctx, "agent-1", `{"action":"http.send","resource":"https://x"}`)
 	if err != nil {
 		t.Fatalf("nominal : %v", err)
 	}
-	if out.Action != "http.send" || out.Resource != "https://x" || out.Class != nil || out.Quota != nil {
+	if out.Action != "http.send" || out.Resource != "https://x" || out.Class != nil || out.Quota != nil || out.QuorumProof != nil {
 		t.Fatalf("traduction %+v inattendue", out)
+	}
+
+	// Preuve de quorum (§7.5) : blob opaque hex — relayé tel quel, borné,
+	// jamais interprété ici (no-DPI).
+	proofHex := hex.EncodeToString([]byte(`{"statement":{}}`))
+	out, err = tr.Translate(ctx, "agent-1", `{"action":"a","resource":"r","quorum_proof":"`+proofHex+`"}`)
+	if err != nil || string(out.QuorumProof) != `{"statement":{}}` {
+		t.Fatalf("quorum_proof : %q, %v", out.QuorumProof, err)
+	}
+	if _, err = tr.Translate(ctx, "agent-1", `{"action":"a","resource":"r","quorum_proof":"zz"}`); err == nil {
+		t.Fatal("quorum_proof non hex accepté")
+	}
+	if _, err = tr.Translate(ctx, "agent-1", `{"action":"a","resource":"r","quorum_proof":"`+strings.Repeat("ab", maxQuorumProofBytes+1)+`"}`); err == nil {
+		t.Fatal("quorum_proof hors bornes accepté")
 	}
 
 	// Classe explicite.
@@ -960,7 +1085,7 @@ func TestStructuredTranslatorBounds(t *testing.T) {
 		t.Fatal("intention non JSON acceptée")
 	}
 	// Passeport.
-	out, err = tr.Translate(ctx, "agent-1", passportIntent("https://x", 1000, 60))
+	out, err = tr.Translate(ctx, "agent-1", passportIntent(t, "https://x", 1000, 60))
 	if err != nil || out.Quota == nil || out.Quota.VolumeMax != 1000 || out.Quota.WindowS != 60 {
 		t.Fatalf("passeport : %+v, %v", out, err)
 	}
@@ -983,7 +1108,7 @@ func TestLeafFailureFailsClosed(t *testing.T) {
 	b, _, leaves, _ := newTestBroker(t, srv.URL, tr)
 	leaves.err = errors.New("disque plein simulé")
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if res.Allow || res.Reason != pep.ReasonLeafWriteFailed {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, pep.ReasonLeafWriteFailed)
 	}
@@ -996,7 +1121,7 @@ func TestLeafFailureFailsClosed(t *testing.T) {
 	b2, _, leaves2, trips2 := newTestBroker(t, srv.URL, tr2)
 	leaves2.err = errors.New("disque plein simulé")
 
-	res2 := b2.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res2 := b2.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 	if res2.Allow || res2.Reason != ReasonTranslationFailed {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res2.Allow, res2.Reason, ReasonTranslationFailed)
 	}
@@ -1030,12 +1155,14 @@ func TestIssuanceLeafFailureRevokesAllow(t *testing.T) {
 
 	tr := staticTranslator{tr: Translation{Action: "a", Resource: "r"}}
 	b, _, leaves, trips := newTestBroker(t, srv.URL, tr)
-	leaves.failFromCall = 2 // laisse passer la feuille OPA, échoue sur celle du broker
+	// Chemin allow : 1re écriture = feuille OPA (T11), 2e = feuille
+	// KindQuorum du gate (§7.5, T29), 3e = feuille d'émission du broker.
+	leaves.failFromCall = 3 // laisse passer OPA + quorum, échoue sur celle du broker
 
-	res := b.HandleAction(context.Background(), "agent-1", simpleIntent("a", "r"))
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
 
-	if leaves.calls != 2 {
-		t.Fatalf("Append() appelé %d fois, veut 2 (feuille OPA + feuille broker d'émission)", leaves.calls)
+	if leaves.calls != 3 {
+		t.Fatalf("Append() appelé %d fois, veut 3 (feuille OPA + feuille quorum + feuille broker d'émission)", leaves.calls)
 	}
 	if res.Allow {
 		t.Fatal("jeton émis malgré l'échec de la feuille d'émission du broker — pas de preuve, pas d'accès")
