@@ -8,7 +8,7 @@
 // Sérialisation binaire à layout fixe (déterministe, §11.3) :
 //
 //	offset 0      version      1 octet   = 0x01
-//	offset 1      kind         1 octet   (KindDecision=1, KindTelemetry=2, KindBackpressure=3, KindAnchor=4, KindRetentionPurge=5, KindTelemetryAlert=6, KindEpoch=7, KindQuorum=8, KindPromotion=9, KindContract=10, KindManifest=11)
+//	offset 1      kind         1 octet   (KindDecision=1, KindTelemetry=2, KindBackpressure=3, KindAnchor=4, KindRetentionPurge=5, KindTelemetryAlert=6, KindEpoch=7, KindQuorum=8, KindPromotion=9, KindContract=10, KindManifest=11, KindSupervision=12)
 //	offset 2      timestamp    8 octets  int64 big-endian, ns depuis epoch Unix (horloge NTS de la cellule)
 //	offset 10     cellIDLen    1 octet   longueur de cellID (≤ 255)
 //	offset 11     cellID       cellIDLen octets (UTF-8)
@@ -39,6 +39,7 @@ const (
 	KindPromotion      byte = 9  // promotion/refus miroir-canari : hash du record (verdict, cellule, époque, bundle) — T29, §7.4
 	KindContract       byte = 10 // événement de contrat de plan : soumission, approbation, consommation, déviation, expiration, révocation — T30, §4.2
 	KindManifest       byte = 11 // événement de manifeste d'état attesté : genèse, transition de composant, refus de boot — T31, §6.3
+	KindSupervision    byte = 12 // constat/alarme du moniteur indépendant : faute de chaîne, ancrage échu, manifeste rompu, bascule déclenchée/refusée — T34, §6.2/§7.1
 )
 
 // leafVersion est la version du format de sérialisation.
@@ -50,7 +51,7 @@ const maxCellIDLen = 255
 // Leaf est une feuille du registre — hash-only, jamais de contenu en clair.
 // KindAnchor : ancrage d'une cellule dans la master chain — §6.2, T6.
 type Leaf struct {
-	Kind        byte     // KindDecision | KindTelemetry | KindBackpressure | KindAnchor | KindRetentionPurge | KindTelemetryAlert | KindEpoch | KindQuorum | KindPromotion | KindContract | KindManifest
+	Kind        byte     // KindDecision | KindTelemetry | KindBackpressure | KindAnchor | KindRetentionPurge | KindTelemetryAlert | KindEpoch | KindQuorum | KindPromotion | KindContract | KindManifest | KindSupervision
 	CellID      string   // identité de la cellule émettrice
 	PayloadHash [32]byte // sha256(salt ‖ contenu métier) — le sel reste chez le producteur
 	Timestamp   int64    // ns depuis epoch Unix, horloge NTS de la cellule
@@ -74,7 +75,7 @@ func (l Leaf) Marshal() ([]byte, error) {
 		return nil, fmt.Errorf("cellID : longueur %d hors [1, %d]", len(l.CellID), maxCellIDLen)
 	}
 	switch l.Kind {
-	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert, KindEpoch, KindQuorum, KindPromotion, KindContract, KindManifest:
+	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert, KindEpoch, KindQuorum, KindPromotion, KindContract, KindManifest, KindSupervision:
 	default:
 		return nil, fmt.Errorf("kind %d inconnu", l.Kind)
 	}
@@ -98,7 +99,7 @@ func UnmarshalLeaf(data []byte) (Leaf, error) {
 	}
 	l.Kind = data[1]
 	switch l.Kind {
-	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert, KindEpoch, KindQuorum, KindPromotion, KindContract, KindManifest:
+	case KindDecision, KindTelemetry, KindBackpressure, KindAnchor, KindRetentionPurge, KindTelemetryAlert, KindEpoch, KindQuorum, KindPromotion, KindContract, KindManifest, KindSupervision:
 	default:
 		return l, fmt.Errorf("kind %d inconnu", l.Kind)
 	}
