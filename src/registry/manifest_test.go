@@ -547,6 +547,70 @@ func TestManifestGenesisLeafFault(t *testing.T) {
 	}
 }
 
+// failingManifestSigner enveloppe un note.Signer réel mais échoue Sign —
+// simule une clé de cellule (HSM en production) momentanément injoignable.
+type failingManifestSigner struct{ inner note.Signer }
+
+func (f failingManifestSigner) Name() string    { return f.inner.Name() }
+func (f failingManifestSigner) KeyHash() uint32 { return f.inner.KeyHash() }
+func (f failingManifestSigner) Sign([]byte) ([]byte, error) {
+	return nil, errors.New("HSM simulé injoignable")
+}
+
+// TestManifestSignFaultFailsClosed : trouvé en revue de #67 — une faute de
+// signature (en amont de l'écriture de feuille) n'écrivait auparavant
+// AUCUNE feuille, contrairement à toute autre faute de ce fichier (feuille
+// impossible, forme invalide…). Une tentative de genèse/transition qui
+// échoue à se signer doit rester TRACÉE (§4.1), même si elle ne peut pas,
+// par construction, faire avancer l'état (aucun manifeste non signé n'est
+// jamais engagé).
+func TestManifestSignFaultFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	sink := &stubMaster{}
+	clock := newFakeClock(time.Unix(1_780_000_000, 0))
+	trips := &manifestTripLog{}
+	realSigner, verifier := manifestTestKey(t)
+
+	m, err := NewManifester(ManifestOptions{
+		CellID:   manifestCellID,
+		Signer:   failingManifestSigner{inner: realSigner},
+		Verifier: verifier,
+		Leaves:   sink,
+		Salt:     manifestSalt,
+		OnTrip:   trips.add,
+		Now:      clock.now,
+	})
+	if err != nil {
+		t.Fatalf("NewManifester: %v", err)
+	}
+
+	st0 := manifestStateFixture("policy-v1", "opa-v1", "broker-v1", "ai-v1", [32]byte{})
+	if _, err := m.Genesis(ctx, 7, st0); err == nil {
+		t.Fatal("genèse attendue en échec (signer en faute)")
+	}
+	if _, ok := m.State(); ok {
+		t.Fatal("cellule initialisée malgré la faute de signature — aucun manifeste non signé ne doit être engagé")
+	}
+	if n := len(sink.taken()); n != 1 {
+		t.Fatalf("feuilles écrites = %d, attendu 1 (le refus DOIT être tracé)", n)
+	}
+	if got := trips.taken(); len(got) != 1 || got[0] != "manifest-sign-fault" {
+		t.Fatalf("alarmes %v, attendu [manifest-sign-fault]", got)
+	}
+
+	// Guérison : la clé refonctionne, la genèse aboutit normalement.
+	m2, err := NewManifester(ManifestOptions{
+		CellID: manifestCellID, Signer: realSigner, Verifier: verifier,
+		Leaves: sink, Salt: manifestSalt, OnTrip: trips.add, Now: clock.now,
+	})
+	if err != nil {
+		t.Fatalf("NewManifester (guérison): %v", err)
+	}
+	if _, err := m2.Genesis(ctx, 7, st0); err != nil {
+		t.Fatalf("Genesis après guérison : %v", err)
+	}
+}
+
 // TestManifesterRestoreFromArtifact : la chaîne se restaure depuis l'artefact
 // publié (D70) et continue en seq + 1 ; un artefact falsifié ou d'une autre
 // cellule est rejeté À LA CONSTRUCTION — jamais un état silencieux.

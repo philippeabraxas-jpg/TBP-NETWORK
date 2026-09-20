@@ -371,12 +371,22 @@ func (m *Manifester) Transition(ctx context.Context, epoch uint64, st ManifestSt
 // canonique et casserait la correspondance sceau ↔ signature (D68).
 func (m *Manifester) commitLocked(ctx context.Context, epoch, seq uint64, prev [32]byte, st ManifestState, event byte, reason string) (SignedManifest, error) {
 	record := marshalRecord(m.cellID, epoch, seq, prev, st, m.clock())
+	hash := HashManifest(record)
 	sig, err := m.signer.Sign(record)
 	if err != nil {
+		// Faute AMONT de l'écriture de feuille (clé/HSM en panne) : sans
+		// cette feuille de refus, une faute de signature ne laisse AUCUNE
+		// trace au registre — indistinguable d'un régime établi sans
+		// changement (§4.1 : chaque décision laisse une feuille, y compris
+		// celle-ci ; trouvé en revue de #67). Le hash du record CANDIDAT
+		// (jamais signé, donc jamais engagé comme état) identifie quand
+		// même la tentative pour l'audit.
+		if werr := m.writeLeafLocked(ctx, manifestEventRefuse, hash, 0, "manifest-sign-fault"); werr != nil {
+			m.trip("manifest-leaf-fault")
+		}
 		m.trip("manifest-sign-fault")
 		return SignedManifest{}, fmt.Errorf("registre: signature du manifeste impossible : %w", err)
 	}
-	hash := HashManifest(record)
 	if err := m.writeLeafLocked(ctx, event, hash, 1, reason); err != nil {
 		m.trip("manifest-leaf-fault")
 		return SignedManifest{}, ErrManifestLeafFault
