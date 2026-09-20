@@ -119,7 +119,7 @@ func TestMonitorFallTriggersFailover(t *testing.T) {
 	}
 
 	// La cellule MEUR : plus de feuilles, plus d'ancrages.
-	frozenSize := fx.monitor.Watcher(fx.cell.cellID).Size() // decision + genèse + transition
+	frozenSize := cellViewOf(t, fx.monitor.View(), fx.cell.cellID).ChainSize // decision + genèse + transition
 	alerts := advanceToFall(t, fx)
 
 	// Le passage qui confirme la chute porte l'alarme anchor-stale (l'humain

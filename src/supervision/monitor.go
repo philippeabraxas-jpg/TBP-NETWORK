@@ -452,19 +452,6 @@ func (m *Monitor) raise(ctx context.Context, cellID string, event byte, verdict 
 	return a, nil
 }
 
-// LastAnchor rend le dernier ancrage observé pour une cellule (tests et
-// driver — la console consomme View(), sous verrou). ok=false : jamais
-// observé.
-func (m *Monitor) LastAnchor(cellID string) (time.Time, bool) {
-	ts, ok := m.lastAnchor[cellID]
-	return ts, ok
-}
-
-// Watcher rend le ChainWatcher d'une cellule (taille vérifiée — tests et
-// détection de chute T34b ; la console consomme View(), sous verrou). nil
-// si inconnue.
-func (m *Monitor) Watcher(cellID string) *ChainWatcher { return m.watchers[cellID] }
-
 // CellView est la lecture figée d'une cellule surveillée (console T34c,
 // D82) : des FAITS bruts seulement — la logique de détection (fraîcheur
 // §6.2, chute D80) n'est pas rejouée ici pour ne jamais dériver des
