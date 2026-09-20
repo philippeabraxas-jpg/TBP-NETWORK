@@ -13,7 +13,8 @@ doctrine, jamais une nouvelle boîte noire » — son propre log est un
 |---|---|
 | `alert.go` | record d'alerte canonique « TBPS1 » + couture `AlarmSink` (T14) |
 | `watcher.go` | `ChainWatcher` : lecture vérifiée d'un log POSIX Tessera (signature de checkpoint, consistance O(log n), re-hash des feuilles) |
-| `monitor.go` | `Monitor` : orchestre les trois vérificateurs, feuille + alarme chaque divergence |
+| `monitor.go` | `Monitor` : orchestre les vérificateurs, feuille + alarme chaque divergence |
+| `failover.go` | détection de chute (ET strict) + déclenchement borné de bascule (T34b, D80) |
 
 Les trois vérificateurs continus (§6.2, D78) :
 
@@ -37,6 +38,32 @@ supervision, record « TBPS1 » hashé-salé (le sel reste chez le moniteur),
 jamais sans la feuille : §5.3 — une alerte non feuillée est une alerte
 silencieuse.
 
+## Livré (T34b) — détection de chute et bascule bornée (D80)
+
+**Chute** = les DEUX signaux de vie perdus en même temps depuis
+`FallDelay` (défaut 240 s) : chaîne figée (taille vérifiée stable) **ET**
+aucun ancrage frais. Le ET est porteur : l'ancrage T6 est cadencé par le
+temps, pas par l'activité — une cellule vivante mais inactive continue
+d'ancrer ; seule une cellule morte perd les deux signaux. L'alarme
+`anchor-stale` (borne 120 s) précède toujours la bascule (FallDelay >
+MaxAnchorLag imposé à la construction).
+
+**Déclenchement** : couture `FailoverTrigger` vers #30
+(`cluster.Tracker`/`PromotionController`) — T34 détecte et déclenche, ne
+fence pas (D83). Budget pré-autorisé borné : **2 déclenchements par
+fenêtre glissante d'une heure** (défaut, paramétré). NB : ce budget
+(moniteur DÉCLENCHE, défaut 2) est distinct de
+`MaxAutoFailoversPerHour=3` (src/cluster, T29 — cellule ACCEPTE) ; comme
+rien d'autre ne déclenche de bascule auto, le budget du moniteur est de
+facto la borne effective, la plus stricte.
+
+Au-delà du budget, couture absente (`Trigger` nil) ou couture en faute :
+**escalade humaine** — feuille `KindSupervision` event=5 verdict=Alarm,
+aucune bascule automatique supplémentaire. Un déclenchement accepté =
+feuille event=4 verdict=Notice (constat d'acte pré-autorisé, feuillé comme
+toute alerte). Une chute n'est traitée qu'une fois par épisode ; la
+reprise (feuille nouvelle ou ancrage frais) réarme le détecteur.
+
 ## Chemin froid (§9.1)
 
 `CheckOnce` lit des fichiers et vérifie des preuves — il n'est appelé par
@@ -56,10 +83,6 @@ régime permanent est incrémental O(log n).
 
 ## À venir sur cette issue
 
-- **T34b** — détection de chute (chaîne figée ET ancrage échu — le ET
-  compte : une cellule inactive mais vivante continue d'ancrer) et
-  déclenchement borné de bascule pré-autorisée (budget moniteur, distinct
-  du budget d'acceptation T29 côté cellule), escalade humaine au-delà.
 - **T34c** — console read-only (aucune route mutante par construction) :
   file d'arbitrage (plans scellés T30), inspection de politique
   (`policy_id`, bundle ancré §7.4), indicateurs §9.1 exportables.
