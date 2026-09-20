@@ -35,6 +35,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -68,6 +69,13 @@ const (
 	// DefaultPendingTTL est la durée de vie d'une soumission non approuvée
 	// — ensuite purge tracée (feuille event=expire).
 	DefaultPendingTTL = 15 * time.Minute
+
+	// DefaultMaxTombstones borne le nombre d'entrées EXPIRÉES OU RÉVOQUÉES
+	// retenues pour inspection (§4.3 : état borné). Sans cette borne, les
+	// quotas MaxPending/MaxApproved ne bornent que les plans VIVANTS — la
+	// carte du store grossirait sans fin sur la durée de vie d'une cellule,
+	// un plan expiré ou révoqué de plus à chaque nouvelle soumission.
+	DefaultMaxTombstones = 128
 )
 
 // Événements de feuille KindContract (D64 — record « TBPL1 »).
@@ -217,6 +225,11 @@ type ContractOptions struct {
 	// inspectables mais ne comptent plus dans les quotas.
 	MaxPending  int
 	MaxApproved int
+	// MaxTombstones borne le nombre d'entrées EXPIRÉES OU RÉVOQUÉES
+	// retenues pour inspection après coup — 0 ⇒ 128. Au-delà, les plus
+	// anciennes (par submittedAt) sont purgées ; jamais une entrée VIVANTE
+	// (pending/approved), déjà protégée par MaxPending/MaxApproved.
+	MaxTombstones int
 	// ApprovalTTL borne la fenêtre demandée à l'approbation : expiry − now
 	// ∈ [60 s, ApprovalTTL]. 0 ⇒ 1 h ; la valeur configurée doit tenir
 	// dans [60 s, 24 h].
@@ -238,17 +251,18 @@ type ContractOptions struct {
 // à l'émission : un curseur réparti entre répliques PEP ouvrirait la
 // double-consommation — revue #31).
 type ContractStore struct {
-	cellID       string
-	policyID     [32]byte
-	operatorKeys []ed25519.PublicKey
-	salt         []byte
-	leaves       LeafSink
-	maxPending   int
-	maxApproved  int
-	approvalTTL  time.Duration
-	pendingTTL   time.Duration
-	onTrip       func(reason string)
-	now          func() time.Time
+	cellID        string
+	policyID      [32]byte
+	operatorKeys  []ed25519.PublicKey
+	salt          []byte
+	leaves        LeafSink
+	maxPending    int
+	maxApproved   int
+	maxTombstones int
+	approvalTTL   time.Duration
+	pendingTTL    time.Duration
+	onTrip        func(reason string)
+	now           func() time.Time
 
 	mu    sync.Mutex
 	plans map[[32]byte]*planEntry
@@ -284,6 +298,13 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 	if maxPending < 0 || maxApproved < 0 {
 		return nil, errors.New("pep: quotas de plans négatifs (§4.3 : état borné)")
 	}
+	maxTombstones := opts.MaxTombstones
+	if maxTombstones == 0 {
+		maxTombstones = DefaultMaxTombstones
+	}
+	if maxTombstones < 0 {
+		return nil, errors.New("pep: MaxTombstones négatif (§4.3 : état borné)")
+	}
 	approvalTTL := opts.ApprovalTTL
 	if approvalTTL == 0 {
 		approvalTTL = DefaultApprovalTTL
@@ -303,18 +324,19 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 	keys := make([]ed25519.PublicKey, len(opts.OperatorKeys))
 	copy(keys, opts.OperatorKeys)
 	return &ContractStore{
-		cellID:       opts.CellID,
-		policyID:     opts.PolicyID,
-		operatorKeys: keys,
-		salt:         salt,
-		leaves:       opts.Leaves,
-		maxPending:   maxPending,
-		maxApproved:  maxApproved,
-		approvalTTL:  approvalTTL,
-		pendingTTL:   pendingTTL,
-		onTrip:       opts.OnTrip,
-		now:          opts.Now,
-		plans:        make(map[[32]byte]*planEntry),
+		cellID:        opts.CellID,
+		policyID:      opts.PolicyID,
+		operatorKeys:  keys,
+		salt:          salt,
+		leaves:        opts.Leaves,
+		maxPending:    maxPending,
+		maxApproved:   maxApproved,
+		maxTombstones: maxTombstones,
+		approvalTTL:   approvalTTL,
+		pendingTTL:    pendingTTL,
+		onTrip:        opts.OnTrip,
+		now:           opts.Now,
+		plans:         make(map[[32]byte]*planEntry),
 	}, nil
 }
 
@@ -517,16 +539,28 @@ func parseBinding(binding []byte) (planHash [32]byte, params []byte, err error) 
 	}
 	copy(planHash[:], binding[5:37])
 	n := int(binary.BigEndian.Uint16(binding[37:39]))
-	if len(binding) != 39+n {
+	if len(binding) != 39+n || n > MaxPlanParamsBytes {
+		// n > MaxPlanParamsBytes : BuildBinding ne produit jamais un blob
+		// pareil (elle borne côté construction), mais parseBinding est
+		// appelée sur tout blob reçu par VerifyStep — un appelant futur qui
+		// contournerait BuildBinding (la couture est publique, D62) ne doit
+		// pas pouvoir faire porter un blob de paramètres non borné plus
+		// loin dans le greffe (no-DPI ≠ non borné, §6.2/§9.1).
 		return planHash, nil, ErrPlanBindingInvalid
 	}
 	return planHash, binding[39:], nil
 }
 
 // expireLocked trace la transition d'expiration des plans dont l'instant
-// est passé — une seule feuille par plan (garde e.expired). Les entrées
-// expirées RESTENT (bornées par les quotas des plans vivants) : elles
-// rendent « plan-expired » au lieu de « plan-unknown » au toucher.
+// est passé — une seule feuille par plan (garde e.expired) — puis purge
+// les tombes (expirées ou révoquées) au-delà de maxTombstones.
+//
+// Les quotas MaxPending/MaxApproved ne bornent QUE les plans VIVANTS
+// (countStatusLocked les exclut dès expiration OU révocation) : sans
+// purge séparée, la carte grossirait d'une entrée à chaque plan expiré
+// ou révoqué, sans jamais rétrécir — un plan par tentative d'arbitrage
+// pendant toute la durée de vie de la cellule (§4.3 violé en pratique,
+// pas seulement pour les plans vivants). Trouvé en revue de #66.
 func (s *ContractStore) expireLocked(ctx context.Context, now time.Time) {
 	for hash, e := range s.plans {
 		if e.expired || !now.After(e.expiresAt) {
@@ -540,6 +574,35 @@ func (s *ContractStore) expireLocked(ctx context.Context, now time.Time) {
 			continue
 		}
 		e.expired = true
+	}
+	s.evictTombstonesLocked()
+}
+
+// evictTombstonesLocked borne le nombre d'entrées EXPIRÉES OU RÉVOQUÉES
+// retenues pour inspection (§4.3) : au-delà de maxTombstones, les plus
+// anciennes (par submittedAt) sont retirées de la carte. Une entrée
+// purgée ainsi tombante rend « plan-unknown » au lieu de « plan-expired »
+// / « plan-revoked » au toucher suivant — perte de précision du message,
+// jamais de bascule fail-open (le refus tient dans tous les cas). Ne
+// touche JAMAIS une entrée vivante (pending/approved non expirée/révoquée)
+// — celles-ci restent protégées par MaxPending/MaxApproved uniquement.
+func (s *ContractStore) evictTombstonesLocked() {
+	type tomb struct {
+		hash        [32]byte
+		submittedAt time.Time
+	}
+	var tombs []tomb
+	for hash, e := range s.plans {
+		if e.expired || e.status == planStatusRevoked {
+			tombs = append(tombs, tomb{hash, e.submittedAt})
+		}
+	}
+	if len(tombs) <= s.maxTombstones {
+		return
+	}
+	sort.Slice(tombs, func(i, j int) bool { return tombs[i].submittedAt.Before(tombs[j].submittedAt) })
+	for _, t := range tombs[:len(tombs)-s.maxTombstones] {
+		delete(s.plans, t.hash)
 	}
 }
 

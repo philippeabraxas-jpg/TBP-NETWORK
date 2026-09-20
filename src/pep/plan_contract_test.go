@@ -786,3 +786,45 @@ func TestBindingMalformed(t *testing.T) {
 		t.Fatalf("bindings mal formés : %d feuilles, attendu %d", n, len(cases))
 	}
 }
+
+// TestTombstonesAreBounded vérifie que les plans expirés ou révoqués ne
+// font pas grossir la carte du store sans fin (§4.3). Trouvé en revue de
+// #66 : MaxPending/MaxApproved ne bornent que les plans VIVANTS
+// (countStatusLocked exclut tout ce qui est expiré ou révoqué) — sans
+// purge séparée, chaque nouveau plan expiré ou révoqué laissait une
+// entrée permanente dans store.plans, jamais retirée, pour toute la durée
+// de vie de la cellule. Beaucoup plus de plans que MaxTombstones sont
+// soumis puis expirés ; la taille de la carte doit rester bornée.
+func TestTombstonesAreBounded(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	const maxTombstones = 5
+	s := newContractStore(t, sink, clock, &contractTrips{}, func(o *ContractOptions) {
+		o.MaxTombstones = maxTombstones
+		o.PendingTTL = MinApprovalTTL // expire vite pour ce test
+	})
+
+	const rounds = 200 // très au-delà de maxTombstones
+	for i := 0; i < rounds; i++ {
+		steps := []PlanStep{stepOf("a", "r", []byte{byte(i), byte(i >> 8)})}
+		if _, err := s.Submit(context.Background(), steps); err != nil {
+			t.Fatalf("submit %d : %v (le quota VIVANT ne doit jamais saturer ici — chaque plan expire avant le suivant)", i, err)
+		}
+		clock.advance(MinApprovalTTL + time.Second)
+	}
+	// Un dernier toucher pour que le dernier lot expiré soit purgé au tour
+	// suivant (expireLocked tourne en tête de chaque appel public).
+	if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r", []byte("flush"))}); err != nil {
+		t.Fatalf("submit de purge : %v", err)
+	}
+
+	s.mu.Lock()
+	n := len(s.plans)
+	s.mu.Unlock()
+
+	// Borne : au plus maxTombstones tombes + 1 entrée vivante (la toute
+	// dernière soumission, pas encore expirée à cet instant).
+	if n > maxTombstones+1 {
+		t.Fatalf("store.plans contient %d entrées après %d soumissions expirées — attendu ≤ %d (MaxTombstones=%d), la carte grossit sans borne", n, rounds, maxTombstones+1, maxTombstones)
+	}
+}
