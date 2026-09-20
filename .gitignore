@@ -58,3 +58,8 @@ figs/src/*.ai
 # clés de cellule, sels de rapport, mesures. Régénérés à chaque run, jamais
 # commités (le sel des feuilles reste chez le producteur, §6.2)
 tests/p1_friction/out/
+
+# Campagne red-team T28 (#28) — mêmes artefacts : registre tessera local,
+# cell_log.key, evidence_salt.hex (sel local, §6.2), run_report.json,
+# leaves_export.json, evidence_log.jsonl. Régénérés à chaque run.
+tests/p2_redteam/out/
