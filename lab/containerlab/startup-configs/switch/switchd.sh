@@ -40,6 +40,14 @@ tail -F -n0 "$LOG" 2>/dev/null | while read -r line; do
 		else
 			echo "$(date +%s) DECISION port=$PORT result=failure vlan=66" \
 				>> $WORK/nac-decisions.log
+			# Un port déjà en VLAN_REM (remédiation antérieure, désarmée
+			# depuis) doit RÉELLEMENT revenir en captif ici — sinon il reste
+			# indéfiniment coincé en VLAN_REM alors que la feuille ci-dessus
+			# affirme vlan=66 (constaté : décision et état du bridge
+			# divergent après un cycle remédiation → rétablissement → nouvel
+			# échec hors dégradation).
+			$BR vlan add vid 66 pvid untagged dev $PORT 2>/dev/null || true
+			$BR vlan del vid $VLAN_REM dev $PORT 2>/dev/null || true
 		fi ;;
 	esac
 done
