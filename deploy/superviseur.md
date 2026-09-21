@@ -1,80 +1,82 @@
-# deploy/superviseur.md — machine « superviseur » (T35, issue #61)
+# deploy/superviseur.md — "supervisor" machine (T35, issue #61)
 
-Le superviseur porte trois fonctions INDÉPENDANTES des cellules (§2,
-§7.1) : le **registre maître** (master chain, T6 — ancres des bundles par
-époque, fenêtres saines lues par la promotion §7.4), le **moniteur
-indépendant** (T34 — sa propre clé et son propre log, il n'écrit JAMAIS
-dans les chaînes surveillées) et la **console** (arbitrages, époques,
-indicateurs §9.1). La génèse (scripts/genesis) se célèbre ici, sur HSM.
+_Version française : [superviseur.fr.md](superviseur.fr.md)._
 
-> Le démon `supervisord` (T37 — issue #74) assemble moniteur et console ;
-> la phase daemons de `deploy/selftest/` exécute l'étape 3 de ce guide
-> contre les vrais binaires (build, témoins fail-closed, lectures LIVE,
-> 503 d'honnêteté quand la source tombe). Si une commande ci-dessous
-> diverge du selftest, le selftest casse : corrigez le guide ou le code.
+The supervisor carries three functions INDEPENDENT from the cells (§2,
+§7.1): the **master registry** (master chain, T6 — anchors of bundles per
+epoch, healthy windows read by the §7.4 promotion), the **independent
+monitor** (T34 — its own key and its own log, it NEVER writes
+to the monitored chains) and the **console** (arbitrations, epochs,
+§9.1 indicators). Genesis (scripts/genesis) is celebrated here, on HSM.
 
-#### Étape 1 — Célébrer la genèse (HSM)
+> The `supervisord` daemon (T37 — issue #74) assembles monitor and console;
+> the daemons phase of `deploy/selftest/` executes step 3 of this guide
+> against the real binaries (build, fail-closed witnesses, LIVE reads,
+> honesty 503s when a source goes down). If a command below
+> diverges from the selftest, the selftest breaks: fix the guide or the code.
 
-**Prérequis vérifiable** : étapes communes de [README.md](README.md)
-vertes ; HSM branché (ou SoftHSM — DEV uniquement, jamais racine de
-gouvernance §12) ; `softhsm2-util`, `libsofthsm2.so`, `go` présents.
+#### Step 1 — Celebrate genesis (HSM)
 
-**Commande** :
+**Verifiable prerequisite**: common steps of [README.md](README.md)
+green; HSM plugged in (or SoftHSM — DEV only, never a governance
+root §12); `softhsm2-util`, `libsofthsm2.so`, `go` present.
+
+**Command**:
 
 ```bash
 N=3 M=2 AUTHORITY=cell-a GENESIS_HOME=scripts/genesis/out \
   bash scripts/genesis/genesis_dev.sh
-cat scripts/genesis/out/manifest.json   # clés des contrôleurs, quorum 2-of-3
+cat scripts/genesis/out/manifest.json   # controller keys, 2-of-3 quorum
 ```
 
-**Critère de succès observable** : `manifest.json`, `pubkeys/*.hex`,
-`epoch0.json`, `anchor_epoch0.txt` produits ; le manifest liste les M-of-N
-convenus.
+**Observable success criterion**: `manifest.json`, `pubkeys/*.hex`,
+`epoch0.json`, `anchor_epoch0.txt` produced; the manifest lists the agreed
+M-of-N.
 
-**En cas d'échec : STOP** — pas de genèse, pas de réseau. Ne jamais
-fabriquer epoch0.json à la main : la phase fencing du selftest montre
-qu'un jeton équivoque est refusé et alarmé — un epoch 0 artisanal serait
-indistinguable d'une faute.
+**On failure: STOP** — no genesis, no network. Never
+hand-craft epoch0.json: the selftest's fencing phase shows
+that an equivocated token is refused and alarmed — a hand-made epoch 0 would be
+indistinguishable from a fault.
 
-#### Étape 2 — Distribuer selon la custody (D97)
+#### Step 2 — Distribute per custody (D97)
 
-**Prérequis vérifiable** : étape 1 verte.
+**Verifiable prerequisite**: step 1 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Aux cellules : pubkeys/*.hex + epoch0.json (canal authentifié).
-# Aux serveurs : rien de la genèse (ils n'ont pas de gouvernance à vérifier).
-# ICI : les clés privées des contrôleurs restent dans le HSM — jamais
-# exportées sur une autre machine, jamais dans le dépôt.
+# To the cells: pubkeys/*.hex + epoch0.json (authenticated channel).
+# To the servers: nothing from genesis (they have no governance to verify).
+# HERE: the controllers' private keys stay in the HSM — never
+# exported to another machine, never into the repo.
 sha256sum scripts/genesis/out/pubkeys/*.hex
 ```
 
-**Critère de succès observable** : chaque cellule accuse réception des
-pubkeys et d'epoch0 ; aucune clé privée n'a quitté le HSM (journal HSM).
+**Observable success criterion**: each cell acknowledges receipt of the
+pubkeys and epoch0; no private key has left the HSM (HSM journal).
 
-**En cas d'échec : STOP** — une clé privée de contrôleur copiée hors HSM
-invalide la cérémonie : refaire la genèse, révoquer l'ancienne.
+**On failure: STOP** — a controller private key copied out of the HSM
+invalidates the ceremony: redo the genesis, revoke the old one.
 
-#### Étape 3 — Compiler et démarrer supervisord (moniteur + console, T37)
+#### Step 3 — Build and start supervisord (monitor + console, T37)
 
-**Prérequis vérifiable** : étape 1 verte ; les cellules à surveiller
-tournent (cellule.md étape 7 : le brokerd de chaque cellule sert ses
-vues de supervision sur son socket Unix) ; `cell_log.vkey` de chaque
-cellule et de la master chain récupérés (clés PUBLIQUES de checkpoint
-— seules pièces nécessaires au scan vérifié, custody D97) ; accès
-LECTURE SEULE aux répertoires des chaînes surveillées accordé à
-l'utilisateur du service (groupe dédié ou ACL — `cell_log.key` ne
-quitte JAMAIS la cellule).
+**Verifiable prerequisite**: step 1 green; the cells to monitor
+are running (cellule.md step 7: each cell's brokerd serves its
+supervision views on its Unix socket); `cell_log.vkey` of each
+cell and of the master chain retrieved (PUBLIC checkpoint keys
+— the only pieces needed for the verified scan, D97 custody); READ-ONLY
+access to the monitored chains' directories granted to
+the service user (dedicated group or ACL — `cell_log.key`
+NEVER leaves the cell).
 
-**Commande** :
+**Command**:
 
 ```bash
 go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
-/usr/local/bin/supervisord 2>&1 | head -1   # sans environnement : doit refuser
+/usr/local/bin/supervisord 2>&1 | head -1   # without environment: must refuse
 
-# /etc/tbp/cells.json — chaînes surveillées (à adapter ; vkeys publiques
-# seulement) :
+# /etc/tbp/cells.json — monitored chains (to adapt; public
+# vkeys only):
 #   {"cells":[{"cell_id":"cell-a","log_dir":"/var/lib/tbp/broker",
 #              "origin":"cell-a",
 #              "vkey_file":"/var/lib/tbp/broker/cell_log.vkey",
@@ -82,9 +84,9 @@ go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
 #    "master":{"cell_id":"master","log_dir":"/var/lib/tbp/master",
 #              "origin":"master",
 #              "vkey_file":"/var/lib/tbp/master/cell_log.vkey"}}
-# /etc/tbp/supervisord.env (0600) — valeurs d'exemple, à adapter :
+# /etc/tbp/supervisord.env (0600) — example values, to adapt:
 #   TBP_MONITOR_CELL_ID=monitor-01
-#   TBP_SALT=<hex 32 car. — sel de la chaîne DU MONITEUR, généré ici>
+#   TBP_SALT=<32-char hex — salt of the MONITOR's chain, generated here>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/supervision
 #   TBP_CELLS_FILE=/etc/tbp/cells.json
 #   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock
@@ -95,73 +97,73 @@ systemctl daemon-reload && systemctl enable --now tbp-supervisord
 curl -s --unix-socket /run/tbp/supervision.sock http://localhost/v1/epoch
 ```
 
-**Critère de succès observable** : le binaire se construit ; lancé sans
-environnement, il sort immédiatement avec
-`supervisord: TBP_MONITOR_CELL_ID requis` (fail-closed — ce refus EST le
-critère) ; un brokerd de cellule injoignable AU DÉMARRAGE est fatal
-aussi (sonde des sources : pas de console dont les sources sont mortes
-à la naissance) ; la console répond en GET seul : `/v1/epoch` rend
-l'état du tracker de la cellule (lecture LIVE via brokerd, jamais de
-cache), `/v1/arbitration` la file des plans en attente (hash scellé et
-bornes temporelles — jamais les étapes), `/v1/indicators` les
-indicateurs §9.1 et la santé des chaînes surveillées. Un brokerd qui
-TOMBE en cours de route ⇒ 503 `{"error":"source indisponible"}` sur la
-route concernée, jamais une valeur figée ni une zero-value (§1).
+**Observable success criterion**: the binary builds; launched without
+environment, it exits immediately with
+`supervisord: TBP_MONITOR_CELL_ID requis` (fail-closed — this refusal IS the
+criterion); an unreachable cell brokerd AT STARTUP is fatal
+too (source probe: no console whose sources are dead
+at birth); the console answers in GET only: `/v1/epoch` returns
+the cell's tracker state (LIVE read via brokerd, never a
+cache), `/v1/arbitration` the queue of pending plans (sealed hash and
+time bounds — never the steps), `/v1/indicators` the
+§9.1 indicators and the health of the monitored chains. A brokerd that
+GOES DOWN along the way ⇒ 503 `{"error":"source indisponible"}` on the
+concerned route, never a frozen value or a zero-value (§1).
 
-**En cas d'échec : STOP** — un supervisord qui démarrerait sans sel,
-sans master chain ou avec un brokerd injoignable est fail-open :
-corriger la cause. Un moniteur qui écrirait dans les chaînes
-surveillées violerait §2/§7.1 : l'unit livrée le rend structurellement
-impossible (ProtectSystem=strict) — ne pas élargir ReadWritePaths.
+**On failure: STOP** — a supervisord that would start without salt,
+without master chain or with an unreachable brokerd is fail-open:
+fix the cause. A monitor that would write into the monitored
+chains would violate §2/§7.1: the delivered unit makes it structurally
+impossible (ProtectSystem=strict) — do not widen ReadWritePaths.
 
-#### Étape 4 — Surveiller sans écrire
+#### Step 4 — Monitor without writing
 
-**Prérequis vérifiable** : étape 3 verte ; `cell_log.vkey` de chaque
-cellule récupéré (clé PUBLIQUE de checkpoint — seule pièce nécessaire au
-scan vérifié, custody D97).
+**Verifiable prerequisite**: step 3 green; `cell_log.vkey` of each
+cell retrieved (PUBLIC checkpoint key — the only piece needed for the
+verified scan, D97 custody).
 
-**Commande** :
+**Command**:
 
 ```bash
-# Le moniteur rejoue les registres des cellules en LECTURE vérifiée.
-# Toute anomalie (équivoque d'époque, retard d'ancre, fraude de
-# continuation) devient une alerte — jamais une écriture corrective.
-go run ./deploy/selftest -phase fencing   # démontre la boucle complète
+# The monitor replays the cells' registries in verified READ mode.
+# Any anomaly (epoch equivocation, anchor delay, continuation
+# fraud) becomes an alert — never a corrective write.
+go run ./deploy/selftest -phase fencing   # demonstrates the full loop
 ```
 
-**Critère de succès observable** : le rapport fencing montre les feuilles
-`KindEpoch` des DEUX cellules lues par scan vérifié (4 sur cell-a, 3 sur
-cell-b dans le scénario de référence) ; les alertes arrivent sur le Sink.
+**Observable success criterion**: the fencing report shows the
+`KindEpoch` leaves of BOTH cells read by verified scan (4 on cell-a, 3 on
+cell-b in the reference scenario); alerts arrive at the Sink.
 
-**En cas d'échec : STOP** — un scan qui échoue (checkpoint invalide,
-chaîne cassée) est une ALARME, pas un incident à contourner.
+**On failure: STOP** — a scan that fails (invalid checkpoint,
+broken chain) is an ALARM, not an incident to work around.
 
-#### Étape 5 — Fenêtres saines et promotion (§7.4)
+#### Step 5 — Healthy windows and promotion (§7.4)
 
-**Prérequis vérifiable** : étapes 1-4 vertes ; le master chain ancre les
-bundles par époque.
+**Verifiable prerequisite**: steps 1-4 green; the master chain anchors the
+bundles per epoch.
 
-**Commande** :
+**Command**:
 
 ```bash
-# La fenêtre saine est LUE dans le master, jamais mesurée par le canari :
-# PromotionController refuse toute promotion dont l'ancre ou la fenêtre
-# est indisponible (partition = refus fail-closed — démontré par la phase
-# fencing du selftest : ErrPromotionAnchorUnavailable).
+# The healthy window is READ from the master, never measured by the canary:
+# PromotionController refuses any promotion whose anchor or window
+# is unavailable (partition = fail-closed refusal — demonstrated by the
+# selftest's fencing phase: ErrPromotionAnchorUnavailable).
 grep -n "HealthyWindow\|BundleAnchor" src/cluster/promotion.go | head -5
 ```
 
-**Critère de succès observable** : les ancres et fenêtres sont publiées
-par époque dans le master ; le selftest fencing prouve admission (fenêtre
-saine) et refus (partition) avec feuilles `KindPromotion` des deux côtés.
+**Observable success criterion**: anchors and windows are published
+per epoch in the master; the fencing selftest proves admission (healthy
+window) and refusal (partition) with `KindPromotion` leaves on both sides.
 
-**En cas d'échec : STOP** — sans ancre d'époque, aucune promotion n'est
-possible ; c'est le comportement voulu, pas une panne à réparer.
+**On failure: STOP** — without an epoch anchor, no promotion is
+possible; that is the intended behavior, not an outage to repair.
 
-## Durcissement
+## Hardening
 
-Unités systemd sur le patron T24 (`src/translator/tbp-translator.service`) ;
-l'unité du superviseur est LIVRÉE : `src/supervision/tbp-supervisord.service`
-(T37 — lecture seule structurelle sur les chaînes surveillées, aucune
-famille réseau). La machine superviseur ne rejoint AUCUN VLAN de production
-(§5.1) — son canal est la supervision, pas le trafic.
+systemd units on the T24 pattern (`src/translator/tbp-translator.service`);
+the supervisor's unit is DELIVERED: `src/supervision/tbp-supervisord.service`
+(T37 — structural read-only on the monitored chains, no
+network family). The supervisor machine joins NO production VLAN
+(§5.1) — its channel is supervision, not traffic.
