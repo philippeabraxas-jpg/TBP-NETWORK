@@ -17,8 +17,8 @@ Seuils bloquants (CI rouge, D91) :
 Alarmes non bloquantes (tracées dans le rapport, leafé via D90) :
   - validation_p99_ms     > 5 ms (bras décision, alerte si soutenu)
   - durability_p95_ms     > 3 × CheckpointInterval configuré (bras
-    « durabilité » — production réelle synchrone, suivi issue #71, HORS
-    budget §9.1)
+    « durabilité » — registre réel en mode sync, borne pire cas ; #71
+    arbitré par T38 : prod par défaut async borné, HORS budget §9.1)
   - ttl_drift             : p50 des TTL ÉMIS > 2 × TTL nominal (vérité de
     menthe du harnais — la distribution s'étire = pression de friction)
 
@@ -45,13 +45,17 @@ TTL_STRETCH_FACTOR = 2              # p50 TTL émis > 2 × nominal — avertisse
 
 PRODUCTION_NOTICE = (
     "PRODUCTION : le chemin réellement déployé (pepd + registre tessera POSIX) "
-    "paie la latence du bras « durabilité » sur CHAQUE décision — synchrone, "
-    "fail-closed (T9 : pas de preuve, pas d'accès). Plancher structurel mesuré "
-    "~150-250 ms (checkpoint POSIX ≥ 100 ms, borne dure du driver, + poll 50 ms "
-    "de l'awaiter) — 30-50x le budget §9.1. Cette variable d'infrastructure "
-    "registre (T4/T7) est HORS budget §9.1 et suivie par l'issue #71 ; le seuil "
-    "bloquant §9.1 s'applique au bras « décision » (coût PEP isolé, plancher "
-    "déterministe du §9.1). Les deux bras sont toujours rapportés ensemble."
+    "mesure la latence du bras « durabilité » — registre réel en mode sync "
+    "(feuille intégrée ET publiée avant verdict), borne pire cas. Plancher "
+    "structurel mesuré ~150-250 ms (checkpoint POSIX ≥ 100 ms, borne dure du "
+    "driver, + poll 50 ms de l'awaiter) — 30-50x le budget §9.1. #71 arbitré "
+    "par T38 : la production tourne par défaut en async borné (verdict à "
+    "l'acceptation, rattrapage de publication borné par la fenêtre "
+    "d'opposabilité) et ne paie plus ce plancher ; TBP_DURABILITY=sync le "
+    "restaure. Cette variable d'infrastructure registre (T4/T7) reste HORS "
+    "budget §9.1 ; le seuil bloquant §9.1 s'applique au bras « décision » "
+    "(coût PEP isolé, plancher déterministe du §9.1). Les deux bras sont "
+    "toujours rapportés ensemble."
 )
 
 
@@ -167,7 +171,7 @@ def compute(measurements, leaves):
         "p99 des validations tier1, bras décision")
 
     # --- bras durabilité : surveillance indexée sur le CheckpointInterval
-    # configuré (revue #29) — production réelle, suivi #71, HORS §9.1.
+    # configuré (revue #29) — mode sync = borne pire cas (T38/#71), HORS §9.1.
     dur = arms["tier1_durability"]["p95_ms"]
     cp_ms = counters.get("checkpoint_interval_ms", 100)
     watch = DURABILITY_FACTOR * cp_ms
@@ -175,8 +179,9 @@ def compute(measurements, leaves):
     ind["durability_watch"] = indicator(
         round(dur, 2), f"p95 ≤ {DURABILITY_FACTOR}×{cp_ms} ms (3 × CheckpointInterval)",
         "warning" if breach else "ok", False,
-        "coût de la preuve fail-closed synchrone payé par la production (#71) — "
-        "hors budget §9.1, jamais masqué (condition A de la revue)")
+        "coût de la preuve fail-closed en mode sync = borne pire cas (T38/#71 : "
+        "prod par défaut async borné) — hors budget §9.1, jamais masqué "
+        "(condition A de la revue)")
 
     # --- ttl_drift : distribution des TTL ÉMIS (vérité de menthe) — la
     # dérive vers le haut = pression de friction (on émet plus long pour
