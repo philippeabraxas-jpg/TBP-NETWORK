@@ -11,8 +11,10 @@ file at all (believing `http.send` is blocked when it no longer is).
 Correct sequence, to document in the deployment pipeline:
 
 ```sh
-# 1. Generate the full built-in list of THE deployed OPA version
-opa capabilities > policies/capabilities.json
+# 1. Generate the full built-in list of THE deployed OPA version.
+#    Without --current, 'opa capabilities' prints version NAMES (text);
+#    the JSON document of this version requires --current.
+opa capabilities --current > policies/capabilities.json
 
 # 2. Manually remove built-ins that violate the doctrine (spec §12):
 #    - http.send            (no outbound network call from a rule)
@@ -20,10 +22,20 @@ opa capabilities > policies/capabilities.json
 #    - time.now_ns          (time comes from the broker/NTS, not OPA's local clock — §6.2)
 #    - opa.runtime          (unless a use is already audited and justified,
 #                            e.g. reading an environment token — never for I/O)
+#    Keep every other top-level key of the document (features, future_keywords,
+#    wasm_abi_versions) untouched — dropping 'features' breaks rego_v1 parsing.
 
-# 3. Start OPA with this restricted capabilities file:
-opa run --server --capabilities policies/capabilities.json ...
+# 3. OPA ≥ 1.0: 'opa run' no longer has a --capabilities flag. Compile a
+#    bundle WITH the restricted file (forbidden built-ins are rejected at
+#    build time), then run the bundle:
+opa build --capabilities policies/capabilities.json policies/rego/ -o bundle.tar.gz
+opa run --server bundle.tar.gz
 ```
+
+(The full recipe — presence-before-strip assertion, negative check with
+`policies/testdata/rule_http_send.rego` — is automated by
+`policies/gen_capabilities.sh` and executed for real by the deployment
+selftest, `deploy/selftest/`.)
 
 **OPA circuit-breaker (mentioned §0/§12)**: this is not a native OPA
 mechanism — nothing built into the Rego engine cuts off an evaluation at
