@@ -89,6 +89,11 @@ echo "vérification négative OK: une règle appelant http.send est refusée au 
 mv -- "$OUT_TMP" "$OUT"
 echo "écrit: $OUT"
 
-echo "rappel: démarrer OPA avec 'opa run --server --capabilities $OUT ...'"
+# OPA ≥ 1.0 : 'opa run' n'a PLUS de flag --capabilities (retiré). La voie
+# supportée : compiler un bundle AVEC le fichier restreint (les built-ins
+# interdits sont alors rejetés au build), puis exécuter ce bundle.
+echo "rappel: OPA ≥ 1.0 — compiler un bundle avec le fichier restreint :"
+echo "          opa build --capabilities $OUT policies/rego/ -o bundle.tar.gz"
+echo "        puis démarrer : opa run --server bundle.tar.gz"
 echo "        le circuit-breaker 5 ms = deny reste à implémenter côté PEP"
 echo "        (issue #12) — ce n'est pas un mécanisme natif d'OPA (§12)"
