@@ -49,6 +49,12 @@ type ListenerOptions struct {
 	// OPA (T11), si non nil, est consulté APRÈS validation : son verdict
 	// l'emporte sur l'allow du jeton.
 	OPA *OPAClient
+	// DryRun (T36, §4.4(1)), si non nil, exécute le dry-run des actions
+	// F/I/W AVANT l'ouverture du passeport et soumet le diff à OPA. Sans
+	// porte configurée, une action F/I/W est soumise à OPA avec
+	// dry_run.available=false : la politique tranche (résidu §10.5). Hors
+	// classes F/I/W, ce champ n'a AUCUN effet (D105 : coût nul).
+	DryRun *DryRunGate
 }
 
 // ListenerStats agrège les mesures du listener (§9.1).
@@ -68,6 +74,7 @@ type Listener struct {
 	mode      *ModeController
 	ledger    *QuotaLedger
 	opa       *OPAClient
+	dryRun    *DryRunGate
 
 	evaluations    atomic.Uint64
 	forwarded      atomic.Uint64
@@ -91,6 +98,7 @@ func NewListener(opts ListenerOptions) (*Listener, error) {
 		mode:      opts.Mode,
 		ledger:    opts.Ledger,
 		opa:       opts.OPA,
+		dryRun:    opts.DryRun,
 	}, nil
 }
 
@@ -211,6 +219,29 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	// validateur — un seul chemin de refus, avant toute mutation.
 	d := l.validator.Validate(r.Context(), wire, req)
 
+	// Dry-run (T36, §4.4(1), D104) : classes F/I/W SEULEMENT, AVANT
+	// l'ouverture du passeport (revue #62 : un refus dry-run n'ouvre
+	// jamais de compteur pour une action qui ne se fera pas), et seulement
+	// si OPA est consulté (le diff n'a pas d'autre destinataire). Échec
+	// ou timeout = deny fail-closed, tracé par la porte elle-même.
+	var dryInput *DryRunInput
+	if d.Allow && d.Token != nil && d.Token.Class != ClassOut && l.opa != nil {
+		if l.dryRun != nil {
+			in, reason := l.dryRun.Execute(r.Context(), d.JTI, req.Action, req.Resource)
+			if reason != "" {
+				d.Allow = false
+				d.Reason = reason
+			} else {
+				dryInput = in
+			}
+		} else {
+			// Pas de porte sur ce chemin : la politique est informée que
+			// le composant ne fournit pas de dry-run — elle tranche
+			// (résidu déclaré §4.4/§10.5 si elle laisse passer).
+			dryInput = &DryRunInput{Available: false}
+		}
+	}
+
 	// Passeport de quota (§4.1-bis) : ouvert à l'allow — « chaque porte
 	// ouverte naît avec son compteur ».
 	passportOpened := false
@@ -241,6 +272,7 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 			Resource: req.Resource,
 			Class:    d.Token.Class,
 			Epoch:    d.Token.Epoch,
+			DryRun:   dryInput,
 		})
 		if !od.Allow {
 			d.Allow = false
