@@ -2,8 +2,9 @@
 //
 // Exécute la séquence documentée dans deploy/cellule.md contre les vrais
 // binaires : build de pepd, capabilities OPA générées puis restreintes
-// (même recette que policies/gen_capabilities.sh, jq remplacé par Go),
-// OPA lancé avec ces capabilities, pepd en monitor, jetons valides et
+// (helpers partagés de opa.go — même recette que
+// policies/gen_capabilities.sh, jq remplacé par Go), OPA lancé avec ces
+// capabilities, pepd en monitor, jetons valides et
 // témoins, bascule gouvernée monitor→closed (§5.3), scan vérifié du
 // registre tessera. Chaque témoin est une faute précise qui DOIT être
 // prise — un contrôle qui passerait sans la faute est non-vacuole.
@@ -42,9 +43,6 @@ const (
 	// keyring pepd rejette toute autre longueur (fail-closed au chargement).
 	monoDevKIDHex = "7433352d73656c66746573742d646576" // "t35-selftest-dev"
 )
-
-// forbiddenBuiltins : même liste que policies/gen_capabilities.sh (§12).
-var forbiddenBuiltins = []string{"http.send", "net.lookup_ip_addr", "time.now_ns", "opa.runtime"}
 
 // evalResponse est la vue locale du verdict du listener.
 type evalResponse struct {
@@ -172,147 +170,23 @@ func runMono(s *suite, cfg config) {
 		strings.TrimSpace(strings.SplitN(errB, "\n", 2)[0]))
 
 	// --- Étape : capabilities OPA (recette gen_capabilities.sh) -------------
-	// 'opa capabilities' SANS --current liste des noms de version (texte) ;
-	// le document JSON de CETTE version exige --current.
-	fullJSON, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "capabilities", "--current")
-	if err != nil {
-		s.fail(phaseMono, "opa capabilities --current", fmt.Errorf("%v — %s", err, errB))
-		return
-	}
-	// Le document capabilities a d'autres clés (features — dont rego_v1 —,
-	// future_keywords, wasm_abi_versions) : le filtrage ne touche QUE
-	// builtins, le reste est préservé tel quel (sinon « illegal
-	// capabilities: rego_v1 feature required » au build).
-	var caps map[string]any
-	if err := json.Unmarshal([]byte(fullJSON), &caps); err != nil {
-		s.fail(phaseMono, "opa capabilities --current", fmt.Errorf("document illisible: %w", err))
-		return
-	}
-	builtins, ok := caps["builtins"].([]any)
+	// Contrôles détaillés dans opa.go (partagés avec la phase daemons, T37).
+	strippedPath, ok := prepareCapabilities(s, phaseMono, cfg, opaDir)
 	if !ok {
-		s.fail(phaseMono, "opa capabilities --current", fmt.Errorf("clé builtins absente ou illisible"))
 		return
 	}
-	present := map[string]bool{}
-	for _, b := range builtins {
-		if m, ok := b.(map[string]any); ok {
-			if name, ok := m["name"].(string); ok {
-				present[name] = true
-			}
-		}
-	}
-	missingBefore := []string{}
-	for _, f := range forbiddenBuiltins {
-		if !present[f] {
-			missingBefore = append(missingBefore, f)
-		}
-	}
-	if len(missingBefore) > 0 {
-		s.fail(phaseMono, "capabilities: interdits présents AVANT retrait (non-vacuité)",
-			fmt.Errorf("absents: %s — la version d'OPA a changé, revoir FORBIDDEN", strings.Join(missingBefore, ", ")))
-		return
-	}
-	s.add(phaseMono, "capabilities: interdits présents AVANT retrait (non-vacuité)", true,
-		fmt.Sprintf("%d built-ins listés", len(builtins)))
-
-	kept := make([]any, 0, len(builtins))
-	for _, b := range builtins {
-		m, _ := b.(map[string]any)
-		name, _ := m["name"].(string)
-		if !containsStr(forbiddenBuiltins, name) {
-			kept = append(kept, b)
-		}
-	}
-	caps["builtins"] = kept
-	strippedPath := filepath.Join(opaDir, "capabilities.stripped.json")
-	strippedJSON, _ := json.Marshal(caps)
-	if err := os.WriteFile(strippedPath, strippedJSON, 0o644); err != nil {
-		s.fail(phaseMono, "capabilities: écriture du fichier restreint", err)
-		return
-	}
-	// Re-parse du fichier écrit : les interdits ont disparu, le reste du
-	// document (features, future_keywords…) est intact.
-	var reCaps map[string]any
-	reRaw, _ := os.ReadFile(strippedPath)
-	if err := json.Unmarshal(reRaw, &reCaps); err != nil {
-		s.fail(phaseMono, "capabilities: re-lecture du fichier restreint", err)
-		return
-	}
-	reBuiltins, _ := reCaps["builtins"].([]any)
-	leaked := []string{}
-	for _, b := range reBuiltins {
-		m, _ := b.(map[string]any)
-		name, _ := m["name"].(string)
-		if containsStr(forbiddenBuiltins, name) {
-			leaked = append(leaked, name)
-		}
-	}
-	if len(leaked) > 0 {
-		s.fail(phaseMono, "capabilities: interdits absents APRÈS retrait", fmt.Errorf("encore présents: %s", strings.Join(leaked, ", ")))
-		return
-	}
-	s.add(phaseMono, "capabilities: interdits absents APRÈS retrait", true,
-		fmt.Sprintf("%d built-ins retenus, features préservées=%v", len(reBuiltins), reCaps["features"] != nil))
-
-	// Vérification négative (même motif que gen_capabilities.sh étape 4) :
-	// une règle appelant http.send DOIT être refusée au chargement.
-	negRule := filepath.Join(cfg.repo, "policies", "testdata", "rule_http_send.rego")
-	if _, _, err := runCmd(cfg.repo, nil, cfg.opaBin, "check", "--capabilities", strippedPath, negRule); err == nil {
-		s.fail(phaseMono, "capabilities: règle http.send refusée au chargement",
-			fmt.Errorf("opa check a ACCEPTÉ %s — le filtrage ne filtre rien", negRule))
-		return
-	}
-	s.add(phaseMono, "capabilities: règle http.send refusée au chargement", true, negRule)
-
-	// Forme serveur OPA ≥ 1.0 : 'opa run' n'a PLUS de flag --capabilities
-	// (retiré ; policies/README.md et le rappel de gen_capabilities.sh
-	// datent d'OPA 0.x — trou documenté dans deploy/cellule.md). La voie
-	// supportée : compiler un bundle AVEC les capabilities restreintes
-	// (rejet à la compilation des built-ins interdits) puis exécuter ce
-	// bundle. Témoin : la même règle http.send doit casser le BUILD.
-	// Le message d'erreur d'opa build sort sur stdout (pas stderr) : le
-	// verdict est le code de sortie, le détail joint les deux flux.
-	outB, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build", "--capabilities", strippedPath, negRule, "-o", filepath.Join(opaDir, "neg.tar.gz"))
-	combined := strings.TrimSpace(outB + " " + errB)
-	if err == nil {
-		s.fail(phaseMono, "capabilities: règle http.send refusée au BUILD de bundle",
-			fmt.Errorf("opa build a ACCEPTÉ %s — le filtrage ne filtre rien", negRule))
-		return
-	}
-	if !strings.Contains(combined, "http.send") {
-		s.fail(phaseMono, "capabilities: règle http.send refusée au BUILD de bundle",
-			fmt.Errorf("build refusé mais la cause n'est pas http.send : %s", combined))
-		return
-	}
-	s.add(phaseMono, "capabilities: règle http.send refusée au BUILD de bundle", true, "opa build --capabilities")
 
 	// --- Étape : OPA serveur sur le bundle compilé avec capabilities --------
 	regoPath := filepath.Join(cfg.repo, "policies", "rego", "action_example.rego")
 	bundlePath := filepath.Join(opaDir, "tbp-example.tar.gz")
-	if _, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build", "--capabilities", strippedPath, regoPath, "-o", bundlePath); err != nil {
-		s.fail(phaseMono, "opa build du bundle (capabilities restreintes)", fmt.Errorf("%v — %s", err, errB))
+	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath) {
 		return
 	}
-	s.add(phaseMono, "opa build du bundle avec capabilities restreintes", true, bundlePath)
-
-	opaLog, err := os.Create(filepath.Join(opaDir, "opa.log"))
-	if err != nil {
-		s.fail(phaseMono, "opa run", err)
+	opa, ok := startOPA(s, phaseMono, cfg, monoOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
+	if !ok {
 		return
 	}
-	defer func() { _ = opaLog.Close() }()
-	opaCmd := exec.Command(cfg.opaBin, "run", "--server", "--addr", monoOPAAddr, bundlePath)
-	opaCmd.Stdout, opaCmd.Stderr = opaLog, opaLog
-	if err := opaCmd.Start(); err != nil {
-		s.fail(phaseMono, "opa run", err)
-		return
-	}
-	defer func() { _ = opaCmd.Process.Kill(); _, _ = opaCmd.Process.Wait() }()
-	if err := waitHTTP200(opaURL+"/health", 15*time.Second); err != nil {
-		s.fail(phaseMono, "opa run (sonde /health)", err)
-		return
-	}
-	s.add(phaseMono, "opa run avec capabilities restreintes", true, opaURL)
+	defer opa.stop()
 
 	// --- Étape : environnement pepd (SUBSTITUTION DEV documentée) -----------
 	issuer := devKey("issuer")
@@ -492,13 +366,4 @@ func runMono(s *suite, cfg config) {
 		after[registry.KindDecision] >= 6, fmt.Sprintf("KindDecision=%d", after[registry.KindDecision]))
 	s.add(phaseMono, "registre: bascule de posture tracée (KindTelemetry ≥ 1)",
 		after[registry.KindTelemetry] >= 1, fmt.Sprintf("KindTelemetry=%d", after[registry.KindTelemetry]))
-}
-
-func containsStr(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

@@ -829,6 +829,17 @@ func TestTombstonesAreBounded(t *testing.T) {
 	}
 }
 
+// snapshotOf lit la file d'arbitrage pour assertion — la lecture locale
+// est infaillible (D110 élargi, T37) ; toute erreur est une faute de test.
+func snapshotOf(t *testing.T, s *ContractStore) []PendingPlan {
+	t.Helper()
+	snap, err := s.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	return snap
+}
+
 // TestContractStoreSnapshot couvre la couture T34c (D81) : la console
 // affiche la file d'arbitrage — pending vivants seuls, triés par
 // submittedAt, avec hash scellé et bornes temporelles ; un plan approuvé
@@ -839,7 +850,7 @@ func TestContractStoreSnapshot(t *testing.T) {
 	trips := &contractTrips{}
 	s := newContractStore(t, sink, clock, trips, nil)
 
-	if got := s.Snapshot(); len(got) != 0 {
+	if got := snapshotOf(t, s); len(got) != 0 {
 		t.Fatalf("snapshot initial non vide : %d plans", len(got))
 	}
 	if got := s.PolicyID(); got != arr32(policyV1) {
@@ -860,7 +871,7 @@ func TestContractStoreSnapshot(t *testing.T) {
 	}
 	submitted2 := clock.now()
 
-	got := s.Snapshot()
+	got := snapshotOf(t, s)
 	if len(got) != 2 {
 		t.Fatalf("snapshot : %d plans — attendu 2", len(got))
 	}
@@ -883,7 +894,7 @@ func TestContractStoreSnapshot(t *testing.T) {
 	// La lecture est pure : aucune feuille, aucune mutation, résultat
 	// stable à l'appel répété.
 	leavesBefore := len(sink.leaves)
-	if again := s.Snapshot(); len(again) != 2 || again[0].Hash != h1 || again[1].Hash != h2 {
+	if again := snapshotOf(t, s); len(again) != 2 || again[0].Hash != h1 || again[1].Hash != h2 {
 		t.Fatalf("snapshot répété instable : %+v", again)
 	}
 	if len(sink.leaves) != leavesBefore {
@@ -892,7 +903,7 @@ func TestContractStoreSnapshot(t *testing.T) {
 
 	// Un plan approuvé sort de la file d'arbitrage.
 	approveNominal(t, s, clock, h1)
-	if got := s.Snapshot(); len(got) != 1 || got[0].Hash != h2 {
+	if got := snapshotOf(t, s); len(got) != 1 || got[0].Hash != h2 {
 		t.Fatalf("snapshot après approbation : %+v — attendu [h2] seul", got)
 	}
 
@@ -900,7 +911,7 @@ func TestContractStoreSnapshot(t *testing.T) {
 	// d'expiration n'est pas encore écrite (filtre horloge, D81 : la
 	// console ne montre jamais un plan déjà mort).
 	clock.advance(DefaultPendingTTL) // submitted2 + 15 min pile
-	if got := s.Snapshot(); len(got) != 0 {
+	if got := snapshotOf(t, s); len(got) != 0 {
 		t.Fatalf("snapshot après expiration : %d plans — attendu 0 (expiresAt atteint)", len(got))
 	}
 }

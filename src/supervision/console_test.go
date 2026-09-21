@@ -11,6 +11,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,14 +25,30 @@ import (
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 )
 
-// stubEpochs / stubStats sont les coutures T29/T17 figées pour tests.
-type stubEpochs struct{ st cluster.TrackerStatus }
+// stubEpochs / stubStats sont les coutures T29/T17 figées pour tests ;
+// err non nil simule une source EN FAUTE (adaptateur réseau mort —
+// témoins 503 du contrat D110 élargi, T37).
+type stubEpochs struct {
+	st  cluster.TrackerStatus
+	err error
+}
 
-func (s stubEpochs) Status() cluster.TrackerStatus { return s.st }
+func (s stubEpochs) Status() (cluster.TrackerStatus, error) { return s.st, s.err }
 
-type stubStats struct{ st broker.BrokerStats }
+type stubStats struct {
+	st  broker.BrokerStats
+	err error
+}
 
-func (s stubStats) Stats() broker.BrokerStats { return s.st }
+func (s stubStats) Stats() (broker.BrokerStats, error) { return s.st, s.err }
+
+// stubArbitrationFault est une source d'arbitrage en faute — le handler
+// doit 503 sans jamais rendre la zero-value de la policy.
+type stubArbitrationFault struct{ err error }
+
+func (s stubArbitrationFault) SnapshotWithPolicy() ([]pep.PendingPlan, [32]byte, error) {
+	return nil, [32]byte{}, s.err
+}
 
 // consoleFixture assemble une console sur un vrai moniteur (fixture
 // supervision), un vrai store de contrats (feuilles sur le log de la
@@ -426,4 +443,77 @@ func TestConsoleConcurrentWithCheckOnce(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Contrat D110 élargi (T37, revue de plan) : une source en erreur DOIT
+// produire 503 PAR HANDLER — jamais une zero-value 200 (demi-vérité
+// interdite, §1) — et la faute ne fait taire QUE les vues qui dépendent
+// de la source morte (granularité par route : /v1/epoch ne dépend pas
+// des compteurs broker). Mutation couverte : un handler qui ignorerait
+// l'erreur de sa source rendrait 200 avec une vue vide → ces tests
+// échouent immédiatement.
+// ---------------------------------------------------------------------------
+
+func serve(t *testing.T, c *Console, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	c.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func assert503SourceIndisponible(t *testing.T, rec *httptest.ResponseRecorder, path string) {
+	t.Helper()
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET %s avec source en faute: statut %d, attendu 503 (corps %s)", path, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "source indisponible") {
+		t.Fatalf("GET %s: corps %q sans « source indisponible »", path, rec.Body.String())
+	}
+}
+
+func TestConsoleEpochSourceFault503(t *testing.T) {
+	cfx := newConsoleFixture(t)
+	cfx.epochs.err = errors.New("brokerd injoignable")
+	assert503SourceIndisponible(t, serve(t, cfx.console, "/v1/epoch"), "/v1/epoch")
+	// Granularité : stats et arbitrage sont sains — leurs vues restent
+	// servies (une faute d'époque ne doit pas les faire taire).
+	if rec := serve(t, cfx.console, "/v1/indicators"); rec.Code != http.StatusOK {
+		t.Fatalf("/v1/indicators: statut %d, attendu 200 (sources saines)", rec.Code)
+	}
+	if rec := serve(t, cfx.console, "/v1/arbitration"); rec.Code != http.StatusOK {
+		t.Fatalf("/v1/arbitration: statut %d, attendu 200 (sources saines)", rec.Code)
+	}
+}
+
+func TestConsoleStatsSourceFault503(t *testing.T) {
+	cfx := newConsoleFixture(t)
+	cfx.stats.err = errors.New("brokerd injoignable")
+	assert503SourceIndisponible(t, serve(t, cfx.console, "/v1/indicators"), "/v1/indicators")
+	if rec := serve(t, cfx.console, "/v1/epoch"); rec.Code != http.StatusOK {
+		t.Fatalf("/v1/epoch: statut %d, attendu 200 (source saine)", rec.Code)
+	}
+}
+
+func TestConsoleArbitrationSourceFault503(t *testing.T) {
+	cfx := newConsoleFixture(t)
+	faulty, err := NewConsole(ConsoleOptions{
+		Monitor:   cfx.mf.monitor,
+		Contracts: stubArbitrationFault{err: errors.New("brokerd injoignable")},
+		Epochs:    cfx.epochs,
+		Stats:     cfx.stats,
+	})
+	if err != nil {
+		t.Fatalf("NewConsole: %v", err)
+	}
+	// /v1/arbitration et /v1/indicators dépendent de la file : 503 toutes
+	// les deux. PolicyID (0xDEAD) ne doit JAMAIS fuiter dans une réponse.
+	assert503SourceIndisponible(t, serve(t, faulty, "/v1/arbitration"), "/v1/arbitration")
+	assert503SourceIndisponible(t, serve(t, faulty, "/v1/indicators"), "/v1/indicators")
+	if rec := serve(t, faulty, "/v1/epoch"); rec.Code != http.StatusOK {
+		t.Fatalf("/v1/epoch: statut %d, attendu 200 (source saine)", rec.Code)
+	}
+	if strings.Contains(serve(t, faulty, "/v1/arbitration").Body.String(), "dead") {
+		t.Fatal("PolicyID d'un Snapshot en erreur a fuité dans une réponse")
+	}
 }

@@ -133,6 +133,17 @@ func opaServer(t *testing.T, allowFn func(input map[string]any) bool, delay time
 // fourni, traducteur fixe, émetteur dev, époque fixe. Renvoie le broker,
 // l'émetteur, le signataire, le registre de feuilles et l'enregistreur
 // d'alarmes.
+// statsOf lit les compteurs pour assertion — la lecture locale est
+// infaillible (D110 élargi, T37) ; toute erreur est une faute de test.
+func statsOf(t *testing.T, b *Broker) BrokerStats {
+	t.Helper()
+	st, err := b.Stats()
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	return st
+}
+
 func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer, *leafRecorder, *tripRecorder) {
 	t.Helper()
 	leaves := &leafRecorder{}
@@ -597,7 +608,7 @@ func TestTranslationFailureDenies(t *testing.T) {
 	if len(leaves.all()) != 1 {
 		t.Fatalf("%d feuilles, veut 1 (le refus est tracé)", len(leaves.all()))
 	}
-	if got := b.Stats().TranslationFailures; got != 1 {
+	if got := statsOf(t, b).TranslationFailures; got != 1 {
 		t.Fatalf("TranslationFailures=%d, veut 1", got)
 	}
 }
@@ -686,7 +697,7 @@ func TestSigningFailureDenies(t *testing.T) {
 	if got := ledger.Aggregate("agent-1", 7); got != 0 {
 		t.Fatalf("agrégat=%d après échec, veut 0 (réservation libérée)", got)
 	}
-	if got := b.Stats().IssuanceFailures; got != 1 {
+	if got := statsOf(t, b).IssuanceFailures; got != 1 {
 		t.Fatalf("IssuanceFailures=%d, veut 1", got)
 	}
 }
@@ -750,7 +761,7 @@ func TestEnvelopeExceededDenies(t *testing.T) {
 	if len(trips.all()) != 0 {
 		t.Fatalf("alarmes %v — un deny d'enveloppe n'alarme pas", trips.all())
 	}
-	if got := b.Stats().EnvelopeDenies; got != 1 {
+	if got := statsOf(t, b).EnvelopeDenies; got != 1 {
 		t.Fatalf("EnvelopeDenies=%d, veut 1", got)
 	}
 }

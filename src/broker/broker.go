@@ -383,10 +383,15 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 }
 
 // Stats rapporte un instantané des compteurs (supervision T34, harnais T27).
-func (b *Broker) Stats() BrokerStats {
+func (b *Broker) Stats() (BrokerStats, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.stats
+	// Lecture locale infaillible : nil ici — l'erreur existe dans la
+	// signature parce que la couture BrokerStatsSource de la console
+	// (T37, D110 élargi après revue) peut être un adaptateur réseau,
+	// dont la lecture peut échouer (une zero-value serait une
+	// demi-vérité, §1).
+	return b.stats, nil
 }
 
 // HandleAction orchestre une demande d'action, de la réception à

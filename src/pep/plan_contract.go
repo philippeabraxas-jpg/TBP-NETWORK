@@ -493,7 +493,12 @@ type PendingPlan struct {
 // entrées dont expiresAt est passé mais dont la feuille d'expiration n'est
 // pas encore écrite (expireLocked n'a pas encore tourné) sont filtrées ici
 // sur l'horloge : la console ne montre jamais un plan déjà mort.
-func (s *ContractStore) Snapshot() []PendingPlan {
+//
+// Lecture locale infaillible : nil ici — l'erreur existe dans la signature
+// parce que la couture ArbitrationSource de la console (T37, D110 élargi
+// après revue) peut être un adaptateur réseau, dont la lecture peut
+// échouer (une zero-value serait une demi-vérité, §1).
+func (s *ContractStore) Snapshot() ([]PendingPlan, error) {
 	now := s.clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -515,14 +520,38 @@ func (s *ContractStore) Snapshot() []PendingPlan {
 		}
 		return bytes.Compare(out[i].Hash[:], out[j].Hash[:]) < 0
 	})
-	return out
+	return out, nil
 }
 
 // PolicyID renvoie le hash du bundle de règles sous lequel les plans sont
 // scellés (claim −1) : la console l'affiche pour que l'arbitre vérifie
 // qu'il arbitre sous la bonne politique (un plan approuvé sous P meurt
-// avec P).
+// avec P). Contrat ArbitrationSource (T37) : la policy du DERNIER Snapshot
+// réussi — ici la policy est fixée à la construction du store, elle
+// satisfait donc le contrat pour tout Snapshot ; les adaptateurs réseau,
+// eux, ne la mettent à jour que sur une lecture réussie (supervisord).
 func (s *ContractStore) PolicyID() [32]byte { return s.policyID }
+
+// SnapshotWithPolicy rend la file ET la policy dans le MÊME appel —
+// c'est la méthode qu'exige l'interface ArbitrationSource (supervision,
+// T37, revue PR #77). « La policy du dernier Snapshot réussi, mise à
+// jour seulement sur succès » (commentaire de PolicyID ci-dessus) ne
+// suffit PAS à garantir que la policy lue par un appelant provient de
+// SON PROPRE Snapshot : Snapshot() et PolicyID() sont deux méthodes
+// séparées sur un état partagé — une deuxième requête console
+// concurrente peut réussir son propre Snapshot() (et donc, pour un
+// adaptateur réseau, écraser la policy mise en cache) entre le Snapshot
+// et le PolicyID de la première, qui lirait alors la policy de la
+// seconde associée à SA PROPRE liste pending. Prouvé empiriquement pour
+// l'adaptateur réseau de supervisord (TestArbitrationSourceSnapshotWithPolicyNoRace).
+// Ici, la policy est un champ figé à la construction du store : aucun
+// risque de ce genre pour ContractStore lui-même, mais l'appairage doit
+// se faire par construction dans le contrat d'interface, pas par
+// convention chez chaque implémentation.
+func (s *ContractStore) SnapshotWithPolicy() ([]PendingPlan, [32]byte, error) {
+	out, err := s.Snapshot()
+	return out, s.policyID, err
+}
 
 // VerifyStep est la couture appelée par le broker (étape 7 de HandleAction,
 // D62) : la demande (binding opaque + action/resource traduites) est

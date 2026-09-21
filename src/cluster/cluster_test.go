@@ -207,6 +207,17 @@ func epochRecord(event byte, n uint64, authority, reason string) []byte {
 // Configuration fail-closed
 // ---------------------------------------------------------------------------
 
+// statusOf lit l'état du tracker pour assertion — la lecture locale
+// est infaillible (D110 élargi, T37) ; toute erreur est une faute de test.
+func statusOf(t *testing.T, tr *Tracker) TrackerStatus {
+	t.Helper()
+	st, err := tr.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	return st
+}
+
 func TestTrackerConfigFailClosed(t *testing.T) {
 	pubs, _ := testControllers(t)
 	clk := newClock(t0)
@@ -299,7 +310,7 @@ func TestGenesisEpochZeroImport(t *testing.T) {
 	if ls[0].CellID != "cell-a" {
 		t.Fatalf("feuille attribuée à %q, veut cell-a", ls[0].CellID)
 	}
-	if got := trA.Status().AutoFailoversHour; got != 0 {
+	if got := statusOf(t, trA).AutoFailoversHour; got != 0 {
 		t.Fatalf("AutoFailoversHour=%d — l'epoch 0 (mode absent ⇒ manual) ne consomme pas le budget", got)
 	}
 }
@@ -375,7 +386,7 @@ func TestFailoverNoDoubleAuthority(t *testing.T) {
 	// Après expiration de l'ancienne : cell-b sert, seule.
 	clk.set(t0.Add(61 * time.Second))
 	if !serving(trB) {
-		st := trB.Status()
+		st := statusOf(t, trB)
 		t.Fatalf("cell-b devrait servir à t0+61 (notBefore=%s exp=%s)", st.NotBefore, st.ExpiresAt)
 	}
 
@@ -598,7 +609,7 @@ func TestRevocationQuarantine(t *testing.T) {
 	if _, err := trC.CurrentEpoch(); !errors.Is(err, ErrCellQuarantined) {
 		t.Fatalf("cell-c CurrentEpoch : err=%v, veut ErrCellQuarantined", err)
 	}
-	st := trC.Status()
+	st := statusOf(t, trC)
 	if st.Epoch != 2 || st.Authority != "cell-b" || len(st.Quarantined) != 1 || st.Quarantined[0] != "cell-c" {
 		t.Fatalf("Status cell-c = %+v — la quarantaine doit rester inspectable (§7.3)", st)
 	}

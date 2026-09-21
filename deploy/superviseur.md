@@ -7,10 +7,11 @@ indépendant** (T34 — sa propre clé et son propre log, il n'écrit JAMAIS
 dans les chaînes surveillées) et la **console** (arbitrages, époques,
 indicateurs §9.1). La génèse (scripts/genesis) se célèbre ici, sur HSM.
 
-> Trou déclaré **#74** : il n'existe pas de binaire `supervisord` —
-> `src/supervision` est une bibliothèque (NewMonitor, NewConsole,
-> ChainWatcher) à assembler, comme pepd assemble le PEP. Patron à
-> l'étape 3.
+> Le démon `supervisord` (T37 — issue #74) assemble moniteur et console ;
+> la phase daemons de `deploy/selftest/` exécute l'étape 3 de ce guide
+> contre les vrais binaires (build, témoins fail-closed, lectures LIVE,
+> 503 d'honnêteté quand la source tombe). Si une commande ci-dessous
+> diverge du selftest, le selftest casse : corrigez le guide ou le code.
 
 #### Étape 1 — Célébrer la genèse (HSM)
 
@@ -55,33 +56,63 @@ pubkeys et d'epoch0 ; aucune clé privée n'a quitté le HSM (journal HSM).
 **En cas d'échec : STOP** — une clé privée de contrôleur copiée hors HSM
 invalide la cérémonie : refaire la genèse, révoquer l'ancienne.
 
-#### Étape 3 — Assembler moniteur et console (patron — trou #74)
+#### Étape 3 — Compiler et démarrer supervisord (moniteur + console, T37)
 
 **Prérequis vérifiable** : étape 1 verte ; les cellules à surveiller
-tournent en monitor (cellule.md étape 6).
+tournent (cellule.md étape 7 : le brokerd de chaque cellule sert ses
+vues de supervision sur son socket Unix) ; `cell_log.vkey` de chaque
+cellule et de la master chain récupérés (clés PUBLIQUES de checkpoint
+— seules pièces nécessaires au scan vérifié, custody D97) ; accès
+LECTURE SEULE aux répertoires des chaînes surveillées accordé à
+l'utilisateur du service (groupe dédié ou ACL — `cell_log.key` ne
+quitte JAMAIS la cellule).
 
 **Commande** :
 
 ```bash
-# Patron d'assemblage (à compléter dans un cmd/supervisord — #74) :
-#   mon := supervision.NewMonitor(MonitorOptions{
-#     MonitorCellID, Log: log du MONITEUR (sa chaîne, §7.1),
-#     Cells: []CellSpec (≥1), Master: MasterSpec (requis),
-#     MaxAnchorLag, Sink: AlarmSink, Now, Trigger})
-#   con := supervision.NewConsole(ConsoleOptions{Stats: <source de
-#     compteurs broker — requis, §9.1>, …})
-#   con.Serve(ctx, lis)  # GET /v1/arbitration, /v1/epoch, /v1/indicators
-go test ./src/supervision/   # les contrats assemblés sont testés (T34)
+go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
+/usr/local/bin/supervisord 2>&1 | head -1   # sans environnement : doit refuser
+
+# /etc/tbp/cells.json — chaînes surveillées (à adapter ; vkeys publiques
+# seulement) :
+#   {"cells":[{"cell_id":"cell-a","log_dir":"/var/lib/tbp/broker",
+#              "origin":"cell-a",
+#              "vkey_file":"/var/lib/tbp/broker/cell_log.vkey",
+#              "manifest_dir":"/var/lib/tbp/broker/manifests"}],
+#    "master":{"cell_id":"master","log_dir":"/var/lib/tbp/master",
+#              "origin":"master",
+#              "vkey_file":"/var/lib/tbp/master/cell_log.vkey"}}
+# /etc/tbp/supervisord.env (0600) — valeurs d'exemple, à adapter :
+#   TBP_MONITOR_CELL_ID=monitor-01
+#   TBP_SALT=<hex 32 car. — sel de la chaîne DU MONITEUR, généré ici>
+#   TBP_REGISTRY_DIR=/var/lib/tbp/supervision
+#   TBP_CELLS_FILE=/etc/tbp/cells.json
+#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock
+#   TBP_TICK_MS=5000
+#   TBP_CONSOLE_SOCKET=/run/tbp/supervision.sock
+install -m 0644 src/supervision/tbp-supervisord.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now tbp-supervisord
+curl -s --unix-socket /run/tbp/supervision.sock http://localhost/v1/epoch
 ```
 
-**Critère de succès observable** : les tests du paquet passent ; le motif
-ChainWatcher (scan vérifié : checkpoint signé + cohérence Merkle) est
-celui que la phase fencing du selftest utilise pour compter les feuilles
-des deux cellules.
+**Critère de succès observable** : le binaire se construit ; lancé sans
+environnement, il sort immédiatement avec
+`supervisord: TBP_MONITOR_CELL_ID requis` (fail-closed — ce refus EST le
+critère) ; un brokerd de cellule injoignable AU DÉMARRAGE est fatal
+aussi (sonde des sources : pas de console dont les sources sont mortes
+à la naissance) ; la console répond en GET seul : `/v1/epoch` rend
+l'état du tracker de la cellule (lecture LIVE via brokerd, jamais de
+cache), `/v1/arbitration` la file des plans en attente (hash scellé et
+bornes temporelles — jamais les étapes), `/v1/indicators` les
+indicateurs §9.1 et la santé des chaînes surveillées. Un brokerd qui
+TOMBE en cours de route ⇒ 503 `{"error":"source indisponible"}` sur la
+route concernée, jamais une valeur figée ni une zero-value (§1).
 
-**En cas d'échec : STOP** — ne pas inventer un démon ; suivre #74. Un
-moniteur qui écrirait dans les chaînes surveillées violerait §2/§7.1 :
-refuser toute assemblage qui lui en donne le moyen.
+**En cas d'échec : STOP** — un supervisord qui démarrerait sans sel,
+sans master chain ou avec un brokerd injoignable est fail-open :
+corriger la cause. Un moniteur qui écrirait dans les chaînes
+surveillées violerait §2/§7.1 : l'unit livrée le rend structurellement
+impossible (ProtectSystem=strict) — ne pas élargir ReadWritePaths.
 
 #### Étape 4 — Surveiller sans écrire
 
@@ -129,6 +160,8 @@ possible ; c'est le comportement voulu, pas une panne à réparer.
 
 ## Durcissement
 
-Unités systemd sur le patron T24 (`src/translator/tbp-translator.service`)
-à adapter ; la machine superviseur ne rejoint AUCUN VLAN de production
+Unités systemd sur le patron T24 (`src/translator/tbp-translator.service`) ;
+l'unité du superviseur est LIVRÉE : `src/supervision/tbp-supervisord.service`
+(T37 — lecture seule structurelle sur les chaînes surveillées, aucune
+famille réseau). La machine superviseur ne rejoint AUCUN VLAN de production
 (§5.1) — son canal est la supervision, pas le trafic.
