@@ -132,12 +132,12 @@ supervision → deployment.** Every `src/` package carries its own test
 suite (Go unit/integration tests, Python for the audit and measurement
 tooling), and `deploy/selftest/` executes the deployment guides end to
 end (**82 controls, 0 failures** — a guide that drifts from the code
-breaks there, not at the operator's). The translator's controlled
-degradation (T25, §4.5) merged most recently
-([#79](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/79)). Two
-backlog items are **in review** as open PRs:
-[#78](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/78)
-(registry write-durability modes, T38) and
+breaks there, not at the operator's). Bounded-async registry durability
+(T38, §9.1) merged most recently
+([#78](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/78)), just
+after the translator's controlled degradation (T25, §4.5,
+[#79](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/79)). One
+backlog item is **in review** as an open PR:
 [#80](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/80)
 (translator quality measurement — corpus replay, per-class metrics,
 registry leaf, T26, §4.5). What is deliberately **not** here yet: the
