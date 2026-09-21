@@ -1,0 +1,1 @@
+coupe le registre et efface les journaux avant redémarrage
