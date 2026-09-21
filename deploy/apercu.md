@@ -1,169 +1,171 @@
-# deploy/apercu.md — vue d'ensemble : quoi, où, pourquoi, prérequis
+# deploy/apercu.md — overview: what, where, why, requirements
 
-Ce document est le **point d'entrée** d'un déploiement TBP-NETWORK : ce
-qu'on déploie, où chaque pièce va, pourquoi elle existe, et ce qu'il faut
-avant de commencer. Il synthétise ; les guides par machine
+_Version française : [apercu.fr.md](apercu.fr.md)._
+
+This document is the **entry point** of a TBP-NETWORK deployment: what
+gets deployed, where each piece goes, why it exists, and what is needed
+before starting. It synthesizes; the per-machine guides
 ([router-debian.md](router-debian.md), [cellule.md](cellule.md),
-[serveur.md](serveur.md), [superviseur.md](superviseur.md)) exécutent.
-En cas de doute, la spec ([`docs/spec-en-v1.0.md`](../docs/spec-en-v1.0.md))
-gouverne — et `deploy/selftest/` tranche : un guide qui dérive du code
-casse là, pas chez l'opérateur.
+[serveur.md](serveur.md), [superviseur.md](superviseur.md)) execute.
+When in doubt, the spec ([`docs/spec-en-v1.0.md`](../docs/spec-en-v1.0.md))
+governs — and `deploy/selftest/` decides: a guide that drifts from the code
+breaks there, not at the operator's site.
 
-## Pourquoi — la doctrine en cinq points
+## Why — the doctrine in five points
 
-1. **Jamais par confiance, toujours par preuve vérifiable** (§1, §3) :
-   l'admission d'une entité au réseau se fait par poignée de main
-   attestée, pas par réputation ni par segment « de confiance ».
-2. **Chaque décision laisse une feuille** (§4.1), et la feuille est
-   **hash-only** (§6.2) : le registre prouve sans révéler — le sel reste
-   chez le producteur, jamais dans un registre.
-3. **Fail-closed partout** (§1) : OPA injoignable, horloge désynchronisée,
-   ancre absente, quota saturé ⇒ refus tracé et alarmé. Un trou silencieux
-   est une faute, pas une tolérance.
-4. **Monitor avant closed** (§5.3) : la posture fermée ne s'installe pas,
-   elle se mérite — mesure §9.1 d'abord, fenêtre d'observation, quorum
-   pour basculer ([monitor-to-closed.md](monitor-to-closed.md)).
-5. **Une cellule est du bétail, jamais une racine de confiance** (§7.1) :
-   les clés de gouvernance vivent sur HSM à la genèse ; les cellules
-   vérifient et appliquent, elles ne détiennent rien de souverain.
+1. **Never by trust, always by verifiable proof** (§1, §3):
+   admission of an entity to the network happens through an attested
+   handshake, not by reputation or by a "trusted" segment.
+2. **Every decision leaves a leaf** (§4.1), and the leaf is
+   **hash-only** (§6.2): the registry proves without revealing — the salt
+   stays with the producer, never in a registry.
+3. **Fail-closed everywhere** (§1): unreachable OPA, desynchronized clock,
+   missing anchor, exhausted quota ⇒ traced and alarmed refusal. A silent
+   hole is a fault, not a tolerance.
+4. **Monitor before closed** (§5.3): the closed posture is not installed,
+   it is earned — §9.1 measurement first, observation window, quorum
+   to switch ([monitor-to-closed.md](monitor-to-closed.md)).
+5. **A cell is cattle, never a trust root** (§7.1):
+   governance keys live on HSM at genesis; cells
+   verify and enforce, they hold nothing sovereign.
 
-## Quoi — les composants et leur provenance
+## What — the components and their provenance
 
-| Composant | Rôle | Provenance |
+| Component | Role | Provenance |
 |---|---|---|
-| Routeur NAC | 802.1X/EAP-TLS (même PKI que le handshake §3), VLANs, murs nftables | `config/freeradius/`, `config/nftables/` — **à adapter**, jamais copier (D99) |
-| Cellule | `brokerd` (point d'entrée §5.1), `pepd`, registre tessera, OPA, tracker d'époques | `src/broker/`, `src/pep/`, `src/registry/`, `src/cluster/` — binaires Go du dépôt |
-| Serveur applicatif | Application (PostgreSQL, …) + PEP d'acceptation via SA cellule | `src/pep/` (+ `src/pep/postgres-extension/` pour le PEP en processus, §4.4) |
-| Superviseur | Master chain (ancres par époque), moniteur indépendant + console (`supervisord`), genèse | `src/registry/` (ancrage), `src/supervision/`, `scripts/genesis/` (HSM) |
-| Traducteur | IA locale produisant l'action — runtime durci, dégradation contrôlée, mesure qualité | `src/translator/` (T24, T25, T26) — **optionnel, en dernier** (§13) |
-| Cœur du protocole | HSM signer, chaîne d'audit Merkle, moteur de politique OPA | submodule `tbp4.2.1/` — pointeur figé, jamais modifié ici |
+| NAC router | 802.1X/EAP-TLS (same PKI as the §3 handshake), VLANs, nftables walls | `config/freeradius/`, `config/nftables/` — **to adapt**, never copy (D99) |
+| Cell | `brokerd` (§5.1 entry point), `pepd`, tessera registry, OPA, epoch tracker | `src/broker/`, `src/pep/`, `src/registry/`, `src/cluster/` — Go binaries from the repo |
+| Application server | Application (PostgreSQL, …) + acceptance PEP via ITS cell | `src/pep/` (+ `src/pep/postgres-extension/` for the in-process PEP, §4.4) |
+| Supervisor | Master chain (per-epoch anchors), independent monitor + console (`supervisord`), genesis | `src/registry/` (anchoring), `src/supervision/`, `scripts/genesis/` (HSM) |
+| Translator | local AI producing the action — hardened runtime, controlled degradation, quality measurement | `src/translator/` (T24, T25, T26) — **optional, last** (§13) |
+| Protocol core | HSM signer, Merkle audit chain, OPA policy engine | `tbp4.2.1/` submodule — frozen pointer, never modified here |
 
-Ce que le dépôt ne fournit PAS : la cérémonie de genèse elle-même
-(procédurale, §7.2/§3.2 — l'outillage est dans `scripts/genesis/`), le
-plan d'adressage du site, la PKI de production, les corpus natifs du
-traducteur (à constituer au pilote, §15).
+What the repo does NOT provide: the genesis ceremony itself
+(procedural, §7.2/§3.2 — the tooling is in `scripts/genesis/`), the
+site addressing plan, the production PKI, the translator's native
+corpora (to be built at the pilot, §15).
 
-## Où — topologie du pilote P1 et flux
+## Where — P1 pilot topology and flows
 
-Segments (§5.1, à adapter — `config/nftables/router-p1.nft` est le point
-de départ) :
+Segments (§5.1, to adapt — `config/nftables/router-p1.nft` is the
+starting point):
 
-| VLAN | Rôle | Doctrine |
+| VLAN | Role | Doctrine |
 |---|---|---|
-| 10 | serveurs + cellules | trafic gouverné (PEP/broker) |
-| 20 | authentification | EAP/RADIUS uniquement |
-| 33 | IoT / MAB | canal instrumenté — JAMAIS silencieux |
-| 66 | captif | **VLAN par défaut** (échec / sans auth) |
-| 77 | remédiation | certificat révoqué, OCSP/CRL injoignable |
-| 99 | management | administration hors production |
+| 10 | servers + cells | governed traffic (PEP/broker) |
+| 20 | authentication | EAP/RADIUS only |
+| 33 | IoT / MAB | instrumented channel — NEVER silent |
+| 66 | captive | **default VLAN** (failure / no auth) |
+| 77 | remediation | revoked certificate, unreachable OCSP/CRL |
+| 99 | management | out-of-production administration |
 
-Machines (P1 §13 : 1 VLAN serveur, routeur Debian, **2 cellules**,
-802.1X, registre central) : 1 routeur, 2 cellules (VM), 1 serveur
-applicatif, 1 superviseur (VM indépendante + HSM).
+Machines (P1 §13: 1 server VLAN, Debian router, **2 cells**,
+802.1X, central registry): 1 router, 2 cells (VMs), 1 application
+server, 1 supervisor (independent VM + HSM).
 
-Flux de décision : agent → **broker** de sa cellule (socket Unix, v1) →
-traducteur (`structured`) → OPA (capabilities restreintes §12) → quorum
-classe W si requis (§7.5) → contrat de plan si scellé (§4.2) → jeton
-CWT/COSE Ed25519 → **PEP** devant la ressource (validation, anti-rejeu,
-quota, fail-closed) → action. Chaque étape laisse une feuille dans le
-**registre de la cellule** ; les ancres montent à la **master chain** du
-superviseur, que le **moniteur indépendant** relit en vérifié
-(ChainWatcher : checkpoint signé + cohérence Merkle) sans jamais y
-écrire. Le serveur n'accepte que via le broker de SA cellule (§5.1) ;
-aucun chemin client → serveur direct.
+Decision flow: agent → **broker** of its cell (Unix socket, v1) →
+translator (`structured`) → OPA (restricted capabilities §12) →
+class W quorum if required (§7.5) → plan contract if sealed (§4.2) →
+CWT/COSE Ed25519 token → **PEP** in front of the resource (validation,
+anti-replay, quota, fail-closed) → action. Every step leaves a leaf in
+the **cell's registry**; anchors rise to the supervisor's **master chain**,
+which the **independent monitor** re-reads in verified mode
+(ChainWatcher: signed checkpoint + Merkle consistency) without ever
+writing to it. The server only accepts via ITS cell's broker (§5.1);
+no direct client → server path.
 
-Custody : aucune clé de gouvernance hors de son rôle — la matrice
-complète est dans [README.md](README.md) (décision D97) : clés
-contrôleurs sur HSM uniquement, `cell_log.key` dans SA cellule, sel des
-feuilles chez le producteur, clé du moniteur au superviseur.
+Custody: no governance key outside its role — the full
+matrix is in [README.md](README.md) (decision D97): controller
+keys on HSM only, `cell_log.key` in ITS cell, leaf salt with the
+producer, monitor key with the supervisor.
 
-## Prérequis (requirements)
+## Requirements
 
-### Matériel — pilote P1 minimal
+### Hardware — minimal P1 pilot
 
-- 1 routeur : Debian 12, **≥ 2 interfaces** (dédié ou VM) ; un switch
-  802.1X pour le NAC réel — sinon `lab/containerlab/` pour l'éprouver.
-- 2 VM cellules (une seule cellule peut différer le fencing, un pilote
-  ne peut pas — §7.2/§13).
-- 1 hôte serveur applicatif (PostgreSQL si l'extension PEP est visée).
-- 1 VM superviseur + **HSM** (SoftHSM toléré en DEV uniquement — jamais
-  racine de gouvernance, §12).
+- 1 router: Debian 12, **≥ 2 interfaces** (dedicated or VM); an
+  802.1X switch for the real NAC — otherwise `lab/containerlab/` to exercise it.
+- 2 cell VMs (a single cell can defer fencing, a pilot
+  cannot — §7.2/§13).
+- 1 application server host (PostgreSQL if the PEP extension is targeted).
+- 1 supervisor VM + **HSM** (SoftHSM tolerated in DEV only — never a
+  governance root, §12).
 
-### Logiciel — chaque machine
+### Software — every machine
 
-- Debian 12 (bookworm, cible du dépôt), **Go ≥ 1.24**, **OPA ≥ 1.0**,
-  python3 — vérifiés à l'étape commune 1 de [README.md](README.md).
-- Routeur : `nftables`, `freeradius`, `hostapd`.
-- Superviseur : `softhsm2-util` (dev) ou le PKCS#11 du HSM (prod).
-- Serveur : PostgreSQL + en-têtes de dev si l'extension est compilée.
-- Durcissement : `config/sysctl/99-tbp-hardening.conf` (à adapter au
-  site) sur toute machine portant un composant TBP.
+- Debian 12 (bookworm, the repo's target), **Go ≥ 1.24**, **OPA ≥ 1.0**,
+  python3 — verified in common step 1 of [README.md](README.md).
+- Router: `nftables`, `freeradius`, `hostapd`.
+- Supervisor: `softhsm2-util` (dev) or the HSM's PKCS#11 (prod).
+- Server: PostgreSQL + dev headers if the extension is compiled.
+- Hardening: `config/sysctl/99-tbp-hardening.conf` (to adapt to the
+  site) on every machine running a TBP component.
 
-### Procédural — avant toute commande
+### Procedural — before any command
 
-- **Genèse d'abord** : quorum m-of-n de contrôleurs sur HSM, ancrée
-  hors-bande. Rien dans le dépôt ne remplace cette cérémonie ; ses
-  artefacts (`manifest.json`, `pubkeys/*.hex`, `epoch0.json`) sont le
-  prérequis vérifiable de la première étape cellule.
-- Plan d'adressage arrêté ; `config/` est à **adapter**, pas à copier.
-- Custody D97 comprise et acceptée : `*.pem`, `*.key`,
-  `config/freeradius/certs/` (exemple à adapter, jamais copier),
-  `policies/capabilities.json` ne se committent jamais (gitignorés).
+- **Genesis first**: m-of-n quorum of controllers on HSM, anchored
+  out-of-band. Nothing in the repo replaces this ceremony; its
+  artefacts (`manifest.json`, `pubkeys/*.hex`, `epoch0.json`) are the
+  verifiable prerequisite of the first cell step.
+- Addressing plan settled; `config/` is to **adapt**, not to copy.
+- D97 custody understood and accepted: `*.pem`, `*.key`,
+  `config/freeradius/certs/` (example to adapt, never copy),
+  `policies/capabilities.json` are never committed (gitignored).
 
-### Humain
+### Human
 
-- Les guides sont écrits pour un **opérateur non-auteur** : chaque étape
-  porte un prérequis vérifiable, un critère de succès observable et un
-  « En cas d'échec : STOP ». Ne jamais continuer sur un prérequis rouge.
-- La bascule monitor → closed exige un **quorum** : un opérateur seul ne
-  peut pas fermer le réseau (démontré par le selftest : 1 signataire →
+- The guides are written for a **non-author operator**: every step
+  carries a verifiable prerequisite, an observable success criterion and an
+  "On failure: STOP". Never continue on a red prerequisite.
+- The monitor → closed switch requires a **quorum**: a single operator
+  cannot close the network (demonstrated by the selftest: 1 signer →
   403, quorum → 200).
 
-## Dans quel ordre — §13 décliné (D98)
+## In which order — §13 instantiated (D98)
 
 ```
-0. prérequis communs            deploy/README.md (étapes communes)
-1. genèse (superviseur, HSM)    scripts/genesis + superviseur.md étape 1
-2. fencing (trackers d'époques) cellule.md — éprouvé par le selftest (2 cellules)
-3. OPA + registre               cellule.md étapes 3-6 (capabilities restreintes §12)
-4. PEP / broker (MONITOR)       cellule.md étape 7, serveur.md — rien d'autre que monitor
-5. NAC routeur                  router-debian.md — DERNIER maillon réseau
-6. traducteur (optionnel)       src/translator/README.md — en dernier, toujours
+0. common prerequisites       deploy/README.md (common steps)
+1. genesis (supervisor, HSM)  scripts/genesis + superviseur.md step 1
+2. fencing (epoch trackers)   cellule.md — exercised by the selftest (2 cells)
+3. OPA + registry             cellule.md steps 3-6 (restricted capabilities §12)
+4. PEP / broker (MONITOR)     cellule.md step 7, serveur.md — nothing but monitor
+5. router NAC                 router-debian.md — LAST network link
+6. translator (optional)      src/translator/README.md — last, always
 ```
 
-L'ordre n'est pas cosmétique : la gouvernance (1-2) précède la politique
-(3), qui précède l'application (4), qui précède le réseau (5). Déployer
-le NAC avant le fencing laisserait des clients admis sans gouvernance
-d'époque — exactement le défaut que le fencing existe pour empêcher.
+The order is not cosmetic: governance (1-2) precedes policy
+(3), which precedes application (4), which precedes network (5). Deploying
+the NAC before fencing would admit clients without epoch
+governance — exactly the defect fencing exists to prevent.
 
-Avant de toucher une machine réelle : `bash deploy/selftest/selftest.sh`
-— **82 contrôles** (cellule mono réelle, fencing 2 cellules, démons
-brokerd/supervisord réels), fail-closed, rapport JSON dans
-`deploy/selftest/out/`. Puis les checklists de recette par machine
+Before touching a real machine: `bash deploy/selftest/selftest.sh`
+— **82 controls** (real single cell, 2-cell fencing, real
+brokerd/supervisord daemons), fail-closed, JSON report in
+`deploy/selftest/out/`. Then the per-machine acceptance checklists
 ([checklists/](checklists/)).
 
-## Critères de succès du pilote
+## Pilot success criteria
 
-- Selftest vert et checklists de recette signées sur chaque machine.
-- **Budget de friction §9.1 respecté** ([`tests/p1_friction/`](../tests/p1_friction/)) :
-  régression d'expérience utilisateur mesurée = 0 — le pilote échoue si
-  la latence ou le taux d'arbitrage dépassent les seuils, même si tout
-  le reste fonctionne.
-- Zéro action non tracée : toute décision produit une feuille vérifiable ;
-  toute alarme a un destinataire.
-- La bascule closed intervient après la fenêtre d'observation, sur mesure
-  §9.1 alimentée, par quorum ([monitor-to-closed.md](monitor-to-closed.md)).
+- Green selftest and acceptance checklists signed on each machine.
+- **§9.1 friction budget met** ([`tests/p1_friction/`](../tests/p1_friction/)):
+  measured user-experience regression = 0 — the pilot fails if
+  latency or the arbitration rate exceed the thresholds, even if
+  everything else works.
+- Zero untraced action: every decision produces a verifiable leaf;
+  every alarm has a recipient.
+- The closed switch happens after the observation window, on a fed
+  §9.1 measurement, by quorum ([monitor-to-closed.md](monitor-to-closed.md)).
 
-## Limites honnêtes (à date — 2026-09-22)
+## Honest limits (as of — 2026-09-22)
 
-- Les **corpus natifs** du traducteur restent à constituer au pilote
-  (§15) ; la chaîne de mesure (replay, métriques par classe, feuille
-  « TBTM1 ») est livrée et testée sur un mini-corpus d'exemple.
-- `brokerd` v1 n'accepte que le traducteur `structured` : le chemin
-  langage naturel / escalade humaine n'est pas câblé (le contrôleur de
-  dégradation, lui, est livré et testé).
-- L'inter-domaine est différé par la spec elle-même (§13, issue #33).
-- La durabilité bornée-async du registre (T38) est en revue (PR #78) à
-  date de rédaction.
-- `config/` n'est jamais déployée telle quelle — toujours adapter ;
-  chaque fichier le dit, ce document le répète.
+- The translator's **native corpora** remain to be built at the pilot
+  (§15); the measurement chain (replay, per-class metrics, "TBTM1"
+  leaf) is delivered and tested on a sample mini-corpus.
+- `brokerd` v1 only accepts the `structured` translator: the natural
+  language / human escalation path is not wired (the degradation
+  controller, on the other hand, is delivered and tested).
+- Inter-domain is deferred by the spec itself (§13, issue #33).
+- The registry's bounded-async durability (T38) is delivered (PR #78,
+  merged).
+- `config/` is never deployed as-is — always adapt;
+  every file says it, this document repeats it.
