@@ -138,11 +138,22 @@ func MetricsLeafRecord(report MetricsReport) ([]byte, error) {
 	return record, nil
 }
 
+// MetricsLeafSink est la couture d'inscription des feuilles de métriques.
+// Même signature que la couture LeafSink de degradation.go (T25) — le
+// registre tessera réel comme les fakes de test la satisfont
+// structurellement. Déclarée ici pour que T26 tienne seul sur main,
+// fusionnable dans n'importe quel ordre avec T25 ; si les deux sont sur
+// main, l'unification des deux interfaces est un renommage sans
+// comportement.
+type MetricsLeafSink interface {
+	Append(ctx context.Context, leaf registry.Leaf) (uint64, error)
+}
+
 // AppendMetricsLeaf inscrit la feuille de métriques (KindTelemetry : un
 // événement de mesure, pas une décision §4.1). Hash-only : le registre ne
 // voit que sha256(sel ‖ record). Fail-closed : cellID et sel ≥ 16 octets
 // requis — une mesure non attribuée ou non scellée n'entre pas au registre.
-func AppendMetricsLeaf(ctx context.Context, leaves LeafSink, cellID string, salt []byte, report MetricsReport, at time.Time) (uint64, error) {
+func AppendMetricsLeaf(ctx context.Context, leaves MetricsLeafSink, cellID string, salt []byte, report MetricsReport, at time.Time) (uint64, error) {
 	if cellID == "" {
 		return 0, ErrMetricsCellID
 	}
