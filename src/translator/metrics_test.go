@@ -6,6 +6,7 @@ package translator
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -120,6 +121,29 @@ func TestMetricsLeafRecordSortedDeterministic(t *testing.T) {
 		if first[i] != second[i] {
 			t.Fatalf("record non déterministe à l'octet %d", i)
 		}
+	}
+}
+
+// TestMetricsLeafRecordDuplicateClassRejected : deux classes de même nom
+// sont une entrée ambiguë (revue de PR #80) — le comparateur de tri ne les
+// départage jamais (il ne compare que Class), donc sort.Slice (non
+// documenté stable) peut les laisser dans un ordre qui dépend de l'ordre
+// d'ENTRÉE. Prouvé empiriquement avant fix : le même rapport « dupliqué »
+// fourni dans deux ordres produisait deux records (et deux hash)
+// DIFFÉRENTS — violation directe de la garantie documentée par
+// MetricsLeafRecord (« quiconque reconstruit le record retrouve le même
+// hash »). Fail-closed : rejet explicite plutôt qu'un ordre arbitraire.
+func TestMetricsLeafRecordDuplicateClassRejected(t *testing.T) {
+	var hash [32]byte
+	hash[0] = 0xAB
+	a := ClassMetrics{Class: "F", Positives: 10, Negatives: 5, FalseNegatives: 1, FalsePositives: 1}
+	b := ClassMetrics{Class: "F", Positives: 20, Negatives: 8, FalseNegatives: 2, FalsePositives: 2}
+
+	if _, err := MetricsLeafRecord(MetricsReport{CorpusHash: hash, Classes: []ClassMetrics{a, b}}); !errors.Is(err, ErrMetricsDuplicateClass) {
+		t.Fatalf("err=%v, attendu ErrMetricsDuplicateClass", err)
+	}
+	if _, err := MetricsLeafRecord(MetricsReport{CorpusHash: hash, Classes: []ClassMetrics{b, a}}); !errors.Is(err, ErrMetricsDuplicateClass) {
+		t.Fatalf("ordre inversé : err=%v, attendu ErrMetricsDuplicateClass", err)
 	}
 }
 

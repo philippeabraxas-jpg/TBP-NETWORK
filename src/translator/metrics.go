@@ -33,6 +33,14 @@ var (
 	ErrMetricsInconsistent = errors.New("translator: comptages incohérents (FN > positifs ou FP > négatifs)")
 	ErrMetricsSalt         = errors.New("translator: sel ≥ 16 octets requis (§6.2 : feuilles hash-only)")
 	ErrMetricsCellID       = errors.New("translator: cellID requis (§6.2 : feuilles attribuées)")
+	// ErrMetricsDuplicateClass : deux entrées portent le même nom de classe.
+	// Le tri de MetricsLeafRecord ne les départage pas (il ne compare que
+	// Class), donc leur ordre relatif après tri dépend de l'ordre d'ENTRÉE
+	// — deux rapports portant les « mêmes » classes produiraient alors des
+	// records (et des hash) DIFFÉRENTS selon l'ordre, ce que ce contrat
+	// promet justement de ne jamais faire (revue de PR #80 — même doctrine
+	// que la revue #62/T36 : jamais d'ordre arbitraire choisi en silence).
+	ErrMetricsDuplicateClass = errors.New("translator: classe dupliquée dans le rapport — ordre du record non déterministe")
 )
 
 // ClassMetrics porte les AGRÉGATS d'une classe (F / I / W / OUT — §5.3) :
@@ -120,6 +128,17 @@ func MetricsLeafRecord(report MetricsReport) ([]byte, error) {
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Class < classes[j].Class })
 	if len(classes) > 255 {
 		return nil, fmt.Errorf("translator: %d classes — au-delà de 255", len(classes))
+	}
+	// Deux classes de même nom sont une entrée ambiguë : le comparateur de
+	// tri ne les départage jamais (il ne compare que Class), donc leur
+	// ordre relatif après tri dépend de l'ordre d'ENTRÉE fourni par
+	// l'appelant — deux rapports portant les « mêmes » classes
+	// produiraient alors des records DIFFÉRENTS selon l'ordre. Fail-closed :
+	// rejet explicite, jamais un ordre arbitraire choisi en silence.
+	for i := 1; i < len(classes); i++ {
+		if classes[i].Class == classes[i-1].Class {
+			return nil, fmt.Errorf("%w (%q)", ErrMetricsDuplicateClass, classes[i].Class)
+		}
 	}
 	record := make([]byte, 0, 5+32+1+len(classes)*(1+maxMetricsClassLen+16))
 	record = append(record, "TBTM1"...)
