@@ -7,7 +7,7 @@
 // sur registres tessera réels). Un guide qui dérive du code se voit
 // immédiatement : le selftest casse.
 //
-// Deux phases :
+// Trois phases :
 //
 //	mono    — une cellule réelle : build pepd, capabilities OPA strippées,
 //	          pepd en monitor avec OPA, jetons valides/témoins, bascule
@@ -15,6 +15,12 @@
 //	fencing — deux cellules in-process (motif T27/T28, exigé en relecture) :
 //	          epoch 0, équivoque, rotation sans fenêtre à deux autorités,
 //	          révocation roster (§7.3), QuorumGate (§7.5), promotion (§7.4).
+//	daemons — T37 (issue #74) : les démons réels — build brokerd et
+//	          supervisord, témoins fail-closed au démarrage, OPA à
+//	          capabilities restreintes (helpers partagés avec mono),
+//	          genèse DEV, action de bout en bout via brokerd, console de
+//	          supervisord en lecture LIVE, témoin 503 « source
+//	          indisponible » par route quand brokerd tombe (§1).
 //
 // Le rapport JSON (out/selftest-report.json) liste chaque contrôle avec
 // son verdict ; le code de sortie est 1 dès qu'un contrôle échoue —
@@ -91,11 +97,11 @@ func main() {
 	log.SetPrefix("selftest: ")
 
 	var cfg config
-	flag.StringVar(&cfg.phase, "phase", "all", "phase à exécuter : all | mono | fencing")
+	flag.StringVar(&cfg.phase, "phase", "all", "phase à exécuter : all | mono | fencing | daemons")
 	flag.StringVar(&cfg.out, "out", "", "répertoire de sortie (défaut : <repo>/deploy/selftest/out — gitignoré)")
 	flag.StringVar(&cfg.repo, "repo", ".", "racine du dépôt (cwd recommandé)")
-	flag.StringVar(&cfg.goBin, "go-bin", "go", "binaire go (phase mono)")
-	flag.StringVar(&cfg.opaBin, "opa-bin", "opa", "binaire opa (phase mono)")
+	flag.StringVar(&cfg.goBin, "go-bin", "go", "binaire go (phases mono et daemons)")
+	flag.StringVar(&cfg.opaBin, "opa-bin", "opa", "binaire opa (phases mono et daemons)")
 	flag.Parse()
 
 	repo, err := filepath.Abs(cfg.repo)
@@ -115,12 +121,15 @@ func main() {
 	case "all":
 		runMono(s, cfg)
 		runFencing(s, cfg)
+		runDaemons(s, cfg)
 	case "mono":
 		runMono(s, cfg)
 	case "fencing":
 		runFencing(s, cfg)
+	case "daemons":
+		runDaemons(s, cfg)
 	default:
-		log.Fatalf("phase inconnue: %q (all|mono|fencing)", cfg.phase)
+		log.Fatalf("phase inconnue: %q (all|mono|fencing|daemons)", cfg.phase)
 	}
 
 	reportPath := filepath.Join(cfg.out, "selftest-report.json")
