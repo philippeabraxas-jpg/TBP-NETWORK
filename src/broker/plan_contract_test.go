@@ -164,7 +164,7 @@ func TestPlanBindingWithoutGateDenied(t *testing.T) {
 	if len(res.Token) != 0 {
 		t.Fatal("un jeton a été émis sans vérification de contrat")
 	}
-	if got := b.Stats().PlanDenies; got != 1 {
+	if got := statsOf(t, b).PlanDenies; got != 1 {
 		t.Fatalf("PlanDenies=%d, veut 1", got)
 	}
 }
@@ -266,7 +266,7 @@ func TestPlanDeviationDeniedThoughOPAAllows(t *testing.T) {
 	if len(res.Token) != 0 {
 		t.Fatal("un jeton a été émis sur une déviation")
 	}
-	if got := b.Stats().PlanDenies; got != 1 {
+	if got := statsOf(t, b).PlanDenies; got != 1 {
 		t.Fatalf("PlanDenies=%d, veut 1", got)
 	}
 
@@ -334,7 +334,7 @@ func TestPlanUnknownDenied(t *testing.T) {
 	if res.Allow || res.Reason != ReasonPlanUnknown {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-unknown", res.Allow, res.Reason)
 	}
-	if got := b.Stats().PlanDenies; got != 1 {
+	if got := statsOf(t, b).PlanDenies; got != 1 {
 		t.Fatalf("PlanDenies=%d, veut 1", got)
 	}
 }
