@@ -121,7 +121,7 @@ type PlanStep struct {
 
 // HashParams calcule le sceau de paramètres d'une étape : SHA-256 des
 // octets bruts (D57). params vide = « étape sans paramètres » — lié comme
-// toute autre valeur.
+// tout autre valeur.
 func HashParams(params []byte) [32]byte {
 	return sha256.Sum256(params)
 }
