@@ -114,6 +114,10 @@ func TestComputeObjectSealBornes(t *testing.T) {
 		{"field trop long", "cell-a", []ObjectField{{Object: "o", Field: long(MaxSealFieldLen + 1), Value: []byte("v")}}},
 		{"value trop longue", "cell-a", []ObjectField{{Object: "o", Field: "f", Value: make([]byte, MaxSealValueLen+1)}}},
 		{"trop de champs", "cell-a", make([]ObjectField, MaxSealFields+1)},
+		{"champ dupliqué (même object/field, value différente)", "cell-a", []ObjectField{
+			{Object: "acct/1", Field: "balance", Value: []byte("100")},
+			{Object: "acct/1", Field: "balance", Value: []byte("200")},
+		}},
 	}
 	for _, tc := range cases {
 		// Les champs générés à la chaîne doivent rester dans les bornes

@@ -117,6 +117,21 @@ func ComputeObjectSeal(cellID string, policyID [32]byte, fields []ObjectField) (
 		}
 		return sorted[i].Field < sorted[j].Field
 	})
+	// Deux champs (object, field) identiques mais de Value différente sont
+	// une entrée ambiguë : le comparateur de tri ne les départage jamais
+	// (il ne compare que object/field), donc leur ordre relatif après tri
+	// dépend de l'ordre d'ENTRÉE fourni par l'appelant — deux appels aux
+	// « mêmes champs » produiraient alors des sceaux DIFFÉRENTS selon
+	// l'ordre, ce que ce contrat promet justement de ne jamais faire.
+	// Fail-closed : rejet explicite, jamais un ordre arbitraire choisi en
+	// silence (revue #62 — même doctrine que ErrSealBounds : jamais de
+	// troncature/résolution silencieuse d'une entrée mal formée).
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i].Object == sorted[i-1].Object && sorted[i].Field == sorted[i-1].Field {
+			return zero, fmt.Errorf("%w : champ dupliqué (object=%q field=%q) — ordre du sceau non déterministe",
+				ErrSealBounds, sorted[i].Object, sorted[i].Field)
+		}
+	}
 
 	h := sha256.New()
 	h.Write([]byte("TBPO1"))
