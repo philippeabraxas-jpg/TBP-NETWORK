@@ -197,6 +197,12 @@ type MonitorOptions struct {
 	// OnAlarm est appelé UNE fois à l'engagement — couture vers le
 	// moniteur (classe W, §5.3). Nil en dev.
 	OnAlarm func(Alarm)
+	// Drain, si non nil, vide les feuilles acceptées d'un AsyncWriter
+	// (T38, #71) AVANT la feuille d'arrêt — couture WaitOutstanding.
+	// Sans lui, des feuilles async acceptées avant le verrouillage mais
+	// confirmées après pourraient suivre KindBackpressure, qui ne serait
+	// plus littéralement la dernière feuille. Nil = aucun writer async.
+	Drain func(ctx context.Context) error
 }
 
 // Monitor est le sidecar de backpressure disque. Il implémente
@@ -214,6 +220,7 @@ type Monitor struct {
 	fs        FsStats
 	onTrip    func(Alarm)
 	onAlarm   func(Alarm)
+	drain     func(ctx context.Context) error
 	salt      []byte // sel des feuilles KindBackpressure — ne quitte pas la cellule
 
 	engaged atomic.Bool
@@ -262,7 +269,7 @@ func NewMonitor(opts MonitorOptions) (*Monitor, error) {
 		dir: opts.Dir, cellID: opts.CellID,
 		quota: opts.QuotaBytes, threshold: threshold, hostFloor: opts.HostFloorBytes,
 		interval: interval, sampler: sampler, fs: fsStats,
-		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, salt: salt,
+		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, drain: opts.Drain, salt: salt,
 	}, nil
 }
 
@@ -363,6 +370,17 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		// Drainage : les écritures acceptées avant le verrouillage
 		// terminent ; plus aucune ne démarre (double contrôle d'Append).
 		log.waitInflight()
+		// Drainage async (T38, #71) : les feuilles acceptées par un
+		// AsyncWriter avant le verrouillage sont confirmées avant la
+		// feuille d'arrêt — sans ce drain, KindBackpressure ne serait
+		// plus la dernière feuille. Un échec (contexte expiré pendant
+		// une coupure) ne DÉVERROUILLE rien : le verrou tient, le
+		// manquement est signalé dans l'alarme.
+		if m.drain != nil {
+			if err := m.drain(ctx); err != nil {
+				alarm.Reason += "+async-drain-failed"
+			}
+		}
 		payload := fmt.Sprintf(`{"reason":%q,"cellID":%q,"usedBytes":%d,"quotaBytes":%d,"at":%q}`,
 			alarm.Reason, alarm.CellID, alarm.UsedBytes, alarm.QuotaBytes,
 			alarm.At.Format(time.RFC3339Nano))
