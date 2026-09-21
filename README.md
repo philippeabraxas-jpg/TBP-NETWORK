@@ -16,23 +16,27 @@ trust each other without simply trusting each other.
 
 **Note on language**: the reference specification is now
 **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)** (English) — this is the
-document code and audits should be built against. The original French
-document (`docs/spec-v1.4.10.md`) remains in the repo as the author's
-working note: denser, less linear, useful for design-rationale digging,
-but not the one to cite. The glossary (`docs/glossaire.md`) is still
-French-sourced (§14 of the French doc is its terminology source of
-truth) with an English gloss column for readability — this is unchanged
-for now.
+document code and audits should be built against. The author's working
+note — denser, less linear, useful for design-rationale digging, but not
+the one to cite — exists in two languages:
+[`docs/spec-v1.4.10.md`](docs/spec-v1.4.10.md) (English) and
+[`docs/spec-v1.4.10.fr.md`](docs/spec-v1.4.10.fr.md) (original French).
+The same convention applies across the repo: every document originally
+written in French now has an English primary at its original path, with
+the French original kept beside it as `<name>.fr.md`. The glossary
+(`docs/glossaire.md`) is still French-sourced (§14 of the French doc is
+its terminology source of truth) with an English gloss column for
+readability — this is unchanged.
 
 ## Start here
 
 The full specification is **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)**
 — it is the source of truth for any design or configuration decision in
 this repo. This README only summarizes what's needed to get oriented;
-when in doubt, the spec governs. The French working note
-(`docs/spec-v1.4.10.md`) is not superseded content-wise — it's the same
-protocol, developed there first — but it is not the citable reference
-going forward.
+when in doubt, the spec governs. The working note
+(`docs/spec-v1.4.10.md`, English translation of the French original) is
+not superseded content-wise — it's the same protocol, developed there
+first — but it is not the citable reference going forward.
 
 Useful landmarks for reading it:
 - **§1 Doctrine** — the ten non-negotiable rules.
@@ -79,7 +83,8 @@ tbp4.2.1/             Git submodule: the core protocol (Responsible-Alliance-Pro
                       engine this repo's PEPs enforce against). Not copied: run
                       `git submodule update --init` to fetch it; source of truth
                       and issue tracker for this code stay in that repository.
-docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.10.md, French working note), glossary, audits
+docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.10.md +
+                      spec-v1.4.10.fr.md, working note EN/FR), glossary, audits
 figs/                 Figures referenced by the spec (see MANIFEST.md)
 policies/
 ├── README.md          How to generate capabilities.json correctly

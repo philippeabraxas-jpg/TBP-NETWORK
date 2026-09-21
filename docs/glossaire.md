@@ -1,8 +1,10 @@
 # TBP normalization glossary
 
-Quick-reference extract of §14 from [`spec-v1.4.10.md`](./spec-v1.4.10.md) (French) —
-that file remains the source of truth; this one exists to be linked/grepped
-without reopening the whole technical note. One canonical term per concept;
+Quick-reference extract of §14 from
+[`spec-v1.4.10.fr.md`](./spec-v1.4.10.fr.md) (French) — that file remains
+the source of truth (an English translation of the full technical note
+lives at [`spec-v1.4.10.md`](./spec-v1.4.10.md)); this one exists to be
+linked/grepped without reopening the whole technical note. One canonical term per concept;
 synonyms found in upstream documents (network manifesto, deployment
 references, discussions) are mapped onto it — **the code and documentation
 of this repository must use the "Canonical term" column**, never a
@@ -22,7 +24,7 @@ synonym, including in comments and variable/field names where reasonable.
 | manifeste | manifest | état attesté, measured state | the measured vector of the governed stack (§6.3) |
 | trou instrumenté | instrumented hole | capteur, canal instrumenté | a path outside the wall whose telemetry feeds the registry |
 
-**Adding a term**: edit the §14 table in `spec-v1.4.10.md` first (it's the
-source), then mirror it here. The two tables must stay word-for-word
+**Adding a term**: edit the §14 table in `spec-v1.4.10.fr.md` first (it's
+the source), then mirror it here. The two tables must stay word-for-word
 identical (the "English gloss" column above is this file's own addition
 for readability and is not part of the source table).
