@@ -66,7 +66,10 @@ const (
 const maxOPAResponse = 64 << 10
 
 // OPAInput est l'entrée d'évaluation : les faits du jeton, rien de plus
-// (le PEP n'invente rien — honnêteté de schéma).
+// (le PEP n'invente rien — honnêteté de schéma). DryRun est l'entrée
+// supplémentaire §4.4(1) (T36, D104) : nil hors classes F/I/W ou sans
+// porte configurée sur ce chemin — omitempty côté JSON, les politiques
+// écrites avant T36 sont inchangées.
 type OPAInput struct {
 	JTI      [16]byte
 	Subject  string
@@ -74,17 +77,19 @@ type OPAInput struct {
 	Resource string
 	Class    Class
 	Epoch    uint64
+	DryRun   *DryRunInput
 }
 
 // opaRequest est le corps POST /v1/data/... : {"input": {...}}.
 type opaRequest struct {
 	Input struct {
-		JTI      string `json:"jti"` // hex
-		Subject  string `json:"subject"`
-		Action   string `json:"action"`
-		Resource string `json:"resource"`
-		Class    int    `json:"class"`
-		Epoch    uint64 `json:"epoch"`
+		JTI      string       `json:"jti"` // hex
+		Subject  string       `json:"subject"`
+		Action   string       `json:"action"`
+		Resource string       `json:"resource"`
+		Class    int          `json:"class"`
+		Epoch    uint64       `json:"epoch"`
+		DryRun   *DryRunInput `json:"dry_run,omitempty"` // §4.4(1), T36
 	} `json:"input"`
 }
 
@@ -216,6 +221,7 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 	reqBody.Input.Resource = in.Resource
 	reqBody.Input.Class = int(in.Class)
 	reqBody.Input.Epoch = in.Epoch
+	reqBody.Input.DryRun = in.DryRun
 	raw, err := json.Marshal(reqBody)
 	if err != nil { // inatteignable (types fixes) — fail-closed quand même
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPABadResponse, Err: err}, start)
@@ -257,7 +263,7 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPAUndefined}, start)
 	case decoded.Result.Allow == nil:
 		err := errors.New("pep: réponse OPA sans allow (contrat rompu)")
-		return c.finish(ctx, in, OPADecision{Reason: ReasonOPABadResponse, Err: err}, start)
+		return c.finish(ctx, in, OPADecision{Reason: ReasonOPABadResponse}, start)
 	case !*decoded.Result.Allow:
 		// Deny métier : OPA est sain, la politique refuse — pas d'alarme.
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPADeny}, start)
