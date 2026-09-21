@@ -9,8 +9,9 @@
 # tout test (fail-closed, pas de « skipped » silencieux).
 #
 # Effets :
-#   1. selftest Go (mono réel + fencing 2-cellules in-process) — rapport
-#      JSON dans deploy/selftest/out/selftest-report.json (gitignoré) ;
+#   1. selftest Go (mono réel + fencing 2-cellules in-process + daemons
+#      brokerd/supervisord réels, T37) — rapport JSON dans
+#      deploy/selftest/out/selftest-report.json (gitignoré) ;
 #   2. vérification formelle des guides (D96/D99) par check_steps.py ;
 #   3. tests unitaires du vérificateur (non-vacuité : mutations prises).
 #
@@ -25,7 +26,7 @@ command -v go  >/dev/null 2>&1 || { echo "erreur: binaire 'go' introuvable — S
 command -v opa >/dev/null 2>&1 || { echo "erreur: binaire 'opa' introuvable — STOP" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "erreur: binaire 'python3' introuvable — STOP" >&2; exit 1; }
 
-echo "== 1/3 selftest Go (mono + fencing) =="
+echo "== 1/3 selftest Go (mono + fencing + daemons) =="
 go run ./deploy/selftest -phase all "$@"
 
 echo "== 2/3 vérification formelle des guides (D96/D99) =="
