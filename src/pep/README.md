@@ -85,12 +85,50 @@ Local policy enforcement point. Responsibilities, per the technical note:
   disambiguation between the two "−8" namespaces (COSE protected-header
   `alg` = EdDSA per RFC 9053 vs payload claim −8 = plan seal).
 
+- **Object-capability seal, generalized** (`object_capability.go`, T36,
+  §4.4(2)) — the claim −5 `object_seal` primitive existed end-to-end
+  (schema T8, equality check T9, translator → broker → issuer transport)
+  but nothing *computed* it outside PostgreSQL. `ComputeObjectSeal` is
+  the general contract: SHA-256 over a domain-separated (« TBPO1 »),
+  length-prefixed canonical form of sorted `(object, field, value)`
+  triples — value opaque (no-DPI), never in any leaf (hash-only §6.2),
+  bounds §4.3 with explicit `ErrSealBounds` (never silent truncation).
+  Reconciled — not merged — with the two neighboring seals (T16 plan
+  seal in C, T30 « TBPC1 » arbitration-plan seal): one SHA-256-over-
+  canonical-form motif, three domains, proven by a cross-test (golden
+  vector of the documented T16 formula + functional issue → seal → T9
+  accept/mismatch path).
+- **Dry-run with diff-of-state to OPA before commit** (`dryrun.go`, T36,
+  §4.4(1)) — for classes F/I/W only: the target component (when it can)
+  runs the candidate action in dry-run through the `DryRunner` seam; the
+  resulting *structural, hash-only end-to-end* diff (`{object, field,
+  kind}` + component-computed before/after hashes — values never leave
+  the component, not even toward OPA) is canonicalized, committed
+  (« TBPF1 » `HashDiff`) and submitted as `input.dry_run` of the
+  *existing* OPA call — no second round-trip. Orchestrated at the PEP at
+  evaluation time, **before** the quota passport opens (a dry-run
+  refusal never opens a counter for an action that won't happen);
+  failure/timeout = deny (`dryrun-failed` / `dryrun-timeout`) with
+  decision leaf, measurement in a separate `KindTelemetry` leaf (record
+  « TBPF2 », §9.1 — never mixed into the verdict leaf). Without a
+  configured gate, F/I/W actions are submitted with
+  `dry_run.available=false` — the policy decides (declared residual
+  §10.5 otherwise). Outside F/I/W: **zero added cost** — the runner is
+  never invoked and the OPA input carries no `dry_run` key (D105,
+  panic-guard tested).
+
 ## Latency
 
 See `tests/p1_friction/` for the latency criteria (friction budget,
 §9.1): `validator_test.go` enforces the tier-1 budget
 (`TestLatencyBudget`); plan-contract verification adds only a local
-hash/compare per step, and only for requests that carry a binding.
+hash/compare per step, and only for requests that carry a binding. The
+T36 mitigations are **bounded to classes F/I/W** (§4.4): outside those
+classes the decision path is strictly unchanged; for F/I/W the cost is
+one local dry-run (dedicated bounded timeout, distinct from the OPA
+circuit-breaker) plus the existing OPA call with an extended input —
+measured in its own telemetry leaf, never blended into the tier-1
+budget.
 
 ## PostgreSQL extension (§4.4)
 
