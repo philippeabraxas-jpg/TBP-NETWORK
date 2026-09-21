@@ -98,7 +98,7 @@ func TestEpochUnavailableDeniesBeforeTranslation(t *testing.T) {
 	if !found {
 		t.Fatalf("alarmes %v — une faute d'époque alarme (T14)", trips.all())
 	}
-	if got := b.Stats().Denies; got != 1 {
+	if got := statsOf(t, b).Denies; got != 1 {
 		t.Fatalf("Denies=%d, veut 1", got)
 	}
 	if n := len(leaves.all()); n != 1 {
@@ -122,7 +122,7 @@ func TestClassWWithoutGateDenied(t *testing.T) {
 	if len(res.Token) != 0 {
 		t.Fatal("un refus de quorum ne doit JAMAIS porter un jeton")
 	}
-	if got := b.Stats().QuorumDenies; got != 1 {
+	if got := statsOf(t, b).QuorumDenies; got != 1 {
 		t.Fatalf("QuorumDenies=%d, veut 1", got)
 	}
 	// Feuilles : décision OPA (allow — l'action est légale en soi) + refus
@@ -154,7 +154,7 @@ func TestClassWWithoutProofDenied(t *testing.T) {
 	if res.Allow || res.Reason != ReasonQuorumRequired {
 		t.Fatalf("allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonQuorumRequired)
 	}
-	if got := b.Stats().QuorumDenies; got != 1 {
+	if got := statsOf(t, b).QuorumDenies; got != 1 {
 		t.Fatalf("QuorumDenies=%d, veut 1", got)
 	}
 }
@@ -185,7 +185,7 @@ func TestQuorumInsufficientProof(t *testing.T) {
 			t.Fatalf("%s : jeton émis sur quorum insuffisant", name)
 		}
 	}
-	if got := b.Stats().QuorumDenies; got != 3 {
+	if got := statsOf(t, b).QuorumDenies; got != 3 {
 		t.Fatalf("QuorumDenies=%d, veut 3", got)
 	}
 	// Le gate a tracé chaque refus en KindQuorum (§4.1).
