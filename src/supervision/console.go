@@ -74,20 +74,30 @@ type BrokerStatsSource interface {
 // file des plans en attente (hash scellé et bornes temporelles — jamais
 // les étapes ni les paramètres) et le hash du bundle de règles auquel ils
 // se rattachent. Lecture seule : aucune méthode mutante. *pep.ContractStore
-// l'implémente ; l'extraction d'interface (T37, D110 — plomberie, pas de
-// logique métier) permet à la console d'être servie par un process qui ne
-// détient pas le store (adaptateur de lecture, cmd/supervisord) sans en
-// dupliquer l'état — une copie serait une demi-vérité.
+// l'implémente (via SnapshotWithPolicy) ; l'extraction d'interface (T37,
+// D110 — plomberie, pas de logique métier) permet à la console d'être
+// servie par un process qui ne détient pas le store (adaptateur de
+// lecture, cmd/supervisord) sans en dupliquer l'état — une copie serait
+// une demi-vérité.
 //
-// Snapshot porte le même contrat d'erreur qu'EpochStatusSource : toute
-// erreur devient 503 dans le handler, jamais une zero-value (§1).
-// PolicyID rend la policy du DERNIER Snapshot réussi — les handlers
-// appellent Snapshot EN PREMIER et ne lisent PolicyID que si la lecture
-// a réussi : les deux valeurs proviennent alors du même instantané,
-// jamais de deux lectures disjointes (cohérence par construction).
+// SnapshotWithPolicy rend la file ET la policy dans LE MÊME appel — pas
+// deux méthodes séparées (Snapshot puis PolicyID). Une version antérieure
+// de ce contrat les séparait avec la garantie documentée « la policy du
+// dernier Snapshot réussi, lue seulement après un Snapshot du même
+// appelant » ; pour un adaptateur réseau qui garde la policy dans un
+// champ partagé entre les deux appels, cette garantie est FAUSSE dès que
+// deux requêtes console concurrentes s'exécutent : le Snapshot réussi
+// d'une deuxième requête écrase la policy en cache avant que la première
+// ne la lise, qui associe alors SA PROPRE liste pending à LA POLICY DE
+// L'AUTRE — exactement la demi-vérité que ce contrat existe pour
+// interdire (trouvé et prouvé empiriquement en revue de PR T37, #77).
+// Une seule méthode qui rend les deux valeurs ensemble, sans état
+// intermédiaire partagé entre deux appels, rend cette classe de bug
+// structurellement impossible plutôt que dépendante d'une convention
+// d'appel. Même contrat d'erreur qu'EpochStatusSource : toute erreur
+// devient 503 dans le handler, jamais une zero-value (§1).
 type ArbitrationSource interface {
-	Snapshot() ([]pep.PendingPlan, error)
-	PolicyID() [32]byte
+	SnapshotWithPolicy() ([]pep.PendingPlan, [32]byte, error)
 }
 
 // ConsoleOptions paramètre la console. Fail-closed dès la configuration :
@@ -96,9 +106,9 @@ type ArbitrationSource interface {
 type ConsoleOptions struct {
 	// Monitor est la source des vues cellules/ancrage/chute (View()).
 	Monitor *Monitor
-	// Contracts est la source de la file d'arbitrage (Snapshot() +
-	// PolicyID()) — *pep.ContractStore in-process, ou tout adaptateur de
-	// lecture satisfaisant ArbitrationSource (T37, D110).
+	// Contracts est la source de la file d'arbitrage (SnapshotWithPolicy())
+	// — *pep.ContractStore in-process, ou tout adaptateur de lecture
+	// satisfaisant ArbitrationSource (T37, D110).
 	Contracts ArbitrationSource
 	// Epochs est la source de l'état d'époque (T29).
 	Epochs EpochStatusSource
@@ -232,15 +242,16 @@ type indicatorsView struct {
 // scellé et bornes temporelles — JAMAIS les étapes ni les paramètres
 // (hash-only : le plan en clair circule sur le canal opérateur, pas ici).
 func (c *Console) handleArbitration(w http.ResponseWriter, _ *http.Request) {
-	snap, err := c.contracts.Snapshot()
+	snap, policyID, err := c.contracts.SnapshotWithPolicy()
 	if err != nil {
 		writeSourceUnavailable(w) // jamais une zero-value (§1)
 		return
 	}
-	// PolicyID n'est lu QU'APRÈS un Snapshot réussi : les deux valeurs
-	// viennent du même instantané (contrat ArbitrationSource).
+	// policyID vient du MÊME appel que snap (contrat ArbitrationSource) —
+	// jamais d'une lecture séparée qu'une requête concurrente aurait pu
+	// écraser entre-temps.
 	view := arbitrationView{
-		PolicyID: hex.EncodeToString(sliceOf(c.contracts.PolicyID())),
+		PolicyID: hex.EncodeToString(sliceOf(policyID)),
 		Pending:  make([]pendingPlanView, 0, len(snap)),
 	}
 	for _, p := range snap {
@@ -287,7 +298,7 @@ func (c *Console) handleIndicators(w http.ResponseWriter, _ *http.Request) {
 		writeSourceUnavailable(w) // jamais une zero-value (§1)
 		return
 	}
-	snap, err := c.contracts.Snapshot()
+	snap, _, err := c.contracts.SnapshotWithPolicy()
 	if err != nil {
 		writeSourceUnavailable(w) // jamais une zero-value (§1)
 		return

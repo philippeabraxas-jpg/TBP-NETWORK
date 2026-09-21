@@ -67,7 +67,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -379,7 +378,7 @@ func (p *brokerSources) probe() error {
 	if _, err := p.stats.Stats(); err != nil {
 		return fmt.Errorf("source compteurs: %w", err)
 	}
-	if _, err := p.arbitration.Snapshot(); err != nil {
+	if _, _, err := p.arbitration.SnapshotWithPolicy(); err != nil {
 		return fmt.Errorf("source arbitrage: %w", err)
 	}
 	return nil
@@ -462,20 +461,21 @@ func (s *statsSource) Stats() (broker.BrokerStats, error) {
 }
 
 // arbitrationSource adapte GET /v1/supervision/arbitration à
-// ArbitrationSource (D110 élargi) — lecture LIVE à chaque appel.
-// PolicyID rend la policy du DERNIER Snapshot réussi (contrat de
-// l'interface : le handler appelle Snapshot en premier et ne lit
-// PolicyID qu'après succès — les deux valeurs viennent du même
-// instantané, jamais de deux lectures disjointes).
+// ArbitrationSource (D110 élargi, puis revue PR T37 #77) — lecture LIVE à
+// chaque appel. SnapshotWithPolicy rend la file ET la policy dans le
+// MÊME appel HTTP, sans état intermédiaire partagé entre deux méthodes :
+// une version antérieure gardait la policy dans un champ mis à jour par
+// Snapshot() et lu par une méthode PolicyID() séparée — racée par deux
+// requêtes console concurrentes (la policy écrite par la seconde pouvait
+// être lue par la première, associée à SA PROPRE liste pending). Aucun
+// état à protéger ici : chaque appel rend sa propre paire, point.
 type arbitrationSource struct {
 	hc   *http.Client
 	base string
-
-	mu       sync.Mutex
-	policyID [32]byte
 }
 
-func (s *arbitrationSource) Snapshot() ([]pep.PendingPlan, error) {
+func (s *arbitrationSource) SnapshotWithPolicy() ([]pep.PendingPlan, [32]byte, error) {
+	var zero [32]byte
 	var view struct {
 		PolicyID string `json:"policy_id"`
 		Pending  []struct {
@@ -486,17 +486,17 @@ func (s *arbitrationSource) Snapshot() ([]pep.PendingPlan, error) {
 		} `json:"pending"`
 	}
 	if err := getJSON(context.Background(), s.hc, s.base+"/v1/supervision/arbitration", &view); err != nil {
-		return nil, err // jamais une zero-value (§1)
+		return nil, zero, err // jamais une zero-value (§1)
 	}
 	policyBytes, err := hex.DecodeString(view.PolicyID)
 	if err != nil || len(policyBytes) != 32 {
-		return nil, fmt.Errorf("policy_id illisible (%d octets)", len(policyBytes))
+		return nil, zero, fmt.Errorf("policy_id illisible (%d octets)", len(policyBytes))
 	}
 	pending := make([]pep.PendingPlan, 0, len(view.Pending))
 	for _, p := range view.Pending {
 		hashBytes, err := hex.DecodeString(p.Hash)
 		if err != nil || len(hashBytes) != 32 {
-			return nil, fmt.Errorf("hash de plan illisible (%d octets)", len(hashBytes))
+			return nil, zero, fmt.Errorf("hash de plan illisible (%d octets)", len(hashBytes))
 		}
 		var h [32]byte
 		copy(h[:], hashBytes)
@@ -506,16 +506,7 @@ func (s *arbitrationSource) Snapshot() ([]pep.PendingPlan, error) {
 	}
 	var policy [32]byte
 	copy(policy[:], policyBytes)
-	s.mu.Lock()
-	s.policyID = policy
-	s.mu.Unlock()
-	return pending, nil
-}
-
-func (s *arbitrationSource) PolicyID() [32]byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.policyID
+	return pending, policy, nil
 }
 
 // — Chargements fail-closed —

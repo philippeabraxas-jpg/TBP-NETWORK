@@ -532,6 +532,27 @@ func (s *ContractStore) Snapshot() ([]PendingPlan, error) {
 // eux, ne la mettent à jour que sur une lecture réussie (supervisord).
 func (s *ContractStore) PolicyID() [32]byte { return s.policyID }
 
+// SnapshotWithPolicy rend la file ET la policy dans le MÊME appel —
+// c'est la méthode qu'exige l'interface ArbitrationSource (supervision,
+// T37, revue PR #77). « La policy du dernier Snapshot réussi, mise à
+// jour seulement sur succès » (commentaire de PolicyID ci-dessus) ne
+// suffit PAS à garantir que la policy lue par un appelant provient de
+// SON PROPRE Snapshot : Snapshot() et PolicyID() sont deux méthodes
+// séparées sur un état partagé — une deuxième requête console
+// concurrente peut réussir son propre Snapshot() (et donc, pour un
+// adaptateur réseau, écraser la policy mise en cache) entre le Snapshot
+// et le PolicyID de la première, qui lirait alors la policy de la
+// seconde associée à SA PROPRE liste pending. Prouvé empiriquement pour
+// l'adaptateur réseau de supervisord (TestArbitrationSourceSnapshotWithPolicyNoRace).
+// Ici, la policy est un champ figé à la construction du store : aucun
+// risque de ce genre pour ContractStore lui-même, mais l'appairage doit
+// se faire par construction dans le contrat d'interface, pas par
+// convention chez chaque implémentation.
+func (s *ContractStore) SnapshotWithPolicy() ([]PendingPlan, [32]byte, error) {
+	out, err := s.Snapshot()
+	return out, s.policyID, err
+}
+
 // VerifyStep est la couture appelée par le broker (étape 7 de HandleAction,
 // D62) : la demande (binding opaque + action/resource traduites) est
 // confrontée au plan scellé. Concordance EXACTE avec l'étape exigible

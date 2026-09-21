@@ -20,7 +20,12 @@
 //     (cache dans un adaptateur, ou handler qui ignore l'erreur de sa
 //     source) → TestSupervisordEndToEnd (témoin 503) ;
 //   - rendre l'arbitrage sans relire la source → TestSupervisordEndToEnd
-//     (le hash du plan vient du faux brokerd, pas d'une constante).
+//     (le hash du plan vient du faux brokerd, pas d'une constante) ;
+//   - réintroduire un champ policyID partagé entre deux appels de
+//     arbitrationSource (Snapshot()+PolicyID() séparés plutôt que
+//     SnapshotWithPolicy() atomique) →
+//     TestArbitrationSourceSnapshotWithPolicyNoCrossRequestMismatch
+//     (trouvé et corrigé en revue de PR T37, #77).
 package main
 
 import (
@@ -31,6 +36,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -525,5 +531,71 @@ func TestSupervisordStartupBrokerInjoignable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sources de console injoignables") {
 		t.Fatalf("erreur %q ne contient pas « sources de console injoignables »", err)
+	}
+}
+
+// TestArbitrationSourceSnapshotWithPolicyNoCrossRequestMismatch : deux
+// requêtes console concurrentes se traduisent par deux appels
+// SnapshotWithPolicy() sur la MÊME arbitrationSource (un seul adaptateur,
+// partagé par tous les handlers de la console, T37). Chaque appel doit
+// rendre SA PROPRE paire (pending, policy) — jamais la policy d'un appel
+// voisin, même si celui-ci s'intercale entre le moment où le premier
+// obtient sa réponse HTTP et celui où son résultat est consommé par
+// l'appelant. Une version antérieure de ce fichier séparait Snapshot()
+// (qui écrivait un champ policyID partagé) de PolicyID() (qui le
+// relisait) : le Snapshot() de l'appel B, exécuté entre le Snapshot() et
+// la lecture de policyID de l'appel A, écrasait la policy que A allait
+// lire — A rendait alors sa PROPRE liste pending (vide, policy Y)
+// associée à LA POLICY DE B (X). Trouvé et prouvé en revue de PR T37
+// (#77) : voir la discussion dans le commentaire de ArbitrationSource
+// (console.go) et de arbitrationSource ci-dessus.
+func TestArbitrationSourceSnapshotWithPolicyNoCrossRequestMismatch(t *testing.T) {
+	var policyY [32]byte
+	policyY[0] = 0xAA // policy de l'appel "A" (le premier dans le temps)
+	var policyX [32]byte
+	policyX[0] = 0xBB // policy de l'appel "B" (concurrent, complète en second)
+
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		if call == 1 {
+			fmt.Fprintf(w, `{"policy_id":"%s","pending":[]}`, hex.EncodeToString(policyY[:]))
+		} else {
+			fmt.Fprintf(w, `{"policy_id":"%s","pending":[]}`, hex.EncodeToString(policyX[:]))
+		}
+	}))
+	defer srv.Close()
+
+	src := &arbitrationSource{hc: srv.Client(), base: srv.URL}
+
+	// Appel "A" : reçoit sa réponse (policy Y) en premier.
+	_, gotA, err := src.SnapshotWithPolicy()
+	if err != nil {
+		t.Fatalf("SnapshotWithPolicy A: %v", err)
+	}
+	if gotA != policyY {
+		t.Fatalf("A: policy=%x, veut sa PROPRE policy Y=%x", gotA, policyY)
+	}
+
+	// Appel "B", concurrent, complète après A (dans l'ancienne
+	// implémentation : après que A a déjà lu sa réponse HTTP mais avant
+	// que le handler de A n'ait consommé le résultat — ici modélisé en
+	// séquence, ce qui suffit : SnapshotWithPolicy() ne laisse plus
+	// aucune fenêtre où un appel B pourrait s'intercaler, puisque la
+	// paire est rendue directement par l'appel, sans champ partagé lu
+	// séparément).
+	_, gotB, err := src.SnapshotWithPolicy()
+	if err != nil {
+		t.Fatalf("SnapshotWithPolicy B: %v", err)
+	}
+	if gotB != policyX {
+		t.Fatalf("B: policy=%x, veut sa PROPRE policy X=%x", gotB, policyX)
+	}
+
+	// Le résultat de A, déjà rendu par son propre appel, reste celui de A
+	// — rien de disponible après coup ne peut plus l'écraser (il n'y a
+	// plus de PolicyID() séparée à appeler).
+	if gotA != policyY {
+		t.Fatalf("A après B: policy=%x, la policy de A a été altérée — %x attendu", gotA, policyY)
 	}
 }

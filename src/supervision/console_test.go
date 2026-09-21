@@ -42,12 +42,13 @@ type stubStats struct {
 
 func (s stubStats) Stats() (broker.BrokerStats, error) { return s.st, s.err }
 
-// stubArbitrationFault est une source d'arbitrage en faute — PolicyID ne
-// doit JAMAIS être lu après un Snapshot en erreur (le handler 503 avant).
+// stubArbitrationFault est une source d'arbitrage en faute — le handler
+// doit 503 sans jamais rendre la zero-value de la policy.
 type stubArbitrationFault struct{ err error }
 
-func (s stubArbitrationFault) Snapshot() ([]pep.PendingPlan, error) { return nil, s.err }
-func (s stubArbitrationFault) PolicyID() [32]byte                   { return [32]byte{0xDE, 0xAD} }
+func (s stubArbitrationFault) SnapshotWithPolicy() ([]pep.PendingPlan, [32]byte, error) {
+	return nil, [32]byte{}, s.err
+}
 
 // consoleFixture assemble une console sur un vrai moniteur (fixture
 // supervision), un vrai store de contrats (feuilles sur le log de la
