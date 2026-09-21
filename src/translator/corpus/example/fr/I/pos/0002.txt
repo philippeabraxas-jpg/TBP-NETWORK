@@ -1,0 +1,1 @@
+ok ajoute le nœud de secours au cluster
