@@ -50,15 +50,44 @@ const consoleReadHeaderTimeout = 5 * time.Second
 // EpochStatusSource est la couture vers le suivi d'époque (T29) : lue,
 // jamais pilotée (la quarantaine, la rotation et la révocation restent
 // des actes signés ailleurs). *cluster.Tracker l'implémente.
+//
+// L'ERREUR fait partie du contrat (T37, D110 élargi après revue de plan) :
+// une implémentation peut être un adaptateur réseau (cmd/supervisord lit
+// l'état sur le brokerd de la cellule), dont la lecture peut échouer.
+// Les handlers traduisent TOUTE erreur en 503 — jamais en zero-value :
+// une zero-value rendue serait exactement la demi-vérité interdite (§1).
+// Les lectures locales infaillibles rendent nil.
 type EpochStatusSource interface {
-	Status() cluster.TrackerStatus
+	Status() (cluster.TrackerStatus, error)
 }
 
 // BrokerStatsSource est la couture vers les compteurs du broker (T17) :
 // compteurs monotones lus pour les indicateurs §9.1, jamais remis à
-// zéro ni altérés. *broker.Broker l'implémente.
+// zéro ni altérés. *broker.Broker l'implémente. Même contrat d'erreur
+// qu'EpochStatusSource : toute erreur de lecture devient 503 dans le
+// handler, jamais une zero-value (§1).
 type BrokerStatsSource interface {
-	Stats() broker.BrokerStats
+	Stats() (broker.BrokerStats, error)
+}
+
+// ArbitrationSource est la couture vers la file d'arbitrage (T30) : la
+// file des plans en attente (hash scellé et bornes temporelles — jamais
+// les étapes ni les paramètres) et le hash du bundle de règles auquel ils
+// se rattachent. Lecture seule : aucune méthode mutante. *pep.ContractStore
+// l'implémente ; l'extraction d'interface (T37, D110 — plomberie, pas de
+// logique métier) permet à la console d'être servie par un process qui ne
+// détient pas le store (adaptateur de lecture, cmd/supervisord) sans en
+// dupliquer l'état — une copie serait une demi-vérité.
+//
+// Snapshot porte le même contrat d'erreur qu'EpochStatusSource : toute
+// erreur devient 503 dans le handler, jamais une zero-value (§1).
+// PolicyID rend la policy du DERNIER Snapshot réussi — les handlers
+// appellent Snapshot EN PREMIER et ne lisent PolicyID que si la lecture
+// a réussi : les deux valeurs proviennent alors du même instantané,
+// jamais de deux lectures disjointes (cohérence par construction).
+type ArbitrationSource interface {
+	Snapshot() ([]pep.PendingPlan, error)
+	PolicyID() [32]byte
 }
 
 // ConsoleOptions paramètre la console. Fail-closed dès la configuration :
@@ -67,8 +96,10 @@ type BrokerStatsSource interface {
 type ConsoleOptions struct {
 	// Monitor est la source des vues cellules/ancrage/chute (View()).
 	Monitor *Monitor
-	// Contracts est la source de la file d'arbitrage (Snapshot()).
-	Contracts *pep.ContractStore
+	// Contracts est la source de la file d'arbitrage (Snapshot() +
+	// PolicyID()) — *pep.ContractStore in-process, ou tout adaptateur de
+	// lecture satisfaisant ArbitrationSource (T37, D110).
+	Contracts ArbitrationSource
 	// Epochs est la source de l'état d'époque (T29).
 	Epochs EpochStatusSource
 	// Stats est la source des compteurs broker (T17).
@@ -80,7 +111,7 @@ type ConsoleOptions struct {
 // mux — il n'existe matériellement pas de route mutante à appeler.
 type Console struct {
 	monitor   *Monitor
-	contracts *pep.ContractStore
+	contracts ArbitrationSource
 	epochs    EpochStatusSource
 	stats     BrokerStatsSource
 	mux       *http.ServeMux
@@ -201,7 +232,13 @@ type indicatorsView struct {
 // scellé et bornes temporelles — JAMAIS les étapes ni les paramètres
 // (hash-only : le plan en clair circule sur le canal opérateur, pas ici).
 func (c *Console) handleArbitration(w http.ResponseWriter, _ *http.Request) {
-	snap := c.contracts.Snapshot()
+	snap, err := c.contracts.Snapshot()
+	if err != nil {
+		writeSourceUnavailable(w) // jamais une zero-value (§1)
+		return
+	}
+	// PolicyID n'est lu QU'APRÈS un Snapshot réussi : les deux valeurs
+	// viennent du même instantané (contrat ArbitrationSource).
 	view := arbitrationView{
 		PolicyID: hex.EncodeToString(sliceOf(c.contracts.PolicyID())),
 		Pending:  make([]pendingPlanView, 0, len(snap)),
@@ -221,7 +258,11 @@ func (c *Console) handleArbitration(w http.ResponseWriter, _ *http.Request) {
 // une cellule en quarantaine (la quarantaine gèle le service, pas
 // l'inspection).
 func (c *Console) handleEpoch(w http.ResponseWriter, _ *http.Request) {
-	st := c.epochs.Status()
+	st, err := c.epochs.Status()
+	if err != nil {
+		writeSourceUnavailable(w) // jamais une zero-value (§1)
+		return
+	}
 	quar := append([]string(nil), st.Quarantined...)
 	sort.Strings(quar) // itération de map côté tracker : tri pour une sortie déterministe
 	writeConsoleJSON(w, http.StatusOK, epochView{
@@ -241,7 +282,16 @@ func (c *Console) handleEpoch(w http.ResponseWriter, _ *http.Request) {
 // (T34b) — faits du moniteur, interprétation marquée comme dérivée.
 func (c *Console) handleIndicators(w http.ResponseWriter, _ *http.Request) {
 	mv := c.monitor.View()
-	st := c.stats.Stats()
+	st, err := c.stats.Stats()
+	if err != nil {
+		writeSourceUnavailable(w) // jamais une zero-value (§1)
+		return
+	}
+	snap, err := c.contracts.Snapshot()
+	if err != nil {
+		writeSourceUnavailable(w) // jamais une zero-value (§1)
+		return
+	}
 	rate := 0.0
 	if st.Requests > 0 {
 		rate = float64(st.PlanDenies) / float64(st.Requests)
@@ -256,7 +306,7 @@ func (c *Console) handleIndicators(w http.ResponseWriter, _ *http.Request) {
 			Requests:        st.Requests,
 			PlanDenies:      st.PlanDenies,
 			ArbitrationRate: rate,
-			PendingPlans:    len(c.contracts.Snapshot()),
+			PendingPlans:    len(snap),
 		},
 		Cells: make([]cellIndicators, 0, len(mv.Cells)),
 		Failover: failoverIndicators{
@@ -290,6 +340,17 @@ func sliceOf(a [32]byte) []byte {
 	b := make([]byte, 32)
 	copy(b, a[:])
 	return b
+}
+
+// writeSourceUnavailable rend 503 : la vue dépend d'une source en
+// erreur — la console ne rend JAMAIS une demi-vérité (§1). Vérifié par
+// handler, pas par middleware global : /v1/epoch ne dépend pas des
+// compteurs broker, une panne de la source stats ne doit pas le faire
+// taire (granularité par route, revue de plan T37).
+func writeSourceUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "source indisponible"})
 }
 
 // writeConsoleJSON sérialise la vue. Sortie bornée par construction
