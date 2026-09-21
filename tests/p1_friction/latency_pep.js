@@ -6,12 +6,14 @@
 // k6 est la forme déployable pour les environnements pilote ; il ne pilote
 // pas la CI.
 //
-// ⚠ Seuils : les thresholds ci-dessous sont les cibles §9.1. Contre un
-// pepd adossé au registre tessera POSIX, le chemin COMPLET paie le plancher
-// de publication de checkpoint (~150–250 ms, synchrone, fail-closed T9 —
-// suivi issue #71) : ces seuils seront rouges tant que #71 n'a pas arbitré
-// le modèle de durabilité. Le runner Go mesure le bras « décision » isolé
-// (bloquant §9.1) séparément du bras « durabilité » (surveillé).
+// ⚠ Seuils : les thresholds ci-dessous sont les cibles §9.1. Depuis T38
+// (#71 arbitré) pepd tourne par défaut en async borné : le verdict est
+// rendu à l'acceptation de la feuille et le plancher de publication de
+// checkpoint POSIX (~150–250 ms) n'est plus payé sur le chemin chaud. En
+// mode TBP_DURABILITY=sync (pire cas mesuré ici) ces seuils restent rouges
+// — c'est attendu : c'est précisément ce que T38 retire du chemin chaud.
+// Le runner Go mesure le bras « décision » isolé (bloquant §9.1)
+// séparément du bras « durabilité » (surveillé, mode sync).
 //
 // Jeton : fournir TBP_TOKEN_B64 (COSE_Sign1 base64, classe hors-FIW,
 // action read.list). Un jeton réutilisé déclenche l'anti-rejeu T10 à partir
@@ -35,8 +37,9 @@ export const options = {
   },
   thresholds: {
     // Cible §9.1 : latence ajoutée tier1 < 5 ms p95 — ici mesurée sur le
-    // chemin complet (à comparer à baseline.js ; rouge tant que #71 est
-    // ouvert sur le registre POSIX).
+    // chemin complet (à comparer à baseline.js ; en mode sync du registre
+    // POSIX = pire cas, rouge attendu — la prod par défaut est async borné
+    // depuis T38/#71).
     'http_req_duration{scenario:tier1_readonly}': ['p(95)<5'],
     http_req_failed: ['rate==0'],
   },

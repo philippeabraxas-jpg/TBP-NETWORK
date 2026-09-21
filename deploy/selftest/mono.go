@@ -216,6 +216,10 @@ func runMono(s *suite, cfg config) {
 		"TBP_REGISTRY_DIR="+regDir,
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
 		"TBP_OPA_ENDPOINT="+opaURL+"/v1/data/tbp/example/action",
+		// T38/#71 : explicite même si async-bounded est le défaut — le
+		// selftest éping le modèle de durabilité qu'il exerce.
+		"TBP_DURABILITY=async-bounded",
+		"TBP_DURABILITY_WINDOW_MS=1000",
 	)
 
 	// --- Étape : démarrage pepd — TOUJOURS monitor au boot (§5.3) -----------

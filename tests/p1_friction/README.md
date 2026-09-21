@@ -4,25 +4,28 @@ Le pilote échoue si les seuils de latence ne tiennent pas, pas seulement
 s'il y a un bug fonctionnel — la friction est une contrainte fondatrice,
 pas un détail de perf à optimiser après coup.
 
-## ⚠ Production : ce que paie réellement chaque décision aujourd'hui
+## ⚠ Production : ce que paie réellement chaque décision
 
-Le chemin déployé (pepd + registre tessera POSIX) écrit la feuille de
-décision **synchrone, fail-closed, avant le verdict** (T9 : « pas de
-preuve, pas d'accès »). `CellLog.Append` attend l'intégration ET la
-publication du checkpoint ; le driver POSIX impose `CheckpointInterval ≥
-100 ms` (borne dure) et l'awaiter polle à 50 ms. Mesuré : **~150–250 ms
-par décision, sur CHAQUE évaluation** — 30–50× le budget §9.1. Ce n'est ni
-un artefact de mesure ni un mauvais réglage de batch : c'est structurel au
-backend d'écriture actuel. **Suivi dédié : issue #71** (sync/async du
-registre = chantier d'architecture, hors scope T27). Ce chiffre est
-toujours rapporté côte à côte avec le bras « décision » — jamais masqué.
+**Depuis T38 (#71 arbitré)** le chemin déployé (pepd + registre tessera
+POSIX) tourne par défaut en **async borné** (`TBP_DURABILITY=async-bounded`)
+: le verdict est rendu à l'**acceptation** de la feuille (sérialisée,
+comptée, intégrée dans l'ordre FIFO par l'appender tessera, jamais
+fire-and-forget) et la publication du checkpoint rattrape en arrière-plan,
+bornée par la fenêtre d'opposabilité (1 s par défaut ; à la coupure =
+refus immédiat fail-closed via T9, épisode leafé `TBAD1` au rattrapage).
+Le plancher de publication POSIX (~150–250 ms mesuré ici, 30–50× le budget
+§9.1 — structurel au backend, ni artefact de mesure ni mauvais réglage de
+batch) n'est plus payé sur le chemin chaud ; `TBP_DURABILITY=sync`
+restaure l'ancien comportement synchrone. Le bras « durabilité » ci-dessous
+mesure ce mode sync = la **borne pire cas**, toujours rapportée côte à
+côte avec le bras « décision » — jamais masquée.
 
 ## Deux bras de mesure (D88 amendé, arbitrage revue #29)
 
 | Bras | Puits de feuilles | Mesure | Verdict |
 |---|---|---|---|
 | **décision** | in-memory synchrone | coût de décision du PEP seul (Ed25519, CBOR, anti-rejeu T10, quota T12, gate T14) — le « plancher déterministe » du §9.1 | **bloquant CI** |
-| **durabilité** | registre tessera réel (POSIX) | coût de la preuve fail-closed (feuille intégrée/publiée avant verdict) + feuilles réelles pour la corrélation | surveillé (alerte si p95 > 3× CheckpointInterval), **hors §9.1, suivi #71** |
+| **durabilité** | registre tessera réel (POSIX, mode sync) | coût de la preuve fail-closed (feuille intégrée/publiée avant verdict) + feuilles réelles pour la corrélation | surveillé (alerte si p95 > 3× CheckpointInterval), **hors §9.1 — borne pire cas ; #71 arbitré (T38) : la prod par défaut est async borné** |
 
 La synchronicité et la doctrine T9 sont intactes dans les deux bras : même
 chemin de code, même `ReasonLeafWriteFailed` — seule la vitesse du magasin
@@ -100,8 +103,9 @@ mesure → verdict bloquant → alarme leafée → artefact.
 
 `latency_pep.js` / `baseline.js` : mesure contre un pepd vivant (pilotes,
 topologie lab T19) — la soustraction p95(pep) − p95(baseline) donne la
-latence ajoutée du **chemin complet** (registre inclus : rouge tant que
-#71 est ouvert — voir l'avertissement en tête de latency_pep.js). Le
+latence ajoutée du **chemin complet** (registre inclus ; en mode sync =
+pire cas, rouge attendu — la prod par défaut est async borné depuis
+T38/#71, voir l'avertissement en tête de latency_pep.js). Le
 moteur de mesure CI reste le runner Go : déterministe, in-process, sans
 installation k6. Jeton via `TBP_TOKEN_B64` (réutilisation ⇒ anti-rejeu T10
 à partir de la 2ᵉ requête — journalisé en mode monitor §5.3, chemin
@@ -111,4 +115,6 @@ complet tout de même exercé).
 
 Traducteur (aucun serveur Go côté translator), réseau/loopback, sidecar
 OPA, modification des agrégats TBAG1 (T22), nouveau kind de feuille,
-console (T34c), modèle sync/async du registre (#71).
+console (T34c), troisième bras de mesure du mode async borné (post-T38 —
+à ouvrir si la prod veut chiffrer le rattrapage, pas seulement le pire
+cas sync).

@@ -70,6 +70,20 @@ const (
 	saltLen = 16
 )
 
+// engageIOBudget borne le drain (T38, #71) et l'écriture de la feuille
+// d'arrêt dans engage(), quelle que soit l'échéance du contexte de
+// l'appelant. Sans cette borne, engage() ne revient JAMAIS quand la
+// publication du registre est en panne (coupure de durabilité T38 en
+// cours) ET que l'appelant fournit un contexte sans échéance — Run(ctx)
+// reçoit le contexte de VIE du démon (pas de délai), donc c'est le cas
+// réel, pas un cas de laboratoire : la goroutine de Run() gèle, plus
+// aucun échantillonnage, et onTrip/onAlarm (l'escalade T14) ne tirent
+// jamais tant que la panne dure — reproduit empiriquement en revue de PR
+// (#78). Même ordre de grandeur que le budget de la feuille de
+// rattrapage de AsyncWriter (writeCatchup, 30 s). Variable (pas const) :
+// abaissée dans les tests pour ne pas payer 30 s réelles par run.
+var engageIOBudget = 30 * time.Second
+
 // SizeQuotaBytes dimensionne le quota d'une cellule : taux de feuilles
 // mesuré (P1) × horizon de partition × marge de sécurité × occupation par
 // feuille. C'est un quota ALLOUÉ, pas « l'espace libre du moment » — le
@@ -197,6 +211,12 @@ type MonitorOptions struct {
 	// OnAlarm est appelé UNE fois à l'engagement — couture vers le
 	// moniteur (classe W, §5.3). Nil en dev.
 	OnAlarm func(Alarm)
+	// Drain, si non nil, vide les feuilles acceptées d'un AsyncWriter
+	// (T38, #71) AVANT la feuille d'arrêt — couture WaitOutstanding.
+	// Sans lui, des feuilles async acceptées avant le verrouillage mais
+	// confirmées après pourraient suivre KindBackpressure, qui ne serait
+	// plus littéralement la dernière feuille. Nil = aucun writer async.
+	Drain func(ctx context.Context) error
 }
 
 // Monitor est le sidecar de backpressure disque. Il implémente
@@ -214,6 +234,7 @@ type Monitor struct {
 	fs        FsStats
 	onTrip    func(Alarm)
 	onAlarm   func(Alarm)
+	drain     func(ctx context.Context) error
 	salt      []byte // sel des feuilles KindBackpressure — ne quitte pas la cellule
 
 	engaged atomic.Bool
@@ -262,7 +283,7 @@ func NewMonitor(opts MonitorOptions) (*Monitor, error) {
 		dir: opts.Dir, cellID: opts.CellID,
 		quota: opts.QuotaBytes, threshold: threshold, hostFloor: opts.HostFloorBytes,
 		interval: interval, sampler: sampler, fs: fsStats,
-		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, salt: salt,
+		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, drain: opts.Drain, salt: salt,
 	}, nil
 }
 
@@ -363,6 +384,30 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		// Drainage : les écritures acceptées avant le verrouillage
 		// terminent ; plus aucune ne démarre (double contrôle d'Append).
 		log.waitInflight()
+		// Borne interne (engageIOBudget) : le drain ET l'écriture de la
+		// feuille d'arrêt ci-dessous peuvent tous deux attendre une
+		// publication tessera qui, durant une coupure de durabilité (T38,
+		// #71) en cours, ne revient pas tant que la panne persiste. Sans
+		// cette borne, un ctx sans échéance (Run(ctx) reçoit le contexte
+		// de VIE du démon, pas un délai — le cas réel) fait geler engage()
+		// indéfiniment : plus aucun échantillonnage, et onTrip/onAlarm
+		// (l'escalade T14) ne tirent JAMAIS tant que la panne dure —
+		// reproduit empiriquement (revue de PR #78). Le verrou (déjà posé
+		// ci-dessus) protège dans l'intervalle, mais un silence
+		// d'alarme indéfini reste une dégradation silencieuse (§5.3).
+		ioCtx, ioCancel := context.WithTimeout(ctx, engageIOBudget)
+		defer ioCancel()
+		// Drainage async (T38, #71) : les feuilles acceptées par un
+		// AsyncWriter avant le verrouillage sont confirmées avant la
+		// feuille d'arrêt — sans ce drain, KindBackpressure ne serait
+		// plus la dernière feuille. Un échec (contexte expiré pendant
+		// une coupure) ne DÉVERROUILLE rien : le verrou tient, le
+		// manquement est signalé dans l'alarme.
+		if m.drain != nil {
+			if err := m.drain(ioCtx); err != nil {
+				alarm.Reason += "+async-drain-failed"
+			}
+		}
 		payload := fmt.Sprintf(`{"reason":%q,"cellID":%q,"usedBytes":%d,"quotaBytes":%d,"at":%q}`,
 			alarm.Reason, alarm.CellID, alarm.UsedBytes, alarm.QuotaBytes,
 			alarm.At.Format(time.RFC3339Nano))
@@ -372,7 +417,7 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 			PayloadHash: HashPayload(m.salt, []byte(payload)),
 			Timestamp:   alarm.At.UnixNano(),
 		}
-		if _, err := log.appendInternal(ctx, leaf); err != nil {
+		if _, err := log.appendInternal(ioCtx, leaf); err != nil {
 			// La feuille d'arrêt n'a pas pu être écrite (p.ex. disque
 			// plein) : on verrouille quand même — l'absence de feuille
 			// est elle-même un symptôme classe W, remonté par l'alarme.

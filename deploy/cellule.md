@@ -129,6 +129,11 @@ de la cellule installé (JSON `{"kid_hex": "pubkey_ed25519_hex"}`, kid de
 #   TBP_LISTEN_ADDR=127.0.0.1:8443
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
 #   TBP_QUORUM_MIN=2
+#   TBP_DURABILITY=async-bounded   # défaut (T38/#71) : verdict à
+#                                  # l'acceptation, rattrapage borné ;
+#                                  # "sync" = ancien chemin synchrone
+#   TBP_DURABILITY_WINDOW_MS=1000  # fenêtre d'opposabilité (défaut 1 s ;
+#                                  # plancher 4 × intervalle de checkpoint)
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s http://127.0.0.1:8443/healthz
