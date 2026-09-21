@@ -121,7 +121,7 @@ type PlanStep struct {
 
 // HashParams calcule le sceau de paramètres d'une étape : SHA-256 des
 // octets bruts (D57). params vide = « étape sans paramètres » — lié comme
-// tout autre valeur.
+// toute autre valeur.
 func HashParams(params []byte) [32]byte {
 	return sha256.Sum256(params)
 }
@@ -493,7 +493,12 @@ type PendingPlan struct {
 // entrées dont expiresAt est passé mais dont la feuille d'expiration n'est
 // pas encore écrite (expireLocked n'a pas encore tourné) sont filtrées ici
 // sur l'horloge : la console ne montre jamais un plan déjà mort.
-func (s *ContractStore) Snapshot() []PendingPlan {
+//
+// Lecture locale infaillible : nil ici — l'erreur existe dans la signature
+// parce que la couture ArbitrationSource de la console (T37, D110 élargi
+// après revue) peut être un adaptateur réseau, dont la lecture peut
+// échouer (une zero-value serait une demi-vérité, §1).
+func (s *ContractStore) Snapshot() ([]PendingPlan, error) {
 	now := s.clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -515,13 +520,16 @@ func (s *ContractStore) Snapshot() []PendingPlan {
 		}
 		return bytes.Compare(out[i].Hash[:], out[j].Hash[:]) < 0
 	})
-	return out
+	return out, nil
 }
 
 // PolicyID renvoie le hash du bundle de règles sous lequel les plans sont
 // scellés (claim −1) : la console l'affiche pour que l'arbitre vérifie
 // qu'il arbitre sous la bonne politique (un plan approuvé sous P meurt
-// avec P).
+// avec P). Contrat ArbitrationSource (T37) : la policy du DERNIER Snapshot
+// réussi — ici la policy est fixée à la construction du store, elle
+// satisfait donc le contrat pour tout Snapshot ; les adaptateurs réseau,
+// eux, ne la mettent à jour que sur une lecture réussie (supervisord).
 func (s *ContractStore) PolicyID() [32]byte { return s.policyID }
 
 // VerifyStep est la couture appelée par le broker (étape 7 de HandleAction,
