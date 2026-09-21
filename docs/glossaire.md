@@ -4,7 +4,8 @@ Quick-reference extract of §14 from
 [`spec-v1.4.10.fr.md`](./spec-v1.4.10.fr.md) (French) — that file remains
 the source of truth (an English translation of the full technical note
 lives at [`spec-v1.4.10.md`](./spec-v1.4.10.md)); this one exists to be
-linked/grepped without reopening the whole technical note. One canonical term per concept;
+linked/grepped
+without reopening the whole technical note. One canonical term per concept;
 synonyms found in upstream documents (network manifesto, deployment
 references, discussions) are mapped onto it — **the code and documentation
 of this repository must use the "Canonical term" column**, never a
