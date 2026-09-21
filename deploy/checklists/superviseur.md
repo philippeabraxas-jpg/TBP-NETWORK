@@ -1,46 +1,48 @@
-# Checklist de recette — superviseur (T35, issue #61)
+# Acceptance checklist — supervisor (T35, issue #61)
 
-À cocher sur la machine, dans l'ordre. Une case rouge = STOP.
+_Version française : [superviseur.fr.md](superviseur.fr.md)._
 
-## §12 Genèse
+To be checked on the machine, in order. One red box = STOP.
 
-- [ ] Genèse célébrée sur HSM (`scripts/genesis`) ; SoftHSM = DEV
-      uniquement, jamais racine de gouvernance.
-- [ ] Clés privées des contrôleurs dans le HSM, jamais exportées (journal
-      HSM à l'appui) ; seules pubkeys + `epoch0.json` ont quitté la
-      machine, vers les cellules, par canal authentifié (custody D97).
-- [ ] Manifest relu : M-of-N conforme à la gouvernance décidée (2-of-3 au
-      pilote).
+## §12 Genesis
 
-## §2/§7.1 Indépendance du moniteur
+- [ ] Genesis celebrated on HSM (`scripts/genesis`); SoftHSM = DEV
+      only, never a governance root.
+- [ ] Controller private keys in the HSM, never exported (HSM journal
+      as evidence); only pubkeys + `epoch0.json` have left the
+      machine, towards the cells, over an authenticated channel (D97 custody).
+- [ ] Manifest re-read: M-of-N conforming to the decided governance (2-of-3 at
+      the pilot).
 
-- [ ] Le moniteur a SA propre clé et SON propre log (T34) — distincts de
-      toute cellule surveillée.
-- [ ] Le moniteur n'a aucun moyen d'ÉCRIRE dans les chaînes surveillées
-      (lecture vérifiée uniquement : checkpoint signé + Merkle).
-- [ ] Les alertes (équivoque d'époque, retard d'ancre, fraude de
-      continuation) arrivent sur le Sink prévu — testé par une alarme
-      provoquée en lab.
-- [ ] Assemblage documenté (trou #74 : pas de binaire supervisord —
-      patron superviseur.md étape 3).
+## §2/§7.1 Monitor independence
 
-## §9.1 Console et indicateurs
+- [ ] The monitor has ITS own key and ITS own log (T34) — distinct from
+      any monitored cell.
+- [ ] The monitor has no means to WRITE into the monitored chains
+      (verified read only: signed checkpoint + Merkle).
+- [ ] Alerts (epoch equivocation, anchor delay, continuation
+      fraud) arrive at the intended Sink — tested with an alarm
+      triggered in the lab.
+- [ ] supervisord delivered and running (T37 — superviseur.md step 3;
+      structural read-only via ProtectSystem=strict).
 
-- [ ] Console assemblée avec sa source de compteurs broker (requis —
-      « source de compteurs broker requise §9.1 ») ; `/v1/arbitration`,
-      `/v1/epoch`, `/v1/indicators` répondent.
-- [ ] Les indicateurs sont alimentés AVANT toute bascule closed (D100).
+## §9.1 Console and indicators
 
-## §7.4 Master chain et promotion
+- [ ] Console assembled with its broker counter source (required —
+      "broker counter source required §9.1"); `/v1/arbitration`,
+      `/v1/epoch`, `/v1/indicators` answer.
+- [ ] The indicators are fed BEFORE any closed switch (D100).
 
-- [ ] Ancres de bundles et fenêtres saines publiées par époque dans le
-      master ; la fenêtre est LUE par les cellules, jamais mesurée par un
-      canari.
-- [ ] Partition du master = promotion refusée (fail-closed) — éprouvé par
-      la phase fencing du selftest (`ErrPromotionAnchorUnavailable`,
-      feuille `KindPromotion`).
+## §7.4 Master chain and promotion
 
-## Réseau
+- [ ] Bundle anchors and healthy windows published per epoch in the
+      master; the window is READ by the cells, never measured by a
+      canary.
+- [ ] Master partition = promotion refused (fail-closed) — exercised by
+      the selftest's fencing phase (`ErrPromotionAnchorUnavailable`,
+      `KindPromotion` leaf).
 
-- [ ] Le superviseur ne rejoint AUCUN VLAN de production (§5.1) ; son
-      canal est la supervision.
+## Network
+
+- [ ] The supervisor joins NO production VLAN (§5.1); its
+      channel is supervision.

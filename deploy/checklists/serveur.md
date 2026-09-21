@@ -1,38 +1,40 @@
-# Checklist de recette — serveur (T35, issue #61)
+# Acceptance checklist — server (T35, issue #61)
 
-À cocher sur la machine, dans l'ordre. Une case rouge = STOP.
+_Version française : [serveur.fr.md](serveur.fr.md)._
 
-## Acceptation broker-only
+To be checked on the machine, in order. One red box = STOP.
 
-- [ ] L'application n'exécute rien sans verdict `POST /v1/evaluate` du PEP
-      de SA cellule — aucun chemin de contournement n'existe dans le code
-      métier déployé.
-- [ ] `POST /v1/consume` est appelé à l'exécution (passeport de quota
-      §4.1-bis) ; le dépassement de quota coupe proprement (observé).
-- [ ] PostgreSQL : les deux hooks §4.4(3) de l'extension sont actifs —
-      structurel (`post_parse_analyze`) + sceau du plan figé
-      (`ExecutorStart`, paramètres liés inclus).
+## Broker-only acceptance
 
-## §5.3 Posture et mesure
+- [ ] The application executes nothing without a `POST /v1/evaluate` verdict
+      from ITS cell's PEP — no bypass path exists in the deployed
+      business code.
+- [ ] `POST /v1/consume` is called at execution time (quota passport
+      §4.1-bis); quota overrun cuts cleanly (observed).
+- [ ] PostgreSQL: both §4.4(3) hooks of the extension are active —
+      structural (`post_parse_analyze`) + frozen-plan seal
+      (`ExecutorStart`, bound parameters included).
 
-- [ ] pepd démarre en monitor ; `GET /v1/mode` le confirme.
-- [ ] Le serveur ne peut pas basculer seul : `POST /v1/mode` sans quorum
-      → 403 (observé — phase mono du selftest).
-- [ ] Points de mesure §9.1 installés et alimentés en monitor (forwarded,
-      would-deny, denied, latences) — préalable D100 à monitor-to-closed.md.
+## §5.3 Posture and measurement
 
-## Durcissement hôte
+- [ ] pepd starts in monitor; `GET /v1/mode` confirms it.
+- [ ] The server cannot switch alone: `POST /v1/mode` without quorum
+      → 403 (observed — selftest mono phase).
+- [ ] §9.1 measurement points installed and fed in monitor (forwarded,
+      would-deny, denied, latencies) — D100 prerequisite to monitor-to-closed.md.
 
-- [ ] Unité systemd pepd sur le patron T24 à adapter
-      (`src/translator/tbp-translator.service`) : cap-drop, seccomp
+## Host hardening
+
+- [ ] pepd systemd unit on the T24 pattern to adapt
+      (`src/translator/tbp-translator.service`): cap-drop, seccomp
       `@system-service`, `ProtectSystem=strict`, `EnvironmentFile` 0600.
-- [ ] sysctl durcis à partir de `config/sysctl/99-tbp-hardening.conf`, à
-      adapter au noyau local (D99).
-- [ ] Aucune clé de gouvernance sur cette machine (custody D97) : ni
-      contrôleurs, ni sel d'une autre cellule, ni capabilities.json copié.
+- [ ] sysctl hardened from `config/sysctl/99-tbp-hardening.conf`, to
+      adapt to the local kernel (D99).
+- [ ] No governance key on this machine (D97 custody): neither
+      controllers, nor another cell's salt, nor a copied capabilities.json.
 
-## Registre local
+## Local registry
 
-- [ ] `cell_log.key` en 0600, créé au premier démarrage, uniquement ici.
-- [ ] Feuilles `KindDecision` présentes en monitor (verdict + passeport =
-      2 feuilles par évaluation allow — mesuré par le selftest).
+- [ ] `cell_log.key` at 0600, created at first startup, only here.
+- [ ] `KindDecision` leaves present in monitor (verdict + passport =
+      2 leaves per allow evaluation — measured by the selftest).

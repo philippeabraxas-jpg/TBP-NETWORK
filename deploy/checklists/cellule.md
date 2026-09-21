@@ -1,42 +1,44 @@
-# Checklist de recette — cellule (T35, issue #61)
+# Acceptance checklist — cell (T35, issue #61)
 
-À cocher sur la machine, dans l'ordre. Une case rouge = STOP.
+_Version française : [cellule.fr.md](cellule.fr.md)._
 
-## §12 Cryptographie et OPA
+To be checked on the machine, in order. One red box = STOP.
 
-- [ ] Ed25519 partout — aucune autre courbe/algorithme n'apparaît dans la
-      configuration déployée.
-- [ ] `capabilities.json` régénéré depuis L'OPA déployé
-      (`policies/gen_capabilities.sh`) — jamais copié, jamais commité ;
-      les 4 interdits (`http.send`, `net.lookup_ip_addr`, `time.now_ns`,
-      `opa.runtime`) vérifiés absents.
-- [ ] OPA exécute un bundle compilé AVEC ces capabilities
-      (`opa build --capabilities …`, OPA ≥ 1.0) — pas de `opa run` sur les
-      règles nues.
-- [ ] La vérification négative est passée : une règle `http.send` est
-      refusée au chargement ET au build.
+## §12 Cryptography and OPA
 
-## §4.1/§6.2 Registre et feuilles
+- [ ] Ed25519 everywhere — no other curve/algorithm appears in the
+      deployed configuration.
+- [ ] `capabilities.json` regenerated from THE deployed OPA
+      (`policies/gen_capabilities.sh`) — never copied, never committed;
+      the 4 forbidden built-ins (`http.send`, `net.lookup_ip_addr`, `time.now_ns`,
+      `opa.runtime`) verified absent.
+- [ ] OPA runs a bundle compiled WITH these capabilities
+      (`opa build --capabilities …`, OPA ≥ 1.0) — no `opa run` on bare
+      rules.
+- [ ] The negative check passed: an `http.send` rule is
+      refused at load time AND at build time.
 
-- [ ] Registre tessera de LA cellule initialisé ; `cell_log.key` en 0600,
-      présent uniquement sur cette machine (custody D97).
-- [ ] Sel de hachage ≥ 16 octets, généré localement, jamais partagé
-      (§6.2) ; les feuilles sont hash-only.
-- [ ] Scan vérifié rejouable (checkpoint signé + Merkle) — le moniteur le
-      rejoue à distance (checklist superviseur).
+## §4.1/§6.2 Registry and leaves
+
+- [ ] Tessera registry of THE cell initialized; `cell_log.key` at 0600,
+      present only on this machine (D97 custody).
+- [ ] Hashing salt ≥ 16 bytes, generated locally, never shared
+      (§6.2); the leaves are hash-only.
+- [ ] Verified scan replayable (signed checkpoint + Merkle) — the monitor
+      replays it remotely (supervisor checklist).
 
 ## §5.3 Posture
 
-- [ ] `GET /v1/mode` rend `{"mode":"monitor"}` au démarrage — toujours.
-- [ ] La bascule closed exige le quorum (1 signataire → 403, observé).
-- [ ] Points de mesure §9.1 installés et alimentés AVANT toute demande de
-      closed (D100 — monitor-to-closed.md).
+- [ ] `GET /v1/mode` returns `{"mode":"monitor"}` at startup — always.
+- [ ] The closed switch requires the quorum (1 signer → 403, observed).
+- [ ] §9.1 measurement points installed and fed BEFORE any
+      closed request (D100 — monitor-to-closed.md).
 
-## §7.2 Gouvernance d'époque
+## §7.2 Epoch governance
 
-- [ ] Tracker d'époques assemblé (patron cellule.md étape 7 — trou #74)
-      avec les pubkeys de la genèse, quorum M-of-N, membres déclarés.
-- [ ] `epoch0.json` accepté ; `ObservedEpoch` = 0 ; la cellule ne sert que
-      si elle est l'autorité (fail-closed sinon).
-- [ ] Séquence rotation/révocation éprouvée par la phase fencing du
-      selftest sur registres réels.
+- [ ] Epoch tracker running (brokerd delivered, cellule.md step 7 —
+      T37) with the genesis pubkeys, M-of-N quorum, declared members.
+- [ ] `epoch0.json` accepted; `ObservedEpoch` = 0; the cell serves only
+      if it is the authority (fail-closed otherwise).
+- [ ] Rotation/revocation sequence exercised by the selftest's fencing
+      phase on real registries.
