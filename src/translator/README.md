@@ -72,6 +72,39 @@ resserrer — jamais l'inverse :
    resserrer `SystemCallFilter` en conséquence.
 3. Rejouer `audit_confinement.sh` après chaque calibration.
 
+## Quality measurement (T26, §4.5)
+
+Continuous translator quality governance — corpus replay + per-class
+metrics, blocking in CI, plus stratified human sampling:
+
+- **`measure.py`** — replays the corpus against the deployed scorer
+  (`--scorer-cmd`, JSONL seam — shadow mode, never a production decision),
+  emits a JSON report (per-class aggregates + deterministic corpus hash,
+  **never content**) and exits **1 on any FNR/FPR regression** (CI gate).
+  Targets FNR < 0.1 % / FPR < 2 % are **design targets to validate on the
+  first native corpus at the pilot (§15)** — reported as such, never as
+  established results.
+- **`corpus/`** — native per-language corpus structure (`pos`/`neg` per
+  class F/I/W/OUT, §5.3) with a deterministic hashing rule and an
+  `example/` mini-corpus that exercises the pipeline. The native corpora
+  themselves remain **to be constituted at the pilot** (associated
+  deliverable).
+- **`sample_human.py`** — stratified-by-class sampling of production
+  decisions for human review; seeded and manifest-logged so any draw is
+  reproducible and auditable.
+- **`metrics.go` + `cmd/tmetrics/`** — the registry-side leaf format
+  ("TBTM1", KindTelemetry, hash-only §6.2): `tmetrics --report report.json`
+  inscribes the measurement into the cell registry (registry keys required,
+  never generated there).
+
+CI wiring (workflows are read-only for the agent — copy this step):
+
+```yaml
+- name: translator quality gate (T26)
+  run: python3 src/translator/measure.py --corpus-dir src/translator/corpus/example \
+    --scorer-cmd "<deployed scorer>" --out report.json   # exit 1 = regression
+```
+
 ## Not implemented here
 
 - **Controlled degradation** (§4.5): if the translator goes down, policy
@@ -81,7 +114,3 @@ resserrer — jamais l'inverse :
   T25 (see `tests/p2_redteam/`, translator-failure scenario), to implement
   as an explicit, tested behavior, not an accidental side effect of an
   unhandled exception.
-- Native per-language corpus (positive/negative) and continuous
-  measurement pipeline (FNR < 0.1%, FPR < 2%, §4.5) — open question #4 of
-  the spec (§11): "translator: metrics per class, corpus, redundant
-  translators — to develop."
