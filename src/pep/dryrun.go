@@ -56,6 +56,12 @@ const (
 	ReasonDryRunFailed = "dryrun-failed"
 	// ReasonDryRunTimeout : le dry-run a dépassé son budget dédié.
 	ReasonDryRunTimeout = "dryrun-timeout"
+	// ReasonDryRunCallerCancelled : le contexte de l'APPELANT (pas le
+	// budget dédié du dry-run) est déjà annulé/expiré quand le composant
+	// observe ctx.Done() — même motif que classifyContextFault côté OPA
+	// (opa_client.go) : étiqueter ceci dryrun-failed ou dryrun-timeout
+	// accuserait le composant à tort d'une cause qui lui est étrangère.
+	ReasonDryRunCallerCancelled = "dryrun-caller-cancelled"
 )
 
 // Budget dry-run : distinct du circuit-breaker OPA (§12) — le dry-run
@@ -302,8 +308,18 @@ func (g *DryRunGate) Execute(ctx context.Context, jti [16]byte, action, resource
 	elapsed := g.now().Sub(start)
 
 	if err != nil {
+		// ctx (l'appelant) est vérifié EN PREMIER, comme
+		// classifyContextFault côté OPA (opa_client.go) : quand ctx est
+		// déjà terminé, dctx.Err() reporte souvent la même cause
+		// apparente (DeadlineExceeded), indiscernable d'un dépassement du
+		// budget dédié — étiqueter ça dryrun-timeout ou dryrun-failed
+		// accuserait le composant à tort d'une cause qui lui est
+		// étrangère (revue #62 : un signal malhonnête, même doctrine).
 		reason := ReasonDryRunFailed
-		if dctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		switch {
+		case ctx.Err() != nil:
+			reason = ReasonDryRunCallerCancelled
+		case dctx.Err() == context.DeadlineExceeded:
 			reason = ReasonDryRunTimeout
 		}
 		g.writeTelemetryLeaf(jti, false, [32]byte{}, elapsed)

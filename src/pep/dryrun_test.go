@@ -281,6 +281,39 @@ func TestDryRunGateTimeout(t *testing.T) {
 	}
 }
 
+// TestDryRunGateCallerCancelledNotBlamedOnRunner : même motif que
+// TestOPACallerContextCancelledNotBlamedOnOPA (opa_client_test.go) — quand
+// le contexte de l'APPELANT est déjà annulé/expiré (raison qui lui est
+// propre, rien à voir avec le composant dry-run ni avec son budget dédié),
+// le refus reste fail-closed mais ne doit JAMAIS être étiqueté
+// dryrun-timeout ni dryrun-failed comme si le composant avait fauté —
+// signal malhonnête (revue #62). Le runner répond ici après un délai
+// franchement au-delà du contexte appelant déjà expiré, pour isoler la
+// cause.
+func TestDryRunGateCallerCancelledNotBlamedOnRunner(t *testing.T) {
+	sink := &stubSink{}
+	runner := &stubRunner{diff: nominalDiff(), delay: 50 * time.Millisecond}
+	g := newGate(t, runner, sink)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond) // garantit l'expiration avant l'appel
+
+	_, reason := g.Execute(callerCtx, [16]byte{}, "transfer", "account/42")
+	if reason == ReasonDryRunTimeout {
+		t.Fatalf("reason=%q : accuse le composant à tort d'avoir dépassé son budget dédié", reason)
+	}
+	if reason == ReasonDryRunFailed {
+		t.Fatalf("reason=%q : accuse le composant à tort d'avoir fauté", reason)
+	}
+	if reason != ReasonDryRunCallerCancelled {
+		t.Fatalf("reason=%q, veut %q", reason, ReasonDryRunCallerCancelled)
+	}
+	if kinds := sinkKinds(sink); len(kinds) == 0 {
+		t.Fatal("feuille de refus manquante — une annulation appelant reste une décision fail-closed tracée")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Listener : orchestration D104 (avant passeport) et D105 (hors-classes)
 // ---------------------------------------------------------------------------
