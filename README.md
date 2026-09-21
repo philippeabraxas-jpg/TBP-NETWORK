@@ -80,37 +80,77 @@ tbp4.2.1/             Git submodule: the core protocol (Responsible-Alliance-Pro
                       `git submodule update --init` to fetch it; source of truth
                       and issue tracker for this code stay in that repository.
 docs/                 Specification (spec-en-v1.0.md, reference; spec-v1.4.10.md, French working note), glossary, audits
-figs/                  Figures referenced by the spec (see MANIFEST.md)
+figs/                 Figures referenced by the spec (see MANIFEST.md)
 policies/
 ├── README.md          How to generate capabilities.json correctly
+├── gen_capabilities.sh + validate_determinism.go   Generation + determinism gate
 └── rego/               Illustrative example Rego policies
 config/
-├── nftables/           Local PEP redirection (§4.1)
-├── freeradius/          802.1X / EAP-TLS (§5.1)
+├── nftables/           Local PEP redirection + P1 router rules (§4.1, §5.1)
+├── freeradius/          802.1X / EAP-TLS + enrolment/revocation scripts (§5.1)
 └── sysctl/               Generic kernel hardening
 src/
-├── pep/                 Local policy enforcement point (§4.1, §4.1-bis, §4.3)
+├── pep/                 Local policy enforcement point (§4.1, §4.1-bis, §4.3):
+│                        CWT/COSE token validation (Ed25519), memory-bounded
+│                        fail-closed anti-replay, clock-status degraded mode,
+│                        execution quotas, plan-as-contract gate, monitor→closed
+│                        modes, pepd daemon
 │   └── postgres-extension/  Two-hook in-process PEP for PostgreSQL (§4.4)
-├── telemetry/            Flow metadata, anti-dribble (§4.1-bis)
-├── translator/            Translator runtime hardening (§4.5)
-└── registry/              Cell registry / Tessera POSIX driver, disk backpressure (§6)
-lab/                    docker-compose PoC + containerlab topology (TBD)
+├── broker/               Cell broker (§5.1): single entry point of the decision
+│                        flow — orchestration, token issuer, emission envelope,
+│                        HTTP server (brokerd), epoch/quorum/plan-contract wiring
+├── cluster/              Multi-cell fencing (§7.2–§7.5): single-authority epochs
+│                        (m-of-n verified, monotone, equivocation-detected),
+│                        k-of-n quorum for class W, mirror/canary promotion
+├── registry/             Cell registry (§6): Tessera POSIX cell log with signed
+│                        checkpoints, disk backpressure, anchoring + TSA,
+│                        attested state manifest, measured boot (§6.3)
+├── supervision/          Independent monitor (§2, §6.2, §7.1): verified chain
+│                        reading (ChainWatcher), divergence alerting, failover
+│                        detection, read-only console, supervisord
+├── telemetry/            Flow metadata exporters, anti-dribble (§4.1-bis)
+└── translator/            Translator (§4.5): runtime hardening (hardened systemd
+                           unit, seccomp allowlist, confinement audit) + controlled
+                           degradation state machine (structured-only, no cloud
+                           fallback; mirror failover / human escalation /
+                           default-deny per system class)
+deploy/                 Multi-machine deployment guides (router, cell, server,
+                        supervisor) with per-machine checklists, monitor→closed
+                        posture switch, and an executable selftest (82 controls)
+scripts/genesis/        Genesis ceremony tooling (epoch 0, controller keys §12)
+lab/                    docker-compose PoC + containerlab P1 topology + netns
+                        tests (802.1X fail-closed, MAB/IoT VLAN, OCSP remediation)
 tests/
-├── p1_friction/         Latency thresholds to respect (§9.1)
-└── p2_redteam/           Attack scenarios to cover (§13)
-.github/                Issue templates, CI (Rego + nftables lint)
+├── p1_friction/         Friction budget (§9.1): thresholds + Go harness + leading indicators
+└── p2_redteam/           Attack scenarios (§13) + evidence-producing runner
+.github/                Issue templates, CI (Rego determinism gate + lint)
 ```
 
-**Current status: this repository's own rollout code is essentially a
-skeleton.** The spec is corrected and complete; `config/` and `policies/`
-contain concrete starting points; `src/`, `lab/` and `tests/` are, for
-now, READMEs describing the expected scope (see §13 for the order to
-fill them in). Do not deploy `config/` as-is — every file there says so
-explicitly, worth repeating here too. The protocol this rollout code
-governs against is not a skeleton: `tbp4.2.1/` vendors the working core
-(HSM signer, Merkle audit chain, OPA policy engine, tests, adversarial
-review process) in-tree via git submodule, pinned to a specific commit —
-present here without being copied or duplicated.
+**Current status (as of 2026-09-22): the rollout code is implemented and
+tested along the full path — genesis → fencing → registry → broker → PEP →
+supervision → deployment.** Every `src/` package carries its own test
+suite (Go unit/integration tests, Python for the audit and measurement
+tooling), and `deploy/selftest/` executes the deployment guides end to
+end (**82 controls, 0 failures** — a guide that drifts from the code
+breaks there, not at the operator's). Bounded-async registry durability
+(T38, §9.1) merged most recently
+([#78](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/78)), just
+after the translator's controlled degradation (T25, §4.5,
+[#79](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/79)). One
+backlog item is **in review** as an open PR:
+[#80](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/80)
+(translator quality measurement — corpus replay, per-class metrics,
+registry leaf, T26, §4.5). What is deliberately **not** here yet: the
+native per-language translator corpora (to be constituted at the pilot,
+§15), the human-arbitration escalation path (brokerd v1 accepts only the
+`structured` translator), and the inter-domain layer (spec §13 — deferred
+by the spec itself, documented in issue #33). Do not deploy `config/`
+as-is — every file there says so explicitly, worth repeating here too.
+The protocol this rollout code governs against is not a skeleton either:
+`tbp4.2.1/` vendors the working core (HSM signer, Merkle audit chain,
+OPA policy engine, tests, adversarial review process) in-tree via git
+submodule, pinned to a specific commit — present here without being
+copied or duplicated.
 
 ## Configuration guidance — where to start
 
@@ -120,47 +160,63 @@ measured user-experience regression = 0):
 
 1. **Genesis and keys** (§7.2, §3.2) — before anything else: a genesis
    ceremony signed by the controller quorum (m-of-n, HSM), anchored
-   out-of-band. Nothing in this repo replaces this step; it's procedural,
-   not code.
+   out-of-band. [`scripts/genesis/`](scripts/genesis/) provides the
+   epoch-0 tooling (dev path included); the ceremony itself remains
+   procedural, not code — nothing in this repo replaces it.
 2. **Cluster fencing** (§7, §13 step 2) — epoch issuance and rotation,
    controller quorum (k-of-n) for class-W actions, mirror/canary
    promotion. Required before any multi-cell deployment, including the
    2-cell P1 pilot below — a single cell can defer this, a pilot cannot.
-   **No `src/` scope exists yet for this** (unlike `pep/`, `registry/`,
-   `telemetry/`, `translator/` — see the skeleton note above): work
-   directly from spec §7 until a `src/cluster/README.md` is written.
+   Implemented in [`src/cluster/`](src/cluster/) (single-authority epoch
+   tracker, quorum, promotion by proof of receipt — no private key held
+   there) and wired into the broker ([`src/broker/`](src/broker/)).
 3. **OPA + registry** — install OPA, generate `policies/capabilities.json`
    following [`policies/README.md`](policies/README.md) (strip
-   `http.send` and `time.now_ns` before any deployment, never after),
+   `http.send` and `time.now_ns` before any deployment, never after;
+   `validate_determinism.go` and the determinism CI gate enforce this),
    start it with `lab/docker-compose.yml` to iterate on rules locally.
-   Includes the attested manifest and measured boot (§6.3, §13 step 3) —
-   a cell's own state must be provable before its decisions are; not yet
-   covered by [`src/registry/README.md`](src/registry/README.md), which
-   scopes the log/backpressure/anchoring side only.
-4. **PEP** — the first genuinely governed perimeter (§13). Read
-   [`src/pep/README.md`](src/pep/README.md) for the decisions to make
-   before writing any code, and [`config/nftables/pep-redirect.nft`](config/nftables/pep-redirect.nft)
+   The attested manifest and measured boot (§6.3, §13 step 3) — a cell's
+   own state must be provable before its decisions are — are implemented
+   in [`src/registry/`](src/registry/) alongside the cell log,
+   backpressure and anchoring.
+4. **PEP** — the first genuinely governed perimeter (§13), implemented in
+   [`src/pep/`](src/pep/): token validation (CWT/COSE, Ed25519),
+   memory-bounded fail-closed anti-replay, clock-status degraded mode,
+   execution quotas, and the plan-as-contract gate (§4.2, §13 step 4 —
+   token validation alone governs a single action, not the multi-step
+   plan an operator actually signs). Read
+   [`src/pep/README.md`](src/pep/README.md), and
+   [`config/nftables/pep-redirect.nft`](config/nftables/pep-redirect.nft)
    for the Debian-side network redirection. **Deploy in monitor mode
    first** (log, no blocking) — never `closed` on first rollout (doctrine
-   §5.3). Includes plan-as-contract arbitration (§4.2, §13 step 4) —
-   token validation alone governs a single action, not the multi-step
-   plan an operator actually signs; also not yet covered by
-   `src/pep/README.md`.
-5. **NAC in parallel** — [`config/freeradius/README.md`](config/freeradius/README.md):
+   §5.3); the posture switch procedure is
+   [`deploy/monitor-to-closed.md`](deploy/monitor-to-closed.md). For
+   PostgreSQL, the in-process two-hook PEP lives in
+   [`src/pep/postgres-extension/`](src/pep/postgres-extension/) (§4.4).
+5. **NAC in parallel** — [`config/freeradius/`](config/freeradius/):
    802.1X/EAP-TLS reusing the same PKI as the handshake (§3), fail-closed
    enforced at the switch level (not just on the RADIUS side), no
-   RADIUS-assigned VLAN in v1.
+   RADIUS-assigned VLAN in v1. The `lab/tests/` netns suites exercise the
+   fail-closed, MAB/IoT-VLAN and OCSP-remediation paths.
 6. **Host hardening** — [`config/sysctl/99-tbp-hardening.conf`](config/sysctl/99-tbp-hardening.conf)
    on every machine running a TBP component (broker, PEP, registry).
-7. **Translator last** (§13) — once everything else is stable; see
-   [`src/translator/README.md`](src/translator/README.md) for the
-   expected runtime hardening (non-root, cap-drop, seccomp — distinct from
-   `dm-verity`, which protects the image at rest, not the runtime).
+7. **Translator last** (§13) — once everything else is stable. The
+   runtime hardening and the controlled-degradation state machine are
+   delivered in [`src/translator/`](src/translator/) (non-root, cap-drop,
+   seccomp — distinct from `dm-verity`, which protects the image at rest,
+   not the runtime; degradation: structured-only, no cloud fallback);
+   quality measurement is in review
+   (PR [#80](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/80)).
+8. **Multi-machine deployment** — [`deploy/`](deploy/) holds the per-role
+   guides (router, cell, server, supervisor), per-machine acceptance
+   checklists, and `deploy/selftest/` which **executes** the guides
+   (`bash deploy/selftest/selftest.sh`, 82 controls, fail-closed). Run
+   the selftest before touching a real machine.
 
 At every step, measure against the friction budget (§9.1) — see
-[`tests/p1_friction/README.md`](tests/p1_friction/README.md) for the exact
-thresholds. The pilot fails if latency or arbitration rate exceed these
-thresholds, even if everything else works.
+[`tests/p1_friction/`](tests/p1_friction/) for the exact thresholds and
+the runnable harness. The pilot fails if latency or arbitration rate
+exceed these thresholds, even if everything else works.
 
 ## Licensing
 
@@ -168,8 +224,9 @@ Dual license, by subtree:
 - **`docs/` and `figs/`**: [CC BY 4.0](docs/LICENSE) — free to share and
   adapt with attribution.
 - **Everything else** (`config/`, `src/`, `policies/`, `lab/`, `tests/`,
-  `.github/`): [Apache 2.0](LICENSE) — same license as the core protocol
-  in [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol).
+  `deploy/`, `scripts/`, `.github/`): [Apache 2.0](LICENSE) — same license
+  as the core protocol in
+  [Responsible-Alliance-Protocol](https://github.com/philippeabraxas-jpg/Responsible-Alliance-Protocol).
   This code was closed-license during an initial pilot phase; that
   phase is over — the project isn't viable built alone, and a
   governance protocol whose own doctrine is "never by trust, always by
