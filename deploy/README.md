@@ -6,6 +6,10 @@ opérateur **non-auteur** — chaque étape porte un prérequis vérifiable, un
 critère de succès observable, et un « En cas d'échec : STOP ». Ne jamais
 continuer après un prérequis rouge.
 
+**Commencer par la vue d'ensemble** — quoi, où, pourquoi, prérequis :
+[apercu.md](apercu.md). Revenir ici pour l'ordre d'installation, la
+custody des clés et les étapes communes.
+
 ## Rôles et machines
 
 | Rôle | Machine | Services | Guide |
@@ -80,9 +84,10 @@ jamais « adapter » une étape suivante pour contourner un prérequis rouge.
 bash deploy/selftest/selftest.sh
 ```
 
-**Critère de succès observable** : `selftest.sh: tout est vert` — 49
-contrôles (mono réel + fencing 2-cellules) et la vérification formelle
-des guides passent ; rapport dans `deploy/selftest/out/selftest-report.json`.
+**Critère de succès observable** : `selftest.sh: tout est vert` — 82
+contrôles (cellule mono réelle, fencing 2-cellules, démons
+brokerd/supervisord réels) et la vérification formelle des guides
+passent ; rapport dans `deploy/selftest/out/selftest-report.json`.
 
 **En cas d'échec : STOP** — le guide lu dérive du code ; lire le contrôle
 rouge du rapport, corriger la cause (jamais le contrôle).
@@ -138,12 +143,11 @@ closed ne se demande qu'après [monitor-to-closed.md](monitor-to-closed.md).
   (`tests/p1_friction/`) est la référence exécutable des métriques.
 - **Ed25519 partout** (§12) ; le sel des feuilles reste chez le
   producteur (§6.2) ; toute décision laisse une feuille (§4.1).
-- **Trous déclarés** : pas de binaire `brokerd` ni de démon de
-  supervision — bibliothèques à assembler (patrons dans cellule.md et
-  superviseur.md), suivi en issue **#74**. `opa run --capabilities` a
-  disparu en OPA ≥ 1.0 : la forme supportée (bundle compilé avec
-  capabilities restreintes) est documentée dans
-  [cellule.md](cellule.md) et exécutée par le selftest. Le scénario
-  netns/FreeRADIUS complet se joue en lab (`lab/containerlab/`), pas en
-  sandbox — les causes réelles sont citées dans
-  [router-debian.md](router-debian.md).
+- **Trous déclarés** : `opa run --capabilities` a disparu en OPA ≥ 1.0 :
+  la forme supportée (bundle compilé avec capabilities restreintes) est
+  documentée dans [cellule.md](cellule.md) et exécutée par le selftest.
+  Le scénario netns/FreeRADIUS complet se joue en lab
+  (`lab/containerlab/`), pas en sandbox — les causes réelles sont citées
+  dans [router-debian.md](router-debian.md). Les démons `brokerd` et
+  `supervisord` (T37, issue #74) sont livrés avec leurs units systemd —
+  la phase daemons du selftest les exerce réellement.
