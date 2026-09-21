@@ -495,6 +495,84 @@ func TestMonitorBind(t *testing.T) {
 	}
 }
 
+// TestMonitorEngageBoundedDuringDurabilityCut : engage() ne doit JAMAIS
+// rester bloqué indéfiniment — même quand le drain (T38, #71) ET
+// l'écriture de la feuille d'arrêt attendent tous deux une publication
+// tessera qui ne revient pas (signataire de checkpoint gelé), ET que
+// l'appelant fournit un contexte SANS échéance (le cas réel : Run(ctx)
+// reçoit le contexte de vie du démon, pas un délai — voir main.go de
+// pepd/brokerd). Trouvé en revue de PR #78 : reproduit empiriquement
+// AVANT le fix, engage() ne revenait jamais (processus de test bloqué
+// au-delà de 120 s, tué manuellement) ; onTrip/onAlarm (l'escalade T14)
+// ne tiraient donc jamais tant que la coupure durait — silence
+// indéfini d'une alarme classe W (§5.3).
+func TestMonitorEngageBoundedDuringDurabilityCut(t *testing.T) {
+	// Budget abaissé pour ce test seul : on prouve que engage() revient
+	// AU BUDGET, pas qu'il revient vite dans l'absolu.
+	orig := engageIOBudget
+	engageIOBudget = 300 * time.Millisecond
+	defer func() { engageIOBudget = orig }()
+
+	ctx := context.Background() // délibérément SANS échéance — le cas réel.
+	rawSigner, verifier := asyncTestKeys(t)
+	signer := &gatedSigner{inner: rawSigner}
+	mon, err := NewMonitor(MonitorOptions{
+		Dir: t.TempDir(), CellID: "cell-async", QuotaBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("NewMonitor: %v", err)
+	}
+	dir := t.TempDir()
+	mon.dir = dir
+	log := openAsyncLog(t, ctx, dir, signer, verifier, mon, 100*time.Millisecond)
+	defer func() {
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = log.Close(c)
+	}()
+	if err := mon.Bind(log); err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	w, err := NewAsyncWriter(log, AsyncOptions{CellID: "cell-async", Salt: []byte("sel-async-16oct!")})
+	if err != nil {
+		t.Fatalf("NewAsyncWriter: %v", err)
+	}
+	mon.drain = w.WaitOutstanding
+
+	// Publication gelée : le drain ET la feuille d'arrêt ne peuvent PAS
+	// se terminer normalement.
+	signer.block()
+	defer signer.unblock()
+	for i := 0; i < 3; i++ {
+		if _, err := w.Append(ctx, asyncLeaf(i)); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	done := make(chan struct{})
+	var onTripFired, onAlarmFired atomic.Bool
+	mon.onTrip = func(Alarm) { onTripFired.Store(true) }
+	mon.onAlarm = func(Alarm) { onAlarmFired.Store(true) }
+	go func() {
+		mon.engage(ctx, Alarm{Reason: "registry-disk-80%", CellID: "cell-async", At: time.Now().UTC()})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("engage() n'est JAMAIS revenu — publication en panne + contexte sans échéance : " +
+			"la goroutine de supervision gèle, l'alarme classe W ne tire jamais (§5.3)")
+	}
+	if !mon.Engaged() {
+		t.Fatal("verrouillage non engagé malgré la panne — fail-closed attendu quand même")
+	}
+	if !onTripFired.Load() || !onAlarmFired.Load() {
+		t.Fatal("onTrip/onAlarm jamais appelés — l'escalade T14 resterait silencieuse " +
+			"pour toute la durée de la panne si engage() ne revenait pas")
+	}
+}
+
 // TestMonitorLeafWriteFailureStillTrips : si la feuille d'arrêt ne peut pas
 // être écrite (log fermé = disque inutilisable), le verrouillage a QUAND
 // MÊME lieu — fail-closed, et l'alarme le signale.

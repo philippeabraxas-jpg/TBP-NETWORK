@@ -70,6 +70,20 @@ const (
 	saltLen = 16
 )
 
+// engageIOBudget borne le drain (T38, #71) et l'écriture de la feuille
+// d'arrêt dans engage(), quelle que soit l'échéance du contexte de
+// l'appelant. Sans cette borne, engage() ne revient JAMAIS quand la
+// publication du registre est en panne (coupure de durabilité T38 en
+// cours) ET que l'appelant fournit un contexte sans échéance — Run(ctx)
+// reçoit le contexte de VIE du démon (pas de délai), donc c'est le cas
+// réel, pas un cas de laboratoire : la goroutine de Run() gèle, plus
+// aucun échantillonnage, et onTrip/onAlarm (l'escalade T14) ne tirent
+// jamais tant que la panne dure — reproduit empiriquement en revue de PR
+// (#78). Même ordre de grandeur que le budget de la feuille de
+// rattrapage de AsyncWriter (writeCatchup, 30 s). Variable (pas const) :
+// abaissée dans les tests pour ne pas payer 30 s réelles par run.
+var engageIOBudget = 30 * time.Second
+
 // SizeQuotaBytes dimensionne le quota d'une cellule : taux de feuilles
 // mesuré (P1) × horizon de partition × marge de sécurité × occupation par
 // feuille. C'est un quota ALLOUÉ, pas « l'espace libre du moment » — le
@@ -370,6 +384,19 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		// Drainage : les écritures acceptées avant le verrouillage
 		// terminent ; plus aucune ne démarre (double contrôle d'Append).
 		log.waitInflight()
+		// Borne interne (engageIOBudget) : le drain ET l'écriture de la
+		// feuille d'arrêt ci-dessous peuvent tous deux attendre une
+		// publication tessera qui, durant une coupure de durabilité (T38,
+		// #71) en cours, ne revient pas tant que la panne persiste. Sans
+		// cette borne, un ctx sans échéance (Run(ctx) reçoit le contexte
+		// de VIE du démon, pas un délai — le cas réel) fait geler engage()
+		// indéfiniment : plus aucun échantillonnage, et onTrip/onAlarm
+		// (l'escalade T14) ne tirent JAMAIS tant que la panne dure —
+		// reproduit empiriquement (revue de PR #78). Le verrou (déjà posé
+		// ci-dessus) protège dans l'intervalle, mais un silence
+		// d'alarme indéfini reste une dégradation silencieuse (§5.3).
+		ioCtx, ioCancel := context.WithTimeout(ctx, engageIOBudget)
+		defer ioCancel()
 		// Drainage async (T38, #71) : les feuilles acceptées par un
 		// AsyncWriter avant le verrouillage sont confirmées avant la
 		// feuille d'arrêt — sans ce drain, KindBackpressure ne serait
@@ -377,7 +404,7 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		// une coupure) ne DÉVERROUILLE rien : le verrou tient, le
 		// manquement est signalé dans l'alarme.
 		if m.drain != nil {
-			if err := m.drain(ctx); err != nil {
+			if err := m.drain(ioCtx); err != nil {
 				alarm.Reason += "+async-drain-failed"
 			}
 		}
@@ -390,7 +417,7 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 			PayloadHash: HashPayload(m.salt, []byte(payload)),
 			Timestamp:   alarm.At.UnixNano(),
 		}
-		if _, err := log.appendInternal(ctx, leaf); err != nil {
+		if _, err := log.appendInternal(ioCtx, leaf); err != nil {
 			// La feuille d'arrêt n'a pas pu être écrite (p.ex. disque
 			// plein) : on verrouille quand même — l'absence de feuille
 			// est elle-même un symptôme classe W, remonté par l'alarme.
