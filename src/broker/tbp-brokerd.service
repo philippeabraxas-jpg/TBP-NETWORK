@@ -1,0 +1,118 @@
+# tbp-brokerd.service — unit systemd durcie du broker de cellule (T37,
+# issue #74, patron de durcissement T24 — src/translator/tbp-translator.service).
+#
+# brokerd assemble la chaîne de décision §5.1 : traducteur structuré →
+# arbitrage OPA → fencing d'époque (§7.2) → quorum classe W (§7.5) →
+# contrat de plan (§4.2) → émission de jeton. C'est un composant de
+# SÉCURITÉ (contrairement au traducteur, paramètre de friction) : ce
+# fichier confine le processus au strict nécessaire — aucune capacité,
+# aucun périphérique, W^X tenue (binaire pur Go, aucune exception).
+#
+# Installation :
+#   useradd --system --home-dir /var/lib/tbp/broker --shell /usr/sbin/nologin tbp-broker
+#   install -m 0644 tbp-brokerd.service /etc/systemd/system/
+#   # /etc/tbp/brokerd.env en 0600, propriété tbp-broker (voir deploy/cellule.md étape 7)
+#   systemctl daemon-reload && systemctl enable --now tbp-brokerd
+#
+# Le socket de cellule vit sous /run/tbp (RuntimeDirectory, PARTAGÉ avec
+# tbp-supervisord.service : systemd compte les références, le répertoire
+# n'est retiré qu'à l'arrêt du dernier service l'utilisant). Le registre
+# propre du broker vit sous /var/lib/tbp/broker (StateDirectory) — SEUL
+# chemin inscriptible : les artefacts de genèse et la seed émetteur sont
+# lus, jamais écrits, par le service.
+
+[Unit]
+Description=TBP broker daemon (chaîne de décision §5.1 — T37)
+After=local-fs.target
+# Le fichier d'environnement (sel, policy épinglée, seed émetteur,
+# genèse) doit exister AVANT le démarrage — fail-closed, jamais de
+# démarrage à moitié configuré (§1). Le démon redouble ce garde-fou :
+# toute variable manquante y est fatale.
+ConditionPathExists=/etc/tbp/brokerd.env
+# Le budget de redémarrage vit dans [Unit] (StartLimitIntervalSec y est
+# reconnu ; dans [Service] il est ignoré par les systemd ≤ 252).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tbp-broker
+Group=tbp-broker
+EnvironmentFile=/etc/tbp/brokerd.env
+ExecStart=/usr/local/bin/brokerd
+
+# Répertoires : socket sous /run/tbp (TBP_BROKER_SOCKET), registre propre
+# sous /var/lib/tbp/broker (TBP_REGISTRY_DIR) — à garder cohérents avec
+# l'env du service.
+RuntimeDirectory=tbp
+RuntimeDirectoryMode=0750
+StateDirectory=tbp/broker
+UMask=0077
+
+# --- Capacités : CAP_DROP_ALL (patron T24) -------------------------------
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# --- Appels système : seccomp strict --------------------------------------
+# @system-service = base stricte de systemd ; EPERM (pas SIGSYS) pour
+# laisser aux bibliothèques leurs fallbacks propres.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# --- Réseau : familles restreintes ----------------------------------------
+# Socket Unix de cellule (actions + vues de supervision) et boucle locale
+# TCP vers OPA (TBP_OPA_ENDPOINT, 127.0.0.1 uniquement — §5.1). PAS
+# d'AF_NETLINK/AF_PACKET : le broker n'a aucune légitimité sur la couche
+# réseau de la machine.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# --- Système de fichiers ---------------------------------------------------
+# Le registre propre du broker et le socket sont les SEULS chemins
+# inscriptibles. La genèse (TBP_GENESIS_DIR), la seed émetteur et les clés
+# d'opérateurs restent en lecture seule — ProtectSystem=strict le rend
+# structurel, pas déclaratif.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/tbp/broker /run/tbp
+
+# --- Périphériques : aucun --------------------------------------------------
+# Composant purement logiciel : PrivateDevices masque tout /dev — aucune
+# exception (contrairement au traducteur GPU).
+PrivateDevices=yes
+
+# --- Kernel : tout ce qui n'est pas nécessaire est fermé --------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# --- Mémoire W^X -------------------------------------------------------------
+# Binaire pur Go : MemoryDenyWriteExecute=yes est tenu SANS exception (pas
+# de JIT, pas de torch.compile — voir l'exception documentée du traducteur
+# pour contraste).
+MemoryDenyWriteExecute=yes
+
+# --- Ressources et cycle de vie ----------------------------------------------
+LimitNOFILE=4096
+Restart=on-failure
+RestartSec=5
+# Une requête interrompue au milieu de la chaîne laisserait une feuille
+# sans jeton, ou pire un jeton sans feuille : le démon s'arrête proprement
+# (budget 30 s côté binaire) — systemd lui laisse ce temps.
+TimeoutStopSec=35
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tbp-brokerd
+
+[Install]
+WantedBy=multi-user.target
