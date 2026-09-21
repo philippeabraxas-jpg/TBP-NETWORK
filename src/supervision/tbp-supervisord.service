@@ -1,0 +1,113 @@
+# tbp-supervisord.service — unit systemd durcie du moniteur/console (T37,
+# issue #74, patron de durcissement T24 — src/translator/tbp-translator.service).
+#
+# supervisord assemble le moniteur indépendant (T34 — scan vérifié des
+# chaînes, fraîcheur d'ancrage §6.2, chaînes de manifestes §6.3) et la
+# console de supervision (T34c — lecture seule par construction).
+#
+# §2/§7.1 RENDU STRUCTUREL : le moniteur n'écrit JAMAIS dans les chaînes
+# surveillées. Ce n'est pas seulement une propriété du code ici :
+# ProtectSystem=strict + ReadWritePaths limité au registre PROPRE du
+# moniteur et au socket font que le processus ne PEUT pas écrire dans les
+# chaînes des cellules ni dans la master chain, même s'il était compromis.
+# Prérequis de déploiement : l'accès LECTURE SEULE aux répertoires des
+# chaînes surveillées est accordé à l'utilisateur du service (groupe
+# dédié ou ACL — voir deploy/superviseur.md étape 3) ; la clé privée
+# cell_log.key des cellules ne lui est JAMAIS accessible (custody D97).
+#
+# Installation :
+#   useradd --system --home-dir /var/lib/tbp/supervision --shell /usr/sbin/nologin tbp-supervision
+#   install -m 0644 tbp-supervisord.service /etc/systemd/system/
+#   # /etc/tbp/supervisord.env en 0600 + /etc/tbp/cells.json (vkeys publiques
+#   # seulement) — voir deploy/superviseur.md étape 3
+#   systemctl daemon-reload && systemctl enable --now tbp-supervisord
+#
+# Le socket de console vit sous /run/tbp (RuntimeDirectory, PARTAGÉ avec
+# tbp-brokerd.service : systemd compte les références).
+
+[Unit]
+Description=TBP supervision daemon (moniteur indépendant + console — T37)
+After=local-fs.target
+# Le fichier d'environnement (sel du moniteur, cells.json, socket du
+# brokerd de la cellule) doit exister AVANT le démarrage — fail-closed
+# (§1). Le démon redouble : toute variable manquante y est fatale, et un
+# brokerd de cellule injoignable AU DÉMARRAGE aussi (pas de console dont
+# les sources sont mortes à la naissance).
+ConditionPathExists=/etc/tbp/supervisord.env
+# Le budget de redémarrage vit dans [Unit] (StartLimitIntervalSec y est
+# reconnu ; dans [Service] il est ignoré par les systemd ≤ 252).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tbp-supervision
+Group=tbp-supervision
+EnvironmentFile=/etc/tbp/supervisord.env
+ExecStart=/usr/local/bin/supervisord
+
+# Répertoires : socket de console sous /run/tbp (TBP_CONSOLE_SOCKET),
+# registre propre du MONITEUR sous /var/lib/tbp/supervision
+# (TBP_REGISTRY_DIR) — à garder cohérents avec l'env du service.
+RuntimeDirectory=tbp
+RuntimeDirectoryMode=0750
+StateDirectory=tbp/supervision
+UMask=0077
+
+# --- Capacités : CAP_DROP_ALL (patron T24) -------------------------------
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# --- Appels système : seccomp strict --------------------------------------
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# --- Réseau : familles restreintes ----------------------------------------
+# Socket Unix de console + socket Unix vers le brokerd de la cellule
+# (TBP_CELL_BROKER_SOCKET — sources de console, lecture GET seule).
+# AUCUNE famille réseau : la machine superviseur ne rejoint aucun VLAN de
+# production (§5.1) — son canal est la supervision, pas le trafic.
+RestrictAddressFamilies=AF_UNIX
+
+# --- Système de fichiers ---------------------------------------------------
+# SEULS le registre propre du moniteur et le socket sont inscriptibles :
+# les chaînes surveillées (/var/lib/tbp/* des cellules, master chain,
+# manifestes publiés) restent LECTURE SEULE — doctrine §2/§7.1 rendue
+# structurelle par ProtectSystem=strict.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/tbp/supervision /run/tbp
+
+# --- Périphériques : aucun --------------------------------------------------
+PrivateDevices=yes
+
+# --- Kernel : tout ce qui n'est pas nécessaire est fermé --------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# --- Mémoire W^X : binaire pur Go, tenue sans exception ----------------------
+MemoryDenyWriteExecute=yes
+
+# --- Ressources et cycle de vie ----------------------------------------------
+LimitNOFILE=4096
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tbp-supervisord
+
+[Install]
+WantedBy=multi-user.target
