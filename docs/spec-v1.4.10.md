@@ -1,378 +1,375 @@
-# TBP — Gouvernance d'actions attestée
-## Note technique v1.4.10 · 18 septembre 2026 · Philippe Collet
+# TBP — Attested action governance
+## Technical note v1.4.10 · 18 September 2026 · Philippe Collet
 
-> **This document is in French; translation to English is planned but not
-> done yet — see the [repository README](../README.md) for an English
-> summary of what's covered in each section, and for the configuration
-> guidance derived from it.**
+_Version française : [spec-v1.4.10.fr.md](spec-v1.4.10.fr.md)._
 
-> *« Le contrôle d'accès existant décide si tu entres ; TBP décide ce que tu peux faire une fois dedans — et le prouve. On gouverne les capacités, pas les modèles. »*
+> *"Existing access control decides whether you get in; TBP decides what you can do once inside — and proves it. We govern capabilities, not models."*
 
-TBP ne remplace pas les protections métier : la centrale a ses verrous, le LLM a ses guardrails. TBP donne un switch activable et auditable. Si le traducteur ne sait pas, il n'autorise pas : il demande. Si le métier dit non, l'action meurt. Si le métier dit oui, l'action passe. Si c'est gris, l'action est soumise.
+TBP does not replace business protections: the power plant has its locks, the LLM has its guardrails. TBP provides a switch that can be activated and audited. If the translator does not know, it does not authorize: it asks. If the business says no, the action dies. If the business says yes, the action goes through. If it is grey, the action is submitted.
 
-**Intègre :** audits adversariaux indépendants (Gemini, DeepSeek, Claude — v1.1–v1.3) · audit pratique quatre évaluateurs + deux méta-audits (référence de déploiement v1.2) · manifeste réseau (intégré et normalisé).
+**Integrates:** independent adversarial audits (Gemini, DeepSeek, Claude — v1.1–v1.3) · practical four-evaluator audit + two meta-audits (deployment reference v1.2) · network manifesto (integrated and normalized).
 
-**Implémentation** : ce document fait partie du dépôt [TBP-NETWORK](https://github.com/philippeabraxas-jpg/TBP-NETWORK) — voir le [README](../README.md) pour la structure du dépôt, la séquence de déploiement (§13) et les configurations de départ (`config/`, `policies/`).
+**Implementation**: this document is part of the [TBP-NETWORK](https://github.com/philippeabraxas-jpg/TBP-NETWORK) repository — see the [README](../README.md) for the repository structure, the deployment sequence (§13) and the starting configurations (`config/`, `policies/`).
 
 ---
 
-## 0 · Résumé
+## 0 · Summary
 
-TBP gouverne les **capacités des agents**, pas leurs modèles. Un LLM est probabiliste : la sécurité ne peut jamais dépendre de ce qu'il produit — elle dépend de ce que son action est autorisée à faire, vérifié par un système déterministe avant exécution, avec preuve vérifiable par un tiers.
+TBP governs **agent capabilities**, not their models. An LLM is probabilistic: security can never depend on what it produces — it depends on what its action is allowed to do, verified by a deterministic system before execution, with third-party-verifiable proof.
 
-![Figure 1 — La chaîne de gouvernance TBP](figs/fig1_chaine.png)
+![Figure 1 — The TBP governance chain](figs/fig1_chaine.png)
 
-**Nouveautés de la v1.4** : passeports à capacité bornée (quota signé, compteur au PEP, enveloppe d'egress par époque, télémétrie de métadonnées) · clés éphémères · temps explicite (NTS) · plan d'arbitré = contrat · anti-rejeu jti · circuit-breaker OPA · gouvernance de la classification · glossaire de normalisation · statut épistémique.
+**New in v1.4**: bounded-capability passports (signed quota, counter at the PEP, per-epoch egress envelope, metadata telemetry) · ephemeral keys · explicit time (NTS) · arbitrated plan = contract · jti anti-replay · OPA circuit breaker · classification governance · normalization glossary · epistemic status.
 
 ## 1 · Doctrine
 
-- **Jamais par confiance, toujours par preuve vérifiable** — toute affirmation est une propriété cryptographique, pas une déclaration.
-- **Jamais par nom, toujours par signature** — un nom se copie ; une signature sur (objet, temps, portée) non.
-- **Jamais par oui, toujours par défaut-deny** — l'inconnu est classé strict (y compris les API sans invariants déclarés).
-- **Défaisable mais détectable** — on ne prétend pas « impossible », on prétend « impossible à cacher ».
-- **On gouverne les capacités, pas les machines** — la question n'est pas « peut-on entrer sans passer par le routeur » (toujours oui) mais « que peut-on atteindre » (borné) et « qui le verra » (prouvé).
-- **TBP n'est pas un juge, c'est un livre de lois et un greffe** — il applique mécaniquement des règles déjà écrites par le métier ; aucune discrétion n'est exercée à l'exécution. Il produit un état à trois positions : rejeté (règle métier ou traducteur), autorisé (rien ne l'empêche dans TBP), soumis (gris — la seule discrétion admise, et elle est humaine). La sécurité reste portée par les règles métier ; TBP la rend activable, signée et auditable.
-- **L'action exécutée est l'action traduite** — le traducteur produit l'action ; le mensonge d'intention de l'agent est structurellement stérilisé.
-- **La décision mentie reste imputable** — un composant compromis peut mentir sur la décision, pas sur sa responsabilité.
-- **On ne ferme pas tous les trous ; on les classe par impact et on mitigue proportionnellement** — la gouvernance est un problème d'allocation, pas de complétude.
+- **Never by trust, always by verifiable proof** — every claim is a cryptographic property, not a declaration.
+- **Never by name, always by signature** — a name can be copied; a signature over (object, time, scope) cannot.
+- **Never by yes, always by default-deny** — the unknown is classified strict (including APIs with no declared invariants).
+- **Defeasible but detectable** — we do not claim "impossible", we claim "impossible to hide".
+- **We govern capabilities, not machines** — the question is not "can one get in without going through the router" (always yes) but "what can one reach" (bounded) and "who will see it" (proven).
+- **TBP is not a judge, it is a book of laws and a registry office** — it mechanically applies rules already written by the business; no discretion is exercised at execution. It produces a three-position state: rejected (business rule or translator), authorized (nothing in TBP prevents it), submitted (grey — the only admitted discretion, and it is human). Security remains carried by the business rules; TBP makes it activatable, signed and auditable.
+- **The executed action is the translated action** — the translator produces the action; the agent's lying about its intention is structurally sterilized.
+- **A lied-about decision remains attributable** — a compromised component can lie about the decision, not about its responsibility.
+- **We do not close every hole; we classify them by impact and mitigate proportionally** — governance is an allocation problem, not a completeness problem.
 
-| Objet | Mécanisme | Analogue |
+| Object | Mechanism | Analogue |
 |---|---|---|
-| Règles | paquets versionnés, épinglés par hash (langage contraint, §11) | lockfile / SPDX |
-| Composants | paquets signés, vérifiés à l'installation | gestionnaire de paquets (Sigstore) |
-| Actions | tokens signés (action + temps + portée + quota) | — |
-| Entités | attestation liée à politique (handshake) | mTLS + attestation TEE |
+| Rules | versioned packages, hash-pinned (constrained language, §11) | lockfile / SPDX |
+| Components | signed packages, verified at install | package manager (Sigstore) |
+| Actions | signed tokens (action + time + scope + quota) | — |
+| Entities | attestation bound to policy (handshake) | mTLS + TEE attestation |
 
-## 2 · Modèle de menace
+## 2 · Threat model
 
-**Attaquants** : agents malveillants ou détournés, machines non gouvernées, insiders, et un attaquant capable de faire tomber, **isoler**, remplacer ou **submerger** des composants — y compris en contrôlant le **timing** (retards, partitions, fenêtres).
+**Attackers**: malicious or hijacked agents, ungoverned machines, insiders, and an attacker able to take down, **isolate**, replace or **overwhelm** components — including by controlling **timing** (delays, partitions, windows).
 
-**Non couverts par la prévention** (couverts par détection) : hotspot/4G, modèles locaux, accès physique à une machine non gouvernée.
+**Not covered by prevention** (covered by detection): hotspot/4G, local models, physical access to an ungoverned machine.
 
-**Hypothèse de confiance** : clés de gouvernance (HSM, m-of-n) ; au moins un moniteur indépendant ; canal hors-bande authentifié pour la genèse ; contrôleurs joignables par canal séparé (§7.2).
+**Trust assumption**: governance keys (HSM, m-of-n); at least one independent monitor; authenticated out-of-band channel for genesis; controllers reachable over a separate channel (§7.2).
 
-## 3 · Handshake inter-entités
+## 3 · Inter-entity handshake
 
-Le handshake prouve trois choses : **(1) sous quelles règles l'entité opère** (`policy_id = hash(P)`, subsomption mécanique) ; **(2) que son historique est continu** (preuve de consistance O(log n) ; toute modification est un événement de transition signé ; discontinuité = corruption = refus) ; **(3) qu'elle est opérationnelle à l'instant** (nonce vérifieur → cycle réel OPA → feuille → signature HSM ; cibles n'acceptant que des tokens émis in-flight).
+The handshake proves three things: **(1) under which rules the entity operates** (`policy_id = hash(P)`, mechanical subsumption); **(2) that its history is continuous** (O(log n) consistency proof; any modification is a signed transition event; discontinuity = corruption = refusal); **(3) that it is operational right now** (verifier nonce → real OPA cycle → leaf → HSM signature; targets accepting only tokens issued in-flight).
 
 ![Figure 2 — Handshake](figs/fig2_handshake.png)
 
-### 3.2 · Bootstrap : genèse, arrivants tardifs, limite de légitimité
+### 3.2 · Bootstrap: genesis, late joiners, legitimacy limit
 
-L'époque 0 est signée par le quorum de contrôleurs et ancrée externe dès la genèse. L'arrivant tardif vérifie la chaîne de clés (hors-bande), une preuve de consistance O(log n), et la continuité des transitions. **Limite explicite** : le bootstrap prouve la non-altération, pas la légitimité — l'attaque de la genèse parallèle (TOFU) passe tous les contrôles de consistance ; la légitimité vient de l'annuaire référencé (type eIDAS), hors protocole.
+Epoch 0 is signed by the controller quorum and externally anchored from genesis. The late joiner verifies the key chain (out-of-band), an O(log n) consistency proof, and the continuity of transitions. **Explicit limit**: bootstrap proves non-tampering, not legitimacy — the parallel-genesis attack (TOFU) passes every consistency check; legitimacy comes from the referenced directory (eIDAS type), outside the protocol.
 
-### 3.3 · Traitement différencié
+### 3.3 · Differentiated treatment
 
-| État présenté | Traitement |
+| Presented state | Treatment |
 |---|---|
-| Attesté, politique sous-sondant | passage calibré selon la classification |
-| Non attesté / inconnu | tier strict : effets de bord bloqués ou arbitrés, egress borné |
-| Discontinuité inexpliquée | refus + alarme moniteur |
+| Attested, subsuming policy | calibrated passage according to classification |
+| Non-attested / unknown | strict tier: side effects blocked or arbitrated, bounded egress |
+| Unexplained discontinuity | refusal + monitor alarm |
 
-**Positionnement** : TBP n'est ni NAC, ni Zero Trust (NIST SP 800-207), ni l'authentification d'entités (PKI, APKI, SPIFFE). Il ajoute : la sémantique de l'action, le tier d'arbitrage humain, la preuve vérifiable par un tiers.
+**Positioning**: TBP is neither NAC, nor Zero Trust (NIST SP 800-207), nor entity authentication (PKI, APKI, SPIFFE). It adds: action semantics, the human-arbitration tier, third-party-verifiable proof.
 
-## 4 · Signature d'actions (niveau machine)
+## 4 · Action signing (machine level)
 
-### 4.1 · Mécanisme et classification
+### 4.1 · Mechanism and classification
 
-Token signé (Ed25519, TTL 30–60 s, portée = action + ressource, jti unique) délivré après décision OPA ; **PEP local** valide signature + fraîcheur + portée + non-consommation. Debian : `nftables redirect` ; Windows : service PEP. Chaque décision laisse une feuille dans la chaîne de cellule.
+Signed token (Ed25519, TTL 30–60 s, scope = action + resource, unique jti) issued after OPA decision; **local PEP** validates signature + freshness + scope + non-consumption. Debian: `nftables redirect`; Windows: PEP service. Every decision leaves a leaf in the cell chain.
 
-- **Inoffensive** (lecture seule) → exécution directe, sub-ms.
-- **À arbitrer** (effet de bord) → validation humaine.
-- **Hors périmètre** → refus immédiat + proposition de reformulation.
+- **Harmless** (read-only) → direct execution, sub-ms.
+- **To arbitrate** (side effect) → human validation.
+- **Out of scope** → immediate refusal + reformulation proposal.
 
-### 4.1-bis · Passeports à capacité bornée
+### 4.1-bis · Bounded-capability passports
 
-Toute ouverture de chemin lourd (session, tunnel, règle SDN) est délivrée sous forme de passeport : un token étendant le token d'action par un vecteur de quota `(ressource, opération, volume_max, fenêtre, TTL, jti)` — cryptographiquement lié et signé, jamais dans une règle modifiable hors bande.
+Any heavy-path opening (session, tunnel, SDN rule) is issued as a passport: a token extending the action token with a quota vector `(resource, operation, max_volume, window, TTL, jti)` — cryptographically bound and signed, never in an out-of-band modifiable rule.
 
-- **Compteur à l'exécution** (PEP / terminateur) : décrémente le volume ; état data-plane léger, TTL court — même motif que le cache jti ; une session a un seul terminateur. Dépassement = coupure propre + refus + feuille.
-- **Enveloppe d'egress à l'émission** (broker) : quota agrégé par entité et par époque, évalué par OPA à la délivrance — ferme l'agrégation de passeports légitimes.
-- **Télémétrie de métadonnées** : octets par intervalle, destination, rythme (style NetFlow/IPFIX) ; feuilles du registre. **L'inspection du contenu des flux du passeport est proscrite** — elle détruirait le gain de vitesse du plan de données : l'anti-dribble repose exclusivement sur le post-traitement des métadonnées de flux (goutte-à-goutte, exfiltrations sous-seuil).
-- **Doctrine** : prévenir ce qui coûte peu, détecter ce qui coûte cher — toute porte ouverte naît avec son compteur et son instrument (§5.3).
+- **Counter at execution** (PEP / terminator): decrements the volume; lightweight data-plane state, short TTL — same pattern as the jti cache; a session has a single terminator. Overrun = clean cut + refusal + leaf.
+- **Egress envelope at issuance** (broker): aggregate quota per entity and per epoch, evaluated by OPA at issuance — closes the aggregation of legitimate passports.
+- **Metadata telemetry**: bytes per interval, destination, pace (NetFlow/IPFIX style); registry leaves. **Content inspection of passport flows is prohibited** — it would destroy the data-plane speed gain: anti-dribble relies exclusively on post-processing flow metadata (trickling, sub-threshold exfiltrations).
+- **Doctrine**: prevent what costs little, detect what costs much — every open door is born with its counter and its instrument (§5.3).
 
-![Figure 5 — Passeport à capacité bornée](figs/fig5_passeport.png)
+![Figure 5 — Bounded-capability passport](figs/fig5_passeport.png)
 
-*Séparation des températures : quota = compté à l'exécution (PEP) ; enveloppe = comptée à l'émission (broker).*
+*Separation of temperatures: quota = counted at execution (PEP); envelope = counted at issuance (broker).*
 
-### 4.2 · L'arbitrage est une signature, pas une lecture
+### 4.2 · Arbitration is a signature, not a read
 
-Le plan présenté à l'opérateur est généré par l'agent (probabiliste) et pourrait mentir (plan abstrait bénin masquant un chemin destructeur). Parade : **le plan approuvé est un contrat** — l'exécution est vérifiée contre le hash du plan validé ; déviation = refus.
+The plan presented to the operator is generated by the agent (probabilistic) and could lie (benign abstract plan masking a destructive path). Countermeasure: **the approved plan is a contract** — execution is verified against the hash of the validated plan; deviation = refusal.
 
-### 4.3 · Anti-rejeu
+### 4.3 · Anti-replay
 
-Signature + fraîcheur + portée ne répondent pas à « déjà consommé ? ». Chaque PEP tient un **cache de tokens consommés à TTL borné** ; chaque feuille d'exécution porte le jti. Rejeu borné à N réplicas atteignables par fenêtre TTL (paramètre de spec) ; classes F/W closes par idempotence côté service.
+Signature + freshness + scope do not answer "already consumed?". Each PEP keeps a **consumed-token cache with bounded TTL**; every execution leaf carries the jti. Replay bounded to N replicas reachable per TTL window (spec parameter); F/W classes closed by service-side idempotence.
 
-### 4.4 · Écart ordre → effet (aliasing sémantique)
+### 4.4 · Order → effect gap (semantic aliasing)
 
-L'intégrité de l'effet appartient au métier. Le PEP valide l'enveloppe, pas les effets cachés (triggers, cascades). Mitigations bornées aux classes F/I/W, sur deux niveaux — **par action** puis **par séquence** — parce qu'une politique qui ne juge qu'une action à la fois ne peut, par construction, jamais voir un effet qui n'existe qu'au niveau de la séquence.
+Effect integrity belongs to the business. The PEP validates the envelope, not hidden effects (triggers, cascades). Mitigations bounded to F/I/W classes, on two levels — **per action** then **per sequence** — because a policy that judges only one action at a time can, by construction, never see an effect that exists only at sequence level.
 
-**Par action** : (1) **dry-run avec diff d'état** soumis à OPA avant commit ; (2) object-capabilities (token scellé sur hash objet/champ/valeur) ; (3) **PEP in-process** — pour PostgreSQL, extension avec blocage à `post_parse_analyze` (pré-planificateur : `ExecutorStart` seul est post-planning, une fonction à effet de bord peut y être déjà évaluée) ; (4) contract-driven — **une API sans invariants déclarés est classée W**.
+**Per action**: (1) **dry-run with state diff** submitted to OPA before commit; (2) object-capabilities (token sealed on object/field/value hash); (3) **in-process PEP** — for PostgreSQL, extension blocking at `post_parse_analyze` (pre-planner: `ExecutorStart` alone is post-planning, a side-effecting function may already be evaluated there); (4) contract-driven — **an API with no declared invariants is classified W**.
 
-**Par séquence**, hérité du moteur de politique OPA du dépôt protocole (Responsible-Alliance-Protocol — voir README, *Relation to the main TBP repository*) : (5) profil comportemental à état, par agent — fenêtres glissantes 24 h / 7 j (montant et nombre cumulés, fréquence de rafale, dérive comportementale par écart à une base EMA, similarité et anomalies temporelles) ; score composite versionné comme **entrée OPA de premier rang**, jamais un heuristique hors politique (ex. cumul 24 h au-delà du seuil sans approbation humaine = refus, quel que soit le statut individuel de chaque action composant le cumul). Ferme la classe où l'attaque « saucisson » (N actions sous le seuil, effet agrégé au-dessus) échappe par construction à (1)-(4), qui n'évaluent jamais que l'action en cours.
+**Per sequence**, inherited from the policy engine of the protocol repository (Responsible-Alliance-Protocol — see README, *Relation to the main TBP repository*): (5) stateful behavioral profile, per agent — 24 h / 7 d sliding windows (cumulative amount and count, burst frequency, behavioral drift as deviation from an EMA baseline, similarity and temporal anomalies); versioned composite score as a **first-class OPA input**, never an out-of-policy heuristic (e.g. 24 h cumulative beyond threshold without human approval = refusal, whatever the individual status of each action composing the cumulative). Closes the class where the "salami" attack (N sub-threshold actions, aggregate effect above) escapes by construction from (1)-(4), which only ever evaluate the current action.
 
-**Résidu, anticipé pour fermeture ex-post plutôt qu'ex-ante** : une action isolée, de grande ampleur, dont l'effet dévie de l'intention sans être intercepté par (1)-(5), reste possible — c'est le résidu métier du §10 point 5. Il n'est pas laissé sans réponse documentée : la voie de fermeture identifiée est un **post-mortem obligatoire avec reconstruction de la dérive intention → effet**, recalibrant en retour les seuils F/I/W — mais cette voie appartient au module optionnel TBP-GOVERNANCE (Responsible-Alliance-Protocol), pas au périmètre core de TBP-NETWORK ; voir §11.9 pour le statut exact et pourquoi ce module reste délibérément hors du déploiement par défaut.
+**Residue, anticipated for ex-post rather than ex-ante closure**: an isolated, large-scale action whose effect deviates from intention without being intercepted by (1)-(5) remains possible — this is the business residue of §10 point 5. It is not left without a documented answer: the identified closure path is a **mandatory post-mortem with reconstruction of the intention → effect drift**, feeding back to recalibrate the F/I/W thresholds — but this path belongs to the optional TBP-GOVERNANCE module (Responsible-Alliance-Protocol), not to the core scope of TBP-NETWORK; see §11.9 for the exact status and why this module deliberately stays out of the default deployment.
 
-### 4.5 · Le traducteur : anti-fraude structurelle et qualité mesurée
+### 4.5 · The translator: structural anti-fraud and measured quality
 
-**Doctrine** : l'action exécutée est l'action *traduite* par le garde sémantique local — le mensonge de l'agent sur son intention ne se propage jamais à l'effet. Le résidu est une **erreur de qualité**, traitée par deux couches indépendantes : le traducteur réduit la probabilité (décomposition, multilingue, 7–8B fine-tuné, grammaire JSON contrainte, vLLM), les règles réduisent l'impact (refus par défaut des actions non couvertes ; erreur vers action couverte et inoffensive = dommage de qualité borné).
+**Doctrine**: the executed action is the action *translated* by the local semantic guard — the agent's lie about its intention never propagates to the effect. The residue is a **quality error**, handled by two independent layers: the translator reduces probability (decomposition, multilingual, 7–8B fine-tuned, constrained JSON grammar, vLLM), the rules reduce impact (default refusal of uncovered actions; error toward a covered and harmless action = bounded quality damage).
 
-- **Gouvernance de la qualité** : précision différenciée par classe ; corpus natif par langue, positif et négatif ; shadow mode ; mesure continue (rejeu du corpus à chaque mise à jour + échantillon humain).
-- **Métriques ancrées** : FNR < 0,1 %, FPR < 2 %, calculées par époque, consignées dans la maîtresse. **Format de feuille : agrégats + hash du corpus — contenu jamais en clair** (relie la vie privée §11 au schéma de feuille).
-- **Dégradé contrôlé** : dépassement de seuil = tier-shift ou révocation de bundle ; panne du traducteur = rejet du langage naturel, structuré seulement, aucun fallback cloud.
+- **Quality governance**: per-class differentiated precision; native corpus per language, positive and negative; shadow mode; continuous measurement (corpus replay at every update + human sample).
+- **Anchored metrics**: FNR < 0.1%, FPR < 2%, computed per epoch, recorded in the master chain. **Leaf format: aggregates + corpus hash — content never in cleartext** (connects §11 privacy to the leaf schema).
+- **Controlled degradation**: threshold breach = tier-shift or bundle revocation; translator failure = natural-language rejection, structured only, no cloud fallback.
 
-**Le traducteur n'est pas l'élément de sécurité** (doctrine ci-dessus) : ce n'est jamais lui qui juge une action sûre ou dangereuse — c'est l'action *produite* qui est jugée par les règles, sans exception (default-deny, §1). Une erreur de traduction ne contourne donc jamais le jugement : elle change quelle action lui est soumise, pas si cette action, une fois soumise, est correctement jugée. Le résidu n'est donc pas « la sécurité contournée par une mauvaise traduction » — les règles s'appliquent, sans faille, à ce que le traducteur produit réellement, aussi imparfait ce produit soit-il. Un résidu plus étroit existe : une action mal classée (mauvais domaine, tag manquant — §11.8) peut manquer la règle écrite pour sa vraie classe, quand cette règle est conditionnée à ce champ plutôt qu'au contenu direct de l'action ; le défaut-deny (§1) borne ce risque pour l'action non couverte (inconnu = strict), pas pour l'action couverte mais mal étiquetée.
+**The translator is not the security element** (doctrine above): it is never the one judging an action safe or dangerous — it is the *produced* action that is judged by the rules, without exception (default-deny, §1). A translation error therefore never circumvents judgment: it changes which action is submitted to it, not whether that action, once submitted, is correctly judged. The residue is therefore not "security circumvented by a bad translation" — the rules apply, without fail, to what the translator actually produces, however imperfect that product may be. A narrower residue exists: a misclassified action (wrong domain, missing tag — §11.8) may miss the rule written for its true class, when that rule is conditioned on that field rather than on the direct content of the action; default-deny (§1) bounds this risk for the uncovered action (unknown = strict), not for the covered but mislabeled action.
 
-Mais ce résidu lui-même reste **borné par le passeport, pas par la règle qu'il a manquée** : le token émis après décision OPA a pour portée l'action + la ressource précises (§4.1), scellées sur objet/champ/valeur pour les capacités (§4.4 (2)) — jamais un blanc-seing sur la classe. Le PEP revalide cette portée à l'exécution, indépendamment de la branche OPA qui a émis le token (§4.1) ; toute action qui ne correspond pas exactement au token présenté, ou pour laquelle aucun token valide n'existe, est stoppée net. Une classification erronée ne peut donc jamais élargir ce qu'une action peut faire — elle ne peut, au pire, que faire émettre par erreur un token pour **une** action précise, scellée et auditée (chaque décision laisse une feuille, §4.1), qui aurait dû être refusée ou soumise à arbitrage. C'est un mauvais verdict ponctuel sur une action bornée, jamais une échappatoire du dispositif de bornage lui-même. C'est la qualité de ce verdict — pas le bornage — qui reste la partie la moins mûre du système (métriques ci-dessus, §15) ; et la lourdeur vérifiable du reste de la chaîne (dry-run diff, object-capabilities, pattern-analysis §4.4, Merkle, multisig) ne doit jamais se lire comme si elle réduisait le risque de mauvais verdict — elle borne et audite ce que ce mauvais verdict peut concrètement faire, ce qui est déjà l'essentiel.
+But this residue itself remains **bounded by the passport, not by the rule it missed**: the token issued after OPA decision has the precise action + resource as its scope (§4.1), sealed on object/field/value for capabilities (§4.4 (2)) — never a blank check on the class. The PEP revalidates this scope at execution, independently of the OPA branch that issued the token (§4.1); any action that does not exactly match the presented token, or for which no valid token exists, is stopped cold. An erroneous classification can therefore never widen what an action can do — it can, at worst, cause a token to be wrongly issued for **one** precise, sealed and audited action (every decision leaves a leaf, §4.1), which should have been refused or submitted to arbitration. It is an occasional bad verdict on a bounded action, never a loophole in the bounding apparatus itself. It is the quality of this verdict — not the bounding — that remains the least mature part of the system (metrics above, §15); and the verifiable heaviness of the rest of the chain (dry-run diff, object-capabilities, pattern-analysis §4.4, Merkle, multisig) must never be read as if it reduced the risk of a bad verdict — it bounds and audits what that bad verdict can concretely do, which is already the essential.
 
-Le traducteur est un paramètre de friction, pas un paramètre de sécurité : il éclaire l'action, il ne la décide jamais. Il ne dit pas « dangereux » ou « sûr » ; il dit « je sais traduire » ou « je ne sais pas ». Sa qualité ne détermine pas la sûreté — elle détermine le taux d'escalade et donc la tenabilité du budget de friction (§9.1). Un traducteur trop prudent épuise l'opérateur ; un traducteur trop confiant laisse passer des actions mal traduites, rattrapées par les règles métier ou par le refus par défaut. La métrique pertinente n'est donc pas seulement FNR/FPR au sens strict, mais taux d'escalade et taux de traduction correcte hors refus. La sûreté des classes F/I/W reste portée par les règles, le quorum (§7.5) et l'arbitrage humain.
+The translator is a friction parameter, not a security parameter: it illuminates the action, it never decides it. It does not say "dangerous" or "safe"; it says "I know how to translate" or "I do not know". Its quality does not determine safety — it determines the escalation rate and therefore the tenability of the friction budget (§9.1). An over-cautious translator exhausts the operator; an over-confident one lets mistranslated actions through, caught by the business rules or by default refusal. The relevant metric is therefore not only FNR/FPR in the strict sense, but escalation rate and correct-translation rate excluding refusals. The safety of F/I/W classes remains carried by the rules, the quorum (§7.5) and human arbitration.
 
-- **Durcissement runtime** (vLLM/PyTorch) : processus non-root dédié, CAP_DROP_ALL, seccomp strict — dm-verity protège l'image au repos, pas la surface runtime.
+- **Runtime hardening** (vLLM/PyTorch): dedicated non-root process, CAP_DROP_ALL, strict seccomp — dm-verity protects the image at rest, not the runtime surface.
 
-## 5 · Architecture réseau d'entreprise
+## 5 · Enterprise network architecture
 
-### 5.1 · Le mur et l'aiguillage
+### 5.1 · The wall and the switching
 
-Aucun chemin direct client → serveur ; le serveur n'accepte que le broker. Le NAC est un **aiguillage** : authentifié (802.1X, EAP-TLS) → VLAN donnant accès au broker ; inconnu → **VLAN captif** dont la seule route est l'enrôlement ou le broker-forcé. EAP-TLS réutilise **la même PKI que le handshake** — une seule infrastructure d'identité. Anti-détour L2 : VLAN serveurs strict, DHCP snooping + DAI, AP isolation.
+No direct client → server path; the server accepts only the broker. The NAC is a **switch** in the railway sense: authenticated (802.1X, EAP-TLS) → VLAN giving access to the broker; unknown → **captive VLAN** whose only route is enrollment or the forced broker. EAP-TLS reuses **the same PKI as the handshake** — a single identity infrastructure. L2 anti-bypass: strict server VLAN, DHCP snooping + DAI, AP isolation.
 
-![Figure 3 — Topologie réseau](figs/fig3_reseau.png)
+![Figure 3 — Network topology](figs/fig3_reseau.png)
 
-### 5.2 · Catalogue des chemins hors routeur
+### 5.2 · Catalogue of paths bypassing the router
 
-| Chemin | Fermé par | Résidu / compensation |
+| Path | Closed by | Residue / compensation |
 |---|---|---|
-| East-west poste→poste | ACL switch, AP isolation, host firewalls | même-VLAN → segmentation stricte |
-| Hardware (USB, Thunderbolt) | USBGuard, GPO, BIOS/IOMMU | extrémité, pas réseau |
-| Hotspot / 4G | — (infundable) | PEP ressources · instrumenté |
-| Modèle local | — | on ne gouverne pas le cerveau |
-| Console / iLO / admin | VLAN mgmt, jump hosts, actes journalisés | admin = entité la plus auditée |
-| Poste non enregistré | NAC → broker-forcé / VLAN captif | — |
+| East-west workstation→workstation | switch ACLs, AP isolation, host firewalls | same-VLAN → strict segmentation |
+| Hardware (USB, Thunderbolt) | USBGuard, GPO, BIOS/IOMMU | endpoint, not network |
+| Hotspot / 4G | — (cannot be funded shut) | resource PEP · instrumented |
+| Local model | — | we do not govern the brain |
+| Console / iLO / admin | mgmt VLAN, jump hosts, logged acts | admin = most audited entity |
+| Unregistered workstation | NAC → forced broker / captive VLAN | — |
 
-### 5.3 · Doctrine des trous
+### 5.3 · Hole doctrine
 
-> *Un trou non instrumenté dans le mur est une porte. Un trou instrumenté est un capteur.*
+> *An uninstrumented hole in the wall is a door. An instrumented hole is a sensor.*
 
-« Instrumenté » exige un **instrument nommé** : télémétrie hôte (intégrité de fichiers, journaux, flux) **alimentée au registre**. Un canal sans instrument laisse des actes non prévenus et non vus — seul état interdit.
+"Instrumented" requires a **named instrument**: host telemetry (file integrity, logs, flows) **fed to the registry**. A channel without an instrument leaves acts unprevented and unseen — the only forbidden state.
 
-| Classe | Exemples | Exigence |
+| Class | Examples | Requirement |
 |---|---|---|
-| F — financier | paiement, ERP écriture | PEP token + arbitrage + quota |
-| I — infrastructure | prod, CI/CD | PEP token + scoping strict |
-| W — survie | effet de masse | PEP + arbitrage + quorum (§7.5) + §4.4 |
-| hors F/I/W | lecture, internet | mur + audit (conditions 1 ou 3) |
+| F — financial | payment, ERP write | token PEP + arbitration + quota |
+| I — infrastructure | prod, CI/CD | token PEP + strict scoping |
+| W — survival | mass effect | PEP + arbitration + quorum (§7.5) + §4.4 |
+| outside F/I/W | read, internet | wall + audit (conditions 1 or 3) |
 
-- **La télémétrie est une action de classe W** : la couper — même par un admin sous pression — exige un quorum, est signée, alarmée, consignée.
-- **Fail usine** : le défaut « RADIUS injoignable » est souvent fail-open — forcer fail-closed par switch. OCSP/CRL injoignable = VLAN de remédiation avec feedback, jamais soft-fail aveugle.
-- **Déploiement** : mode monitor avant closed ; pas de RADIUS-assigned VLAN en v1 ; MAB = canal instrumenté (VLAN IoT dédié, jamais silencieux).
+- **Telemetry is a class-W action**: cutting it — even by an admin under pressure — requires a quorum, is signed, alarmed, recorded.
+- **Factory fail**: the "RADIUS unreachable" default is often fail-open — force fail-closed per switch. OCSP/CRL unreachable = remediation VLAN with feedback, never blind soft-fail.
+- **Deployment**: monitor mode before closed; no RADIUS-assigned VLAN in v1; MAB = instrumented channel (dedicated IoT VLAN, never silent).
 
-## 6 · Registre : architecture à deux niveaux
+## 6 · Registry: two-level architecture
 
-Chaque cellule tient sa propre chaîne (sessions, batchs) — chemin chaud sans coordination. Périodiquement, `hash(broker_id, tête, TSA)` de chaque cellule est inscrit dans la **chaîne maîtresse** (motif CT, RFC 6962). Moteur : **Tessera** (bibliothèque GA, driver POSIX — un dossier = un log de cellule) ; amorçage : veritrail (tester contre les vecteurs RFC 6962) ; Rekor/cosign = registre d'**artefacts** (§1), jamais de décisions. Maison complet écarté : la séparation de domaine feuille/nœud est la partie la plus auditée de l'écosystème — et une preuve vérifiable par un tiers perd sa valeur si l'auditeur doit relire le code. Signal d'écosystème : Let's Encrypt migre ses logs RFC 6962 vers l'API Static CT / tiled — la direction Tessera est celle du champ entier.
+Each cell keeps its own chain (sessions, batches) — hot path without coordination. Periodically, `hash(broker_id, head, TSA)` of each cell is recorded in the **master chain** (CT pattern, RFC 6962). Engine: **Tessera** (GA library, POSIX driver — one directory = one cell log); bootstrap: veritrail (test against RFC 6962 vectors); Rekor/cosign = **artifact** registry (§1), never decisions. Fully in-house ruled out: leaf/node domain separation is the most audited part of the ecosystem — and third-party-verifiable proof loses its value if the auditor has to re-read the code. Ecosystem signal: Let's Encrypt is migrating its RFC 6962 logs to the Static CT / tiled API — the Tessera direction is that of the entire field.
 
-![Figure 4 — Registre à deux niveaux](figs/fig4_registre.png)
+![Figure 4 — Two-level registry](figs/fig4_registre.png)
 
-### 6.2 · Températures — et le temps explicite
+### 6.2 · Temperatures — and explicit time
 
-| Chemin | Rôle | Pannes tolérées |
+| Path | Role | Tolerated failures |
 |---|---|---|
-| Chaud : broker + OPA + HSM | décision, token | N+1 stateless, bascule en secondes |
-| Tiède : registres | enregistrement, séquencement | répliqué, idempotent |
-| Froid : ancrage + moniteurs | preuve externe, détection | tiers, store-and-forward |
+| Hot: broker + OPA + HSM | decision, token | N+1 stateless, failover in seconds |
+| Warm: registries | recording, sequencing | replicated, idempotent |
+| Cold: anchoring + monitors | external proof, detection | third parties, store-and-forward |
 
-- **Lag maximal borné** : le jeton d'époque porte le hash du dernier ancrage ; le PEP refuse tout token dont l'ancrage accuse un retard > seuil (défaut 120 s). Ferme la submersion : DoS, jamais fenêtre d'impunité. Complément : tier-shift dynamique sous charge.
-- **Temps = hypothèse fondatrice explicite** : TTL, époques, TSA et fraîcheur héritent d'une hypothèse d'horloges synchronisées. Exigence : **NTS (RFC 8915)** sur brokers/PEPs, dérive < 5 ms — sinon rejet massif de tokens légitimes = friction systémique.
-- **RGPD / rétention** : un append-only infini entre en tension avec les obligations de rétention — feuilles hash-only, salage, politique de rétention explicite.
+- **Bounded maximum lag**: the epoch token carries the hash of the last anchoring; the PEP refuses any token whose anchoring shows a lag > threshold (default 120 s). Closes overwhelming: DoS, never an impunity window. Complement: dynamic tier-shift under load.
+- **Time = explicit founding assumption**: TTL, epochs, TSA and freshness inherit a synchronized-clocks assumption. Requirement: **NTS (RFC 8915)** on brokers/PEPs, drift < 5 ms — otherwise mass rejection of legitimate tokens = systemic friction.
+- **GDPR / retention**: an infinite append-only enters tension with retention obligations — hash-only leaves, salting, explicit retention policy.
 
-### 6.3 · L'état attesté = manifeste
+### 6.3 · Attested state = manifest
 
-`(policy_id, config OPA, hash broker, hash conteneur IA locale, tête de chaîne)` — tout changement de composant = transition visible, signée, continûme ; le hash est celui du paquet signé (§1). Measured boot : la racine du nœud est mesurée par le TPM/HSM au démarrage.
+`(policy_id, OPA config, broker hash, local AI container hash, chain head)` — any component change = visible, signed, continuous transition; the hash is that of the signed package (§1). Measured boot: the node's root is measured by the TPM/HSM at startup.
 
-## 7 · Cluster : cellules, époques, miroirs, canari
+## 7 · Cluster: cells, epochs, mirrors, canary
 
-### 7.1 · Bétail, pas racine de confiance
-Le broker n'est pas la racine de confiance ; les clés et la maîtresse le sont. États par cellule ; l'état du système vit dans la maîtresse + l'époque courante. **Le Superviseur est une cellule à périmètre élargi + le registre maître** — même mécanique, même doctrine, jamais une boîte noire nouvelle.
+### 7.1 · Cattle, not root of trust
+The broker is not the root of trust; the keys and the master chain are. Per-cell state; system state lives in the master chain + the current epoch. **The Supervisor is a widened-scope cell + the master registry** — same mechanics, same doctrine, never a new black box.
 
-### 7.2 · Fencing par époque
-Jeton d'époque `(N, autorité, TTL ~60 s)` signé par les contrôleurs (m-of-n, HSM) ; seule la détentrice sert ; l'ancienne expire seule — deux autorités impossibles. Bascule manuelle : contrôleurs joignables par canal séparé. Automatique pré-autorisée (« max N bascules/heure, ensuite humain ») ; 3 cellules + majorité 2-of-3.
+### 7.2 · Per-epoch fencing
+Epoch token `(N, authority, TTL ~60 s)` signed by the controllers (m-of-n, HSM); only the holder serves; the old one expires by itself — two authorities impossible. Manual failover: controllers reachable over a separate channel. Pre-authorized automatic ("max N failovers/hour, then human"); 3 cells + 2-of-3 majority.
 
-### 7.3 · Révocation = nouvelle époque
-Cellule compromise : époque à roster réduit ; tokens morts ; **quarantaine, pas meurtre** — la cellule gelée sert l'analyse.
+### 7.3 · Revocation = new epoch
+Compromised cell: epoch with reduced roster; dead tokens; **quarantine, not murder** — the frozen cell serves analysis.
 
-### 7.4 · Miroirs et canari — fenêtre ancrée
-Hash du bundle ancré à chaque époque (policy_id = hash des règles = le hash du handshake). **La fenêtre saine est définie et ancrée dans la maîtresse — jamais mesurée par la canari elle-même** (un attaquant réseau peut l'isoler pendant la mesure) ; promotion = preuve de réception du bundle ancré. Une cellule éligible satisfait l'ensemble des exigences externes engagées.
+### 7.4 · Mirrors and canary — anchored window
+Bundle hash anchored every epoch (policy_id = hash of rules = the handshake hash). **The healthy window is defined and anchored in the master chain — never measured by the canary itself** (a network attacker can isolate it during measurement); promotion = proof of receipt of the anchored bundle. An eligible cell satisfies all committed external requirements.
 
 ### 7.5 · Quorum
-Actions de classe W : cosignature k-of-n ; une cellule seule ne peut pas autoriser l'irréversible maximal.
+Class-W actions: k-of-n co-signature; a single cell cannot authorize the maximal irreversible.
 
-### 7.6 · Compromission entre deux époques — provenance ≠ conformité
-Pendant le TTL de l'époque active, un composant qui détient ses clés locales peut émettre des tokens allow que la politique n'aurait pas autorisés. Ce qui reste prouvé : l'imputabilité (*il peut mentir sur la décision, pas sur sa responsabilité*), la borne temporelle, la protection W, l'impossibilité de réécrire le passé. **Trade-off explicite** : l'OPA local rend cette fraude possible ; la co-évaluation distante la fermerait au prix de la latence — positionnable par classe (par défaut : local tiers 1, co-évaluation F et W).
+### 7.6 · Compromise between two epochs — provenance ≠ compliance
+During the TTL of the active epoch, a component holding its local keys can issue allow tokens the policy would not have authorized. What remains proven: attributability (*it can lie about the decision, not about its responsibility*), the temporal bound, W protection, the impossibility of rewriting the past. **Explicit trade-off**: the local OPA makes this fraud possible; remote co-evaluation would close it at the price of latency — positionable per class (default: local tier 1, co-evaluation F and W).
 
-### 7.7 · Évolution de politique (agilité sous contrat)
-Monotonicité vérifiable (§11) ; affaiblissement légitime = transition motivée, visible, mettant à jour le consentement des vérificateurs ; workflow négocié sans arrêt ni fenêtre ; conformité historiquement continue.
+### 7.7 · Policy evolution (agility under contract)
+Verifiable monotonicity (§11); legitimate weakening = motivated, visible transition updating verifier consent; negotiated workflow without stop or window; historically continuous compliance.
 
-![Figure 6 — Hiérarchie de clés et temps](figs/fig6_cles.png)
+![Figure 6 — Key hierarchy and time](figs/fig6_cles.png)
 
-## 8 · Matrice menaces ↔ mécanismes
+## 8 · Threats ↔ mechanisms matrix
 
-| Menace | Mécanisme | Résidu |
+| Threat | Mechanism | Residue |
 |---|---|---|
-| Prompt injection multilingue | plancher déterministe + traducteur + auditeur | taux < 100 % (borné) |
-| Fraude par description (agent menteur) | traducteur : l'action exécutée est l'action traduite | fermé structurellement |
-| Erreur de traduction | règles (refus par défaut) + qualité mesurée (§4.5) | dommage de qualité borné |
-| Plan abstrait mensonge en arbitrage | plan approuvé = contrat hashé | — |
-| Aliasing sémantique | métier primaire + mitigations §4.4 par action et par séquence (F/I/W) | résidu métier : fermeture ex-post anticipée, module optionnel (§11.9) |
-| Rejeu de token | jti + cache PEP + cardinalité F/W | borné à N réplicas ; détectable |
-| Tunnel ouvert (passeport) | passeport à quota + enveloppe + métadonnées (§4.1-bis) | dribble → post-traitement |
-| Contournement local du PEP | re-validation service / peer credentials / eBPF cgroup | — |
-| Machine non gouvernée | NAC aiguillage ; mur ; PEP ressources | hotspot/modèle local : détection |
-| Broker tombé / adverse | stateless N+1 ; fencing ; clés épinglées | DoS alarmé — jamais un acte |
-| Split-brain | époques TTL ; 2-of-3 ; contrôleurs OOB | — |
-| Submersion du registre | lag borné + tier-shift | DoS — jamais d'impunité |
-| Promotion canari sous partition | fenêtre saine ancrée + preuve de réception | — |
-| Cellule compromise intra-époque | TTL + révocation + quorum W | actes imputables, détection post-facto |
-| Vol des clés de gouvernance | m-of-n ; HSM ; quorum | futures signables, passé scellé |
-| Bundle empoisonné | signature + canari ancré | fenêtre canari limitée |
-| Genèse parallèle (TOFU) | — (assumé) | légitimité = annuaire référencé (§3.2) |
-| Admin sous pression (coupure télémétrie) | télémétrie = action W (quorum, alarme) | confiance root assumée ailleurs |
-| Mort par friction | périmètre borné F/I/W + indicateurs (§9) | risque opérationnel n°1 |
+| Multilingual prompt injection | deterministic floor + translator + auditor | rate < 100% (bounded) |
+| Description fraud (lying agent) | translator: the executed action is the translated action | structurally closed |
+| Translation error | rules (default refusal) + measured quality (§4.5) | bounded quality damage |
+| Lying abstract plan in arbitration | approved plan = hashed contract | — |
+| Semantic aliasing | business primary + §4.4 mitigations per action and per sequence (F/I/W) | business residue: anticipated ex-post closure, optional module (§11.9) |
+| Token replay | jti + PEP cache + F/W cardinality | bounded to N replicas; detectable |
+| Open tunnel (passport) | quota passport + envelope + metadata (§4.1-bis) | dribble → post-processing |
+| Local PEP bypass | service re-validation / peer credentials / eBPF cgroup | — |
+| Ungoverned machine | NAC switching; wall; resource PEP | hotspot/local model: detection |
+| Broker down / adverse | stateless N+1; fencing; pinned keys | alarmed DoS — never an act |
+| Split-brain | TTL epochs; 2-of-3; OOB controllers | — |
+| Registry overwhelming | bounded lag + tier-shift | DoS — never impunity |
+| Canary promotion under partition | anchored healthy window + proof of receipt | — |
+| Compromised cell intra-epoch | TTL + revocation + W quorum | attributable acts, post-facto detection |
+| Governance key theft | m-of-n; HSM; quorum | future signable, past sealed |
+| Poisoned bundle | signature + anchored canary | limited canary window |
+| Parallel genesis (TOFU) | — (assumed) | legitimacy = referenced directory (§3.2) |
+| Admin under pressure (telemetry cut) | telemetry = W action (quorum, alarm) | root trust assumed elsewhere |
+| Death by friction | bounded F/I/W scope + indicators (§9) | operational risk #1 |
 
-## 9 · Coût réel et conditions de retrait
+## 9 · Real cost and withdrawal conditions
 
-**Latences cibles** : tier 1 < 2–5 ms ; tier 2 : 10–50 ms ; tier W : secondes à minutes. **Le régime de coût change** : d'un coût rare et catastrophique à un coût continu et visible. Les actes évités sont invisibles ; les frictions quotidiennes. **Indicateurs annonciateurs** : arbitrage > 20 % ; validations < 5 s ; trous non instrumentés ; TTL qui s'allongent ; culture des exceptions.
+**Target latencies**: tier 1 < 2–5 ms; tier 2: 10–50 ms; tier W: seconds to minutes. **The cost regime changes**: from a rare and catastrophic cost to a continuous and visible one. Avoided acts are invisible; frictions are daily. **Warning indicators**: arbitration > 20%; validations < 5 s; uninstrumented holes; lengthening TTLs; exception culture.
 
-**Trois scénarios de retrait** : (A) break-glass — débrayage = action gouvernée ; (B) mort par friction (la plus probable) — parade : gouverner strictement F/I/W ; (C) cascade DoS — prix = perte de prouvabilité assumée.
+**Three withdrawal scenarios**: (A) break-glass — disengagement = governed action; (B) death by friction (the most likely) — countermeasure: strictly govern F/I/W; (C) DoS cascade — price = assumed loss of provability.
 
-### 9.1 · Budget de friction — contrainte fondatrice du pilote
+### 9.1 · Friction budget — founding constraint of the pilot
 
-L'architecture est utilisable *parce qu'elle accepte d'être imparfaite* ; cette contrainte est un exigence mesurable, pas une intention :
+The architecture is usable *because it accepts being imperfect*; this constraint is a measurable requirement, not an intention:
 
-- **Latence ajoutée tier-1 < 5 ms** (plancher déterministe, mesurée en continu).
-- **Taux d'arbitrage humain cible < 10 %** des actions (au-delà : la gouvernance devient le goulot — indicateur §9). Ce taux est directement fonction de la qualité du traducteur (§4.5) : c'est le levier de réglage principal du budget de friction.
-- **Condition d'échec du pilote : régression de l'expérience utilisateur mesurée = 0** — la protection ne doit jamais se payer en blocage des tâches légitimes.
+- **Added tier-1 latency < 5 ms** (deterministic floor, continuously measured).
+- **Target human-arbitration rate < 10%** of actions (beyond: governance becomes the bottleneck — §9 indicator). This rate is directly a function of translator quality (§4.5): it is the main adjustment lever of the friction budget.
+- **Pilot failure condition: measured user-experience regression = 0** — protection must never be paid for by blocking legitimate tasks.
 
-**Seuil de décision** : maintenir TBP ssi P(acte irréversible) × coût(acte) > coût(DoS) + coût(friction).
+**Decision threshold**: keep TBP iff P(irreversible act) × cost(act) > cost(DoS) + cost(friction).
 
-**Time-to-Audit** (< 1 semaine vs 3–6 mois) : métrique commerciale — chaîne de preuve à construire avant usage client.
+**Time-to-Audit** (< 1 week vs 3–6 months): commercial metric — proof chain to be built before customer use.
 
-## 10 · Ce que le système ne prétend pas
+## 10 · What the system does not claim
 
-1. Pas 100 % secure — **100 % auditable sur périmètre déclaré**.
-2. Le traducteur est probabiliste ; la garantie est le plancher.
-3. L'attestation engage les règles, non leur exécution parfaite.
-4. Le canal hotspot / modèle local est incompressible.
-5. L'effet réel d'une action reste la responsabilité du métier.
-6. La fraude intra-époque est possible et bornée (§7.6).
-7. La légitimité de la genèse n'est pas prouvable par le protocole.
-8. L'admin root reste un acteur de confiance — le plus audité.
-9. La disponibilité a un prix.
-10. La conformité (AI Act art. 14) est le prix d'entrée de l'arbitrage humain ; TBP l'amortit.
-11. TBP n'est pas un juge, c'est un livre de lois et un greffe : il éclaire l'action et la rend activable, signée, auditable, sans exercer de discrétion. Le verdict de sûreté appartient aux règles métier (déjà écrites) et à l'arbitrage humain (le gris).
-12. Le traducteur n'est jamais l'élément de sécurité : c'est l'action *produite*, jamais l'intention déclarée, qui est jugée par les règles, sans exception (§4.5) — une erreur de traduction ne contourne donc pas le jugement. Le résidu réel, plus étroit, est la classification (domaine, tags — §11.8) : une action couverte mais mal étiquetée peut manquer la règle écrite pour sa vraie classe ; le défaut-deny (§1) borne l'inconnu, pas le mal-classé. Mais une classification erronée ne peut faire émettre, au pire, qu'un token mal jugé pour une action précise et bornée (portée scellée sur action + ressource, §4.1 ; sur objet/champ/valeur, §4.4) — jamais élargir ce que cette action peut faire, ni contourner la revalidation de portée au PEP. La lourdeur vérifiable de la chaîne d'application ne réduit pas le risque qu'une classification produise un mauvais verdict ; elle borne et audite ce que ce mauvais verdict peut concrètement faire.
+1. Not 100% secure — **100% auditable on declared scope**.
+2. The translator is probabilistic; the guarantee is the floor.
+3. Attestation commits the rules, not their perfect execution.
+4. The hotspot / local-model channel is incompressible.
+5. The real effect of an action remains the business's responsibility.
+6. Intra-epoch fraud is possible and bounded (§7.6).
+7. Genesis legitimacy is not provable by the protocol.
+8. The root admin remains a trusted actor — the most audited one.
+9. Availability has a price.
+10. Compliance (AI Act art. 14) is the entry price of human arbitration; TBP amortizes it.
+11. TBP is not a judge, it is a book of laws and a registry office: it illuminates the action and makes it activatable, signed, auditable, without exercising discretion. The safety verdict belongs to the business rules (already written) and to human arbitration (the grey).
+12. The translator is never the security element: it is the *produced* action, never the declared intention, that is judged by the rules, without exception (§4.5) — a translation error therefore does not circumvent judgment. The real, narrower residue is classification (domain, tags — §11.8): a covered but mislabeled action may miss the rule written for its true class; default-deny (§1) bounds the unknown, not the misclassified. But an erroneous classification can, at worst, cause a misjudged token to be issued for one precise and bounded action (scope sealed on action + resource, §4.1; on object/field/value, §4.4) — never widen what that action can do, nor circumvent scope revalidation at the PEP. The verifiable heaviness of the enforcement chain does not reduce the risk that a classification produces a bad verdict; it bounds and audits what that bad verdict can concretely do.
 
-## 11 · Questions ouvertes
+## 11 · Open questions
 
-| # | Question | État |
+| # | Question | State |
 |---|---|---|
-| 1 | Gouvernance du registre de profils référencés (décentralisé vs qualifié eIDAS) — clé de voûte du bootstrap §3.2, désormais distincte de la classification locale (§11.8) | ouverte |
-| 2 | Formats de preuve compacts pour vérificateurs faibles | ouverte |
-| 3 | Langage de règles : monotone, ordre-indépendant, stratifié ; stratification = détection de cycles ; subsomption décidable et linéaire | calibrage établi |
-| 4 | Traducteur : métriques par classe, corpus, traducteurs redondants | à développer |
-| 5 | Nom : « Proof of Transit » déjà pris (draft-ietf-sfc-proof-of-transit, IETF SFC — expiré, jamais publié en RFC) — fixer : *attestation de gouvernance opérationnelle* | à fixer |
-| 6 | Échelle : fréquence d'ancrage ; preuves compactes | ouverte |
-| 7 | Vie privée : continuité vérifiable sans exposition de contenu (reliée au format de feuille §4.5) | format établi (agrégats + hash) |
+| 1 | Governance of the referenced profile registry (decentralized vs eIDAS-qualified) — keystone of the §3.2 bootstrap, now distinct from local classification (§11.8) | open |
+| 2 | Compact proof formats for weak verifiers | open |
+| 3 | Rule language: monotone, order-independent, stratified; stratification = cycle detection; decidable and linear subsumption | calibration established |
+| 4 | Translator: per-class metrics, corpus, redundant translators | to be developed |
+| 5 | Name: "Proof of Transit" already taken (draft-ietf-sfc-proof-of-transit, IETF SFC — expired, never published as an RFC) — to fix: *operational governance attestation* | to fix |
+| 6 | Scale: anchoring frequency; compact proofs | open |
+| 7 | Privacy: verifiable continuity without content exposure (connected to the §4.5 leaf format) | format established (aggregates + hash) |
 
-### 11.8 · Gouvernance de la classification
+### 11.8 · Classification governance
 
-La classification F/I/W est une décision locale, prise par la gouvernance de chaque entité sur son propre périmètre. Il n'y a pas d'autorité centrale de classification. La compatibilité entre entités est vérifiée mécaniquement par le handshake (§3) : `policy_id = hash(P)`, subsomption mécanique. Si la politique de B ne subsume pas celle de A, B refuse ou restreint l'échange.
+F/I/W classification is a local decision, made by each entity's governance on its own perimeter. There is no central classification authority. Compatibility between entities is mechanically verified by the handshake (§3): `policy_id = hash(P)`, mechanical subsumption. If B's policy does not subsume A's, B refuses or restricts the exchange.
 
-Conséquence : la légitimité de la classification est celle de la gouvernance qui la produit. Le protocole ne se prononce pas dessus, il la rend vérifiable. L'atelier ne peut pas écrire dans la compta ; la compta peut lire la déclaration de l'atelier et l'écrire dans ses propres registres. Chacun reste souverain chez lui ; les échanges passent par des canaux dont la sémantique est explicitement bornée.
+Consequence: the legitimacy of the classification is that of the governance that produces it. The protocol does not rule on it; it makes it verifiable. The workshop cannot write into accounting; accounting can read the workshop's declaration and write it into its own records. Each remains sovereign at home; exchanges pass through channels whose semantics is explicitly bounded.
 
-Ce mécanisme vaut à toute échelle : en entreprise (périmètres organisationnels) comme entre institutions (périmètres souverains). Ce n'est pas le même problème politique, c'est le même protocole. La difficulté restante — méta-invariants, hiérarchie des règles, reconnaissance mutuelle des classifications — relève de la négociation entre gouvernances, pas du protocole. TBP ne résout pas ce problème ; il le rend traitable.
+This mechanism holds at any scale: within a company (organizational perimeters) as between institutions (sovereign perimeters). It is not the same political problem; it is the same protocol. The remaining difficulty — meta-invariants, rule hierarchy, mutual recognition of classifications — is a matter of negotiation between governances, not of the protocol. TBP does not solve this problem; it makes it tractable.
 
-### 11.9 · Fermeture ex-post du résidu d'aliasing sémantique (module optionnel)
+### 11.9 · Ex-post closure of the semantic-aliasing residue (optional module)
 
-Le résidu identifié au §4.4 (action isolée, de grande ampleur, effet dévié de l'intention, non intercepté par les mitigations (1)-(5)) a une voie de fermeture ex-post anticipée mais **délibérément non intégrée au périmètre core** de ce dépôt : **TBP-GOVERNANCE**, module du dépôt protocole (Responsible-Alliance-Protocol), qui ajoute une voie de dérogation multisig (comité 5 rôles, quorum 3-of-5, JWT à durée limitée injecté dans OPA) et rend le post-mortem obligatoire — reconstruction de la dérive intention → effet, analyse d'impact, détection d'urgence fabriquée — sur chaque usage de cette voie.
+The residue identified in §4.4 (isolated, large-scale action, effect deviated from intention, not intercepted by mitigations (1)-(5)) has an anticipated ex-post closure path but **deliberately not integrated into the core scope** of this repository: **TBP-GOVERNANCE**, a module of the protocol repository (Responsible-Alliance-Protocol), which adds a multisig derogation path (5-role committee, 3-of-5 quorum, time-limited JWT injected into OPA) and makes the post-mortem mandatory — reconstruction of the intention → effect drift, impact analysis, manufactured-emergency detection — on every use of this path.
 
-Pourquoi hors périmètre par défaut : TBP-GOVERNANCE documente lui-même sa propre doctrine (« A bypass is not an evolution. It is a tragic concession to the complexity of the real world ») — prérequis lourds (HSM, comité 24/7, cadre juridique, six mois de TBP-CORE stable sans incident), coût systémique volontairement élevé (fenêtre de confiance érodée à chaque usage, verrouillage définitif si le budget de 24 h de dérogation cumulée sur 12 mois est dépassé), et une recommandation explicite : la plupart des déploiements doivent rester sur le socle sans dérogation. L'intégrer par défaut à TBP-NETWORK transformerait une échappatoire volontairement pénible en confort — la « boiling frog » que le module lui-même met en garde contre.
+Why out of scope by default: TBP-GOVERNANCE itself documents its own doctrine ("A bypass is not an evolution. It is a tragic concession to the complexity of the real world") — heavy prerequisites (HSM, 24/7 committee, legal framework, six months of stable incident-free TBP-CORE), deliberately high systemic cost (trust window eroded at each use, definitive lockout if the 24 h cumulative-derogation budget over 12 months is exceeded), and an explicit recommendation: most deployments should stay on the derogation-free base. Integrating it by default into TBP-NETWORK would turn a deliberately painful escape hatch into comfort — the "boiling frog" the module itself warns against.
 
-**État** : anticipé et documenté — pas une lacune non vue. Intégration dans ce dépôt : ouverte, conditionnée aux mêmes prérequis que ceux du module (checklist infrastructure/gouvernance/légal/observabilité), pas avant le pilote P1/P2 (§13).
+**State**: anticipated and documented — not an unseen gap. Integration into this repository: open, conditioned on the same prerequisites as the module's (infrastructure/governance/legal/observability checklist), not before the P1/P2 pilot (§13).
 
-| Besoin | Brique |
+| Need | Building block |
 |---|---|
-| Moteur de politique | OPA / Rego (bundles signés, évaluation embarquée) |
-| Transparence | motif CT (RFC 6962) · Tessera (tiled / Static CT) |
+| Policy engine | OPA / Rego (signed bundles, embedded evaluation) |
+| Transparency | CT pattern (RFC 6962) · Tessera (tiled / Static CT) |
 | Attestation | RATS (RFC 9334) · EAT |
-| Identité d'agents | APKI (draft IETF) · SPIFFE/SPIRE |
-| Artefacts | Sigstore (cosign, Rekor, Fulcio) |
-| Horodatage | TSA RFC 3161 (≥2, dégradé signé-local/rattrapé) · Zeitwerk à suivre |
-| Preuve de transit | draft-ietf-sfc-proof-of-transit (notion IETF SFC, expiré ; mécanisme différent — citer) |
-| Réseau / extrémité | nftables · 802.1X (FreeRADIUS/NPS) · hostapd · USBGuard · GPO · NTS (RFC 8915) |
-| Inférence | vLLM/TGI · modèles open-weights 7–8B (Qwen2.5 / Mistral) |
+| Agent identity | APKI (IETF draft) · SPIFFE/SPIRE |
+| Artifacts | Sigstore (cosign, Rekor, Fulcio) |
+| Timestamping | TSA RFC 3161 (≥2, degraded signed-local/caught-up) · Zeitwerk to watch |
+| Proof of transit | draft-ietf-sfc-proof-of-transit (IETF SFC notion, expired; different mechanism — cite) |
+| Network / endpoint | nftables · 802.1X (FreeRADIUS/NPS) · hostapd · USBGuard · GPO · NTS (RFC 8915) |
+| Inference | vLLM/TGI · open-weights 7–8B models (Qwen2.5 / Mistral) |
 
-**Checklists transversales**
-- **Ed25519 partout** : vérifier avant tout achat — HSM, signature de bundle OPA (historiquement RSA/ECDSA), TSA.
-- **Portée de signature de bundle** : auditer les exclude lists.
-- La signature de bundle ne gère pas la clé — câbler au HSM/m-of-n.
-- **`capabilities.json` figé** : pas de `http.send`, pas de `time.now_ns` natif ; circuit-breaker 5 ms = deny (fail-closed).
-- SoftHSM : jamais gouvernance (dev/test). CloudHSM : AWS-only PKCS#11, lock-in — option marginale.
+**Cross-cutting checklists**
+- **Ed25519 everywhere**: verify before any purchase — HSM, OPA bundle signing (historically RSA/ECDSA), TSA.
+- **Bundle signature scope**: audit the exclude lists.
+- Bundle signing does not manage the key — wire to HSM/m-of-n.
+- **Frozen `capabilities.json`**: no `http.send`, no native `time.now_ns`; 5 ms circuit breaker = deny (fail-closed).
+- SoftHSM: never for governance (dev/test). CloudHSM: AWS-only PKCS#11, lock-in — marginal option.
 
-## 13 · Mapping et séquence d'implémentation
+## 13 · Mapping and implementation sequence
 
-**Intra-domaine** : mur, PEP, cellules, époques, canari. **Inter-domaines** (note conceptuelle) : handshake, politiques nommées, collection référencée, confiance par contrat.
+**Intra-domain**: wall, PEP, cells, epochs, canary. **Inter-domain** (conceptual note): handshake, named policies, referenced collection, contract-based trust.
 
-**Séquence** : (1) HSM + cérémonie de genèse ; (2) fencing du cluster — émission et rotation des époques, quorum des contrôleurs (k-of-n) pour la classe W, promotion miroir/canari (§7) — requis avant tout déploiement multi-cellules, y compris le pilote P1 à 2 cellules ci-dessous ; une cellule unique peut différer cette étape, un pilote non ; (3) OPA + validateur + registre, y compris le manifeste attesté et le measured boot (§6.3) — l'état d'une cellule doit être prouvable avant que ses décisions le soient ; (4) PEP HTTP/gRPC = premier périmètre réellement gouverné, y compris l'arbitrage comme contrat de plan (§4.2) — la validation de token seule gouverne une action, pas le plan à plusieurs étapes que l'opérateur signe réellement ; (5) NAC en parallèle ; (6) traducteur + escalade F/I/W en dernier.
+**Sequence**: (1) HSM + genesis ceremony; (2) cluster fencing — epoch issuance and rotation, controller quorum (k-of-n) for class W, mirror/canary promotion (§7) — required before any multi-cell deployment, including the 2-cell P1 pilot below; a single cell may defer this step, a pilot may not; (3) OPA + validator + registry, including the attested manifest and measured boot (§6.3) — a cell's state must be provable before its decisions are; (4) HTTP/gRPC PEP = first actually governed perimeter, including arbitration as plan contract (§4.2) — token validation alone governs one action, not the multi-step plan the operator actually signs; (5) NAC in parallel; (6) translator + F/I/W escalation last.
 
-Le handshake inter-entités (§3) n'est délibérément pas dans cette séquence : il relève du périmètre inter-domaines (voir « Intra-domaine / Inter-domaines » ci-dessus), pertinent dès qu'une seconde entité distincte doit être mise en confiance — pas requis pour gouverner les 2 cellules propres du pilote P1. Différé n'est pas non documenté : §3 tient seul, prêt à construire dès qu'une seconde entité entre dans le périmètre.
+The inter-entity handshake (§3) is deliberately not in this sequence: it belongs to the inter-domain scope (see "Intra-domain / Inter-domain" above), relevant as soon as a second distinct entity must be trusted — not required to govern the pilot P1's own 2 cells. Deferred is not undocumented: §3 stands alone, ready to build as soon as a second entity enters the perimeter.
 
-**Pilote P1** : 1 VLAN serveurs, routeur Debian, 2 cellules, PEP base + partage, 802.1X, registre central — sous le budget de friction §9.1 (régression utilisateur = 0). **P2 campagne rouge** : scénario « Michel » étendu (portable inconnu, SFTP direct, USB, hotspot, submersion, plan mensonger, promotion canari sous partition, rejeu, coupure de télémétrie). **Métrique non négociable** : zéro action dangereuse non journalisée — les trous comptés, jamais ignorés.
+**P1 pilot**: 1 server VLAN, Debian router, 2 cells, base PEP + file share, 802.1X, central registry — under the §9.1 friction budget (user regression = 0). **P2 red campaign**: extended "Michel" scenario (unknown laptop, direct SFTP, USB, hotspot, overwhelming, lying plan, canary promotion under partition, replay, telemetry cut). **Non-negotiable metric**: zero unlogged dangerous actions — holes counted, never ignored.
 
-## 14 · Glossaire de normalisation
+## 14 · Normalization glossary
 
-Un terme par concept — les synonymes des documents amont (manifeste réseau, références de déploiement) sont mappés ici.
+One term per concept — synonyms from upstream documents (network manifesto, deployment references) are mapped here. The canonical terms remain in French: they are the vocabulary of the code and of the configurations.
 
-| Terme canonique | Synonymes mappés | Définition |
+| Canonical term (French) | Mapped synonyms | Definition |
 |---|---|---|
-| cellule | TBP Cellule, enclave, edge | broker + registre local + politiques propres ; état par cellule |
-| superviseur | TBP Supervisor, core, egress | cellule à périmètre élargi + registre maître ; jamais une boîte noire |
-| maîtresse | master chain, chaîne centrale | agrégation des têtes de cellules, ancrée |
-| collection référencée | règles ABC (standard), profils | règles publiques versionnées, hashées, épinglées |
-| règles propres | règles XYZ, règles maison | règles locales signées, non révélées |
-| passeport | sésame, capacité, token de session | token à quota (ressource, opération, volume, fenêtre, TTL, jti) |
-| traitement différencié | couloir surveillé, verdict binaire | attesté / strict / refus selon l'état présenté |
-| époque | epoch, fencing, jeton d'autorité | période d'autorité signée, TTL, révocable |
-| traducteur | garde sémantique, traducteur local | IA locale produisant l'action exécutée |
-| manifeste | état attesté, measured state | vecteur mesuré de la pile gouvernée (§6.3) |
-| trou instrumenté | capteur, canal instrumenté | chemin hors mur dont la télémétrie alimente le registre |
+| cellule | TBP Cellule, enclave, edge | broker + local registry + own rules; per-cell state |
+| superviseur | TBP Supervisor, core, egress | widened-scope cell + master registry; never a black box |
+| maîtresse | master chain, central chain | aggregation of cell heads, anchored |
+| collection référencée | ABC rules (standard), profiles | public, versioned, hashed, pinned rules |
+| règles propres | XYZ rules, in-house rules | local signed rules, not revealed |
+| passeport | sesame, capability, session token | quota token (resource, operation, volume, window, TTL, jti) |
+| traitement différencié | monitored corridor, binary verdict | attested / strict / refusal according to presented state |
+| époque | epoch, fencing, authority token | signed authority period, TTL, revocable |
+| traducteur | semantic guard, local translator | local AI producing the executed action |
+| manifeste | attested state, measured state | measured vector of the governed stack (§6.3) |
+| trou instrumenté | sensor, instrumented channel | path outside the wall whose telemetry feeds the registry |
 
-## 15 · Statut épistémique
+## 15 · Epistemic status
 
-**Le consensus multi-IA est un filtre contre l'erreur grossière isolée, pas une preuve.** Quatre modèles convergent souvent parce qu'ils partagent un corpus — la preuve, c'est la vérification directe (faite : Trillian maintenance mode, Tessera GA, veritrail) et, au bout du chemin, le pilote en conditions réelles.
+**Multi-AI consensus is a filter against isolated gross error, not a proof.** Four models often converge because they share a corpus — proof is direct verification (done: Trillian maintenance mode, Tessera GA, veritrail) and, at the end of the road, the pilot in real conditions.
 
-| Classe | Contenu | Conduite |
+| Class | Content | Conduct |
 |---|---|---|
-| Principes stables | séparation 0x00/0x01, default-deny, fencing TTL, monotonie | confiance haute — spécifier |
-| Photographies datées | statut GA de Tessera, comptabilité veritrail, posture OPA, modèles/GPU, coûts | dater ; re-vérifier à l'implémentation |
-| À valider en terrain | latences, taux d'erreur du traducteur, budgets ETI, Time-to-Audit | le pilote est la validation |
+| Stable principles | 0x00/0x01 separation, default-deny, TTL fencing, monotony | high confidence — specify |
+| Dated photographs | Tessera GA status, veritrail accounting, OPA posture, models/GPUs, costs | date; re-verify at implementation |
+| To validate in the field | latencies, translator error rates, ETI budgets, Time-to-Audit | the pilot is the validation |
 
-*Document vivant — dater la confiance, toute la confiance.*
+*Living document — date confidence, all confidence.*
 
 ## 16 · Changelog
 
-| Version | Contenu |
+| Version | Content |
 |---|---|
-| v1.1 (audit Gemini) | plan arbitré = contrat · mitigations aliasing · lag maximal + tier-shift · instrument nommé · révocation = époque · bootstrap à preuves de consistance · canal OOB · conditions de retrait · calibrage du langage |
-| v1.2 (audit DeepSeek) | fenêtre canari ancrée · limite de légitimité · provenance ≠ conformité · gouvernance de la qualité du traducteur · régime de coût et indicateurs · table des langages |
-| v1.3 (audit Claude) | anti-rejeu jti · localhost ≠ authentification · rejeu chiffré · indicateurs · veritrail vérifié |
-| v1.4.1 (revue indépendante) | corrections textuelles (§1, §8) · anti-dribble explicite : proscription d'inspection de contenu, §4.1-bis · budget de friction ancré comme contrainte de pilote (§9.1) · refonte des figures 1, 2, 3, 5, 6 : flux unidirectionnels clarifiés, palette harmonisée |
-| **v1.4.10 (manifeste, arbitrage et handshake absents de §13)** | §13 : trois autres mécanismes intra-domaine (§4.2 arbitrage-comme-contrat, §6.3 manifeste attesté/measured boot) n'étaient nommés dans aucune étape de la séquence — repérés en poursuivant la relecture du plan d'implémentation après le trou du cluster (v1.4.9). Rattachés aux étapes existantes plutôt qu'à de nouvelles étapes numérotées, puisqu'ils relèvent déjà de « OPA + registre » (étape 3, manifeste) et « PEP » (étape 4, arbitrage). Le handshake inter-entités (§3) reste hors séquence — confirmé délibéré : il est déjà scopé « inter-domaines » juste au-dessus, pas requis pour gouverner les 2 cellules propres du pilote P1 — mais rendu explicite comme différé-et-documenté, pas absent, avec un renvoi direct depuis la séquence |
-| v1.4.9 (cluster manquant de la séquence §13) | §13 : la séquence d'implémentation listait HSM/genèse → OPA/registre → PEP → NAC → traducteur sans jamais nommer le cluster (§7 : fencing d'époque, quorum k-of-n classe W, promotion miroir/canari) comme étape de construction — repéré en relisant un plan d'implémentation dérivé de la séquence, qui héritait donc la même lacune (aucune tâche T1-T28 ne couvrait §7, alors que le pilote P1 est explicitement à 2 cellules). Ajout d'une étape 2 explicite : « fencing du cluster… requis avant tout déploiement multi-cellules, y compris le pilote P1 à 2 cellules… une cellule unique peut différer cette étape, un pilote non » — les étapes suivantes renumérotées (3 à 6) |
-| v1.4.8 (le mal-classé reste borné par le passeport) | §4.5, §10 point 12 : le résidu de classification erronée identifié en v1.4.7 ne se traduit jamais en action à portée élargie — le token émis après décision OPA est scellé sur l'action + la ressource précises (§4.1), ou sur objet/champ/valeur pour les capacités (§4.4 (2)), jamais un blanc-seing sur la classe ; le PEP revalide cette portée à l'exécution indépendamment de la branche OPA qui a émis le token, et toute action sans token valide correspondant est stoppée net. Une classification erronée ne peut donc faire émettre, au pire, qu'un mauvais verdict pour une action précise, scellée et auditée (chaque décision laisse une feuille, §4.1) — jamais une échappatoire du dispositif de bornage lui-même |
-| v1.4.7 (correction : le traducteur n'est pas l'élément de sécurité) | §4.5, §10 point 12 : reformulation de v1.4.6 — le traducteur n'a jamais été « l'élément de sécurité », donc une erreur de traduction ne contourne jamais le jugement des règles : c'est l'action *produite*, jamais l'intention déclarée, qui est jugée, sans exception (§1). Le résidu réel est plus étroit que ce que v1.4.6 formulait : une action couverte mais mal classée (mauvais domaine, tag manquant — §11.8) peut manquer la règle écrite pour sa vraie classe quand cette règle est conditionnée à ce champ ; le défaut-deny borne l'inconnu (non classé = strict), pas le mal-classé (classé à tort dans une catégorie moins stricte) |
-| v1.4.6 (lourdeur ≠ preuve de qualité de traduction) | §4.5 : nouveau paragraphe explicite — OPA/le PEP ne sont jamais contournés (default-deny, §1, sans exception), le résidu est en amont : OPA décide sur l'action *traduite*, jamais sur l'action réellement demandée si le traducteur ou la classification (§11.8) se sont trompés ; toute la chaîne d'application (dry-run diff, object-capabilities, pattern-analysis §4.4, Merkle, multisig), aussi lourde et vérifiable soit-elle, prouve alors que le système a fait ce que l'entrée disait — pas que l'entrée décrivait correctement ce qui a été demandé · §10 : point 12 (nouveau) nomme frontalement le risque de fausse confiance — la sécurité perçue de l'appareil ne doit jamais se lire comme une preuve de qualité de traduction |
-| v1.4.5 (fermeture de l'aliasing sémantique) | §4.4 : les mitigations F/I/W deviennent explicitement à deux niveaux — par action (1)-(4), inchangées, et par séquence (5) nouvelle, un profil comportemental à état par agent (fenêtres glissantes, dérive EMA, score composite en entrée OPA de premier rang) hérité du moteur de politique du dépôt protocole, fermant la classe d'attaque « saucisson » que (1)-(4) ne peuvent pas voir par construction · le résidu métier restant (action isolée hors (1)-(5)) n'est plus seulement mentionné comme non fermé : §11.9 (nouveau) documente sa voie de fermeture ex-post anticipée (post-mortem + reconstruction de la dérive intention → effet, module optionnel TBP-GOVERNANCE) et pourquoi elle reste volontairement hors périmètre core par défaut · §8 : ligne aliasing sémantique reformulée en conséquence — objectif : ne pas laisser croire que ce résidu n'est pas anticipé |
-| v1.4.4 (précision terminologique) | Élimination de « juger »/« jugement » comme verbe décrivant TBP, y compris à la forme négative : TBP n'exerce aucune discrétion, il n'y a donc rien à juger ni à ne pas juger. §1 : « on éclaire l'action, on ne la juge pas » → « TBP n'est pas un juge, c'est un livre de lois et un greffe » · §4.5 : « il éclaire l'action, il ne la juge jamais » → « il éclaire l'action, il ne la décide jamais » · §10 point 11 : même reformulation (livre de lois et greffe) · §11.8 : « le protocole ne la juge pas » → « le protocole ne se prononce pas dessus » |
-| v1.4.3 (clarifications) | §1 : principe « on éclaire l'action, on ne la juge pas » · §4.5 : le traducteur est un paramètre de friction, pas de sécurité ; métriques recentrées (taux d'escalade, traduction correcte hors refus) · §9.1 : lien explicite avec §4.5 · §11.8 : la gouvernance de la classification devient une conséquence du §3 (souveraineté locale + subsomption mécanique), plus une question ouverte · §10 : ajout du point 11 · §0 : épigraphe du switch activable et auditable |
-| v1.4.2 (corrections) | citation erronée corrigée (§11, §12) : RFC 9578 est *« Privacy Pass Issuance Protocols »*, pas « Proof of Transit » — jamais publié en RFC, seulement `draft-ietf-sfc-proof-of-transit` (IETF SFC, expiré) · glossaire de normalisation (§14) appliqué aux occurrences manquées : « garde »/« garde sémantique » → « traducteur » (§8, §10) ; « Sésame » → « passeport » (§4.1-bis, §8) · coquille §3.3 (« différentié » → « différencié ») · NIST 800-207 → NIST SP 800-207 (§3.3) |
-| v1.4 | référence de déploiement v1.2 intégrée (4 passes pratiques + 2 méta-audits) : passeports à capacité bornée · clés éphémères · temps explicite (NTS) · circuit-breaker OPA · extension PG · EAP-TLS = même PKI · OCSP fail-behavior · durcissement vLLM · RGPD/rétention · gouvernance de la classification · glossaire · statut épistémique · manifeste réseau intégré et normalisé |
+| v1.1 (Gemini audit) | arbitrated plan = contract · aliasing mitigations · maximum lag + tier-shift · named instrument · revocation = epoch · consistency-proof bootstrap · OOB channel · withdrawal conditions · language calibration |
+| v1.2 (DeepSeek audit) | anchored canary window · legitimacy limit · provenance ≠ compliance · translator quality governance · cost regime and indicators · language table |
+| v1.3 (Claude audit) | jti anti-replay · localhost ≠ authentication · encrypted replay · indicators · veritrail verified |
+| v1.4.1 (independent review) | textual corrections (§1, §8) · explicit anti-dribble: content-inspection prohibition, §4.1-bis · friction budget anchored as pilot constraint (§9.1) · figures 1, 2, 3, 5, 6 reworked: clarified unidirectional flows, harmonized palette |
+| **v1.4.10 (manifest, arbitration and handshake missing from §13)** | §13: three other intra-domain mechanisms (§4.2 arbitration-as-contract, §6.3 attested manifest/measured boot) were named in no sequence step — spotted while continuing the re-read of the implementation plan after the cluster hole (v1.4.9). Attached to existing steps rather than to new numbered steps, since they already fall under "OPA + registry" (step 3, manifest) and "PEP" (step 4, arbitration). The inter-entity handshake (§3) remains out of sequence — confirmed deliberate: it is already scoped "inter-domain" just above, not required to govern the pilot P1's own 2 cells — but made explicit as deferred-and-documented, not absent, with a direct reference from the sequence |
+| v1.4.9 (cluster missing from the §13 sequence) | §13: the implementation sequence listed HSM/genesis → OPA/registry → PEP → NAC → translator without ever naming the cluster (§7: epoch fencing, k-of-n quorum class W, mirror/canary promotion) as a construction step — spotted while re-reading an implementation plan derived from the sequence, which therefore inherited the same gap (no T1-T28 task covered §7, while the P1 pilot is explicitly 2-cell). Added an explicit step 2: "cluster fencing… required before any multi-cell deployment, including the 2-cell P1 pilot… a single cell may defer this step, a pilot may not" — following steps renumbered (3 to 6) |
+| v1.4.8 (the misclassified stays bounded by the passport) | §4.5, §10 point 12: the erroneous-classification residue identified in v1.4.7 never translates into an action with widened scope — the token issued after OPA decision is sealed on the precise action + resource (§4.1), or on object/field/value for capabilities (§4.4 (2)), never a blank check on the class; the PEP revalidates this scope at execution independently of the OPA branch that issued the token, and any action without a matching valid token is stopped cold. An erroneous classification can therefore, at worst, cause a bad verdict to be issued for one precise, sealed and audited action (every decision leaves a leaf, §4.1) — never a loophole in the bounding apparatus itself |
+| v1.4.7 (correction: the translator is not the security element) | §4.5, §10 point 12: reformulation of v1.4.6 — the translator was never "the security element", so a translation error never circumvents the judgment of the rules: it is the *produced* action, never the declared intention, that is judged, without exception (§1). The real residue is narrower than what v1.4.6 stated: a covered but misclassified action (wrong domain, missing tag — §11.8) may miss the rule written for its true class when that rule is conditioned on that field; default-deny bounds the unknown (unclassified = strict), not the misclassified (wrongly classified into a less strict category) |
+| v1.4.6 (heaviness ≠ proof of translation quality) | §4.5: new explicit paragraph — OPA/the PEP are never circumvented (default-deny, §1, without exception), the residue is upstream: OPA decides on the *translated* action, never on the actually requested action if the translator or the classification (§11.8) got it wrong; the whole enforcement chain (dry-run diff, object-capabilities, pattern-analysis §4.4, Merkle, multisig), however heavy and verifiable, then proves that the system did what the input said — not that the input correctly described what was requested · §10: point 12 (new) squarely names the false-confidence risk — the perceived security of the apparatus must never be read as proof of translation quality |
+| v1.4.5 (closure of semantic aliasing) | §4.4: F/I/W mitigations become explicitly two-level — per action (1)-(4), unchanged, and per sequence (5) new, a stateful per-agent behavioral profile (sliding windows, EMA drift, composite score as first-class OPA input) inherited from the protocol repository's policy engine, closing the "salami" attack class that (1)-(4) cannot see by construction · the remaining business residue (isolated action outside (1)-(5)) is no longer merely mentioned as unclosed: §11.9 (new) documents its anticipated ex-post closure path (post-mortem + reconstruction of the intention → effect drift, optional TBP-GOVERNANCE module) and why it deliberately stays out of core scope by default · §8: semantic-aliasing row reformulated accordingly — goal: not to let anyone believe this residue is unanticipated |
+| v1.4.4 (terminological precision) | Elimination of "judge"/"judgment" as a verb describing TBP, including in negative form: TBP exercises no discretion, so there is nothing to judge or not to judge. §1: "we illuminate the action, we do not judge it" → "TBP is not a judge, it is a book of laws and a registry office" · §4.5: "it illuminates the action, it never judges it" → "it illuminates the action, it never decides it" · §10 point 11: same reformulation (book of laws and registry office) · §11.8: "the protocol does not judge it" → "the protocol does not rule on it" |
+| v1.4.3 (clarifications) | §1: principle "we illuminate the action, we do not judge it" · §4.5: the translator is a friction parameter, not a security one; metrics refocused (escalation rate, correct translation excluding refusals) · §9.1: explicit link with §4.5 · §11.8: classification governance becomes a consequence of §3 (local sovereignty + mechanical subsumption), no longer an open question · §10: point 11 added · §0: epigraph of the activatable and auditable switch |
+| v1.4.2 (corrections) | erroneous citation corrected (§11, §12): RFC 9578 is *"Privacy Pass Issuance Protocols"*, not "Proof of Transit" — never published as an RFC, only `draft-ietf-sfc-proof-of-transit` (IETF SFC, expired) · normalization glossary (§14) applied to missed occurrences: "garde"/"garde sémantique" → "traducteur" (§8, §10); "Sésame" → "passeport" (§4.1-bis, §8) · French typo §3.3 (« différentié » → « différencié ») · NIST 800-207 → NIST SP 800-207 (§3.3) |
+| v1.4 | deployment reference v1.2 integrated (4 practical passes + 2 meta-audits): bounded-capability passports · ephemeral keys · explicit time (NTS) · OPA circuit breaker · PG extension · EAP-TLS = same PKI · OCSP fail-behavior · vLLM hardening · GDPR/retention · classification governance · glossary · epistemic status · network manifesto integrated and normalized |
 
 ---
-*Un standard qui deviendrait global cesserait d'être un standard ; il deviendrait une philosophie. TBP en est une. Le protocole est sa compression pour les techniciens.*
+*A standard that became global would cease to be a standard; it would become a philosophy. TBP is one. The protocol is its compression for technicians.*
