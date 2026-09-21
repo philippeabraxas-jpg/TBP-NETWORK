@@ -72,16 +72,31 @@ resserrer — jamais l'inverse :
    resserrer `SystemCallFilter` en conséquence.
 3. Rejouer `audit_confinement.sh` après chaque calibration.
 
+## Controlled degradation (T25, §4.5)
+
+**`degradation.go`** is the explicit, tested state machine for translator
+failure — "reject natural language, structured input only, **no cloud
+fallback**" as designed behavior, never the side effect of an unhandled
+exception. Per system scale (§4.5): critical systems fail over to the
+mirror cell when its anchored healthy window is available (§7.4 —
+pre-established rules, deterministic path, **never** human escalation);
+standard systems escalate to human arbitration when reachable; anything
+else is immediate default-deny. The controller boots **degraded** — normal
+mode is earned by a first green probe (fail-closed §1); switchovers and
+recovery are traced (hash-only `KindTelemetry` leaves, §6.2) and degradations
+alarmed; the no-cloud-fallback rule is a **structural assertion** (no
+network import in the package), verified by test — not a review promise.
+The broker-side structured building block remains `StructuredTranslator`
+(`src/broker/`, T33). Probing runs in the supervision loop, never in the
+decision path (friction budget §9.1).
+
 ## Not implemented here
 
-- **Controlled degradation** (§4.5): if the translator goes down, policy
-  is "reject natural language, structured input only, no cloud fallback"
-  — the broker-side building block already exists
-  (`StructuredTranslator`, `src/broker/`, T33) ; the switchover itself is
-  T25 (see `tests/p2_redteam/`, translator-failure scenario), to implement
-  as an explicit, tested behavior, not an accidental side effect of an
-  unhandled exception.
 - Native per-language corpus (positive/negative) and continuous
   measurement pipeline (FNR < 0.1%, FPR < 2%, §4.5) — open question #4 of
   the spec (§11): "translator: metrics per class, corpus, redundant
   translators — to develop."
+- Wiring of the degradation controller into `brokerd` (the broker
+  currently refuses any non-`structured` translator, so the
+  natural-language path is not assembled yet — the controller is ready for
+  the day it is).
