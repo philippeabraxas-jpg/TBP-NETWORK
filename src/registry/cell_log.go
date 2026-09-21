@@ -91,6 +91,9 @@ type CellLog struct {
 	await    *tessera.PublicationAwaiter
 	verifier note.Verifier
 	bp       BackpressureChecker
+	// cpInterval est l'intervalle de checkpoint résolu à l'ouverture —
+	// lu par AsyncWriter (T38, #71) pour borner sa fenêtre d'opposabilité.
+	cpInterval time.Duration
 	// inflight suit les Append acceptés et pas encore terminés — T5 :
 	// quand le backpressure s'engage, le moniteur attend leur drainage
 	// (waitInflight) avant d'écrire la feuille d'arrêt, ce qui garantit
@@ -140,12 +143,13 @@ func Open(ctx context.Context, opts Options) (*CellLog, error) {
 	}
 
 	return &CellLog{
-		appender: appender,
-		shutdown: shutdown,
-		reader:   reader,
-		await:    tessera.NewPublicationAwaiter(ctx, reader.ReadCheckpoint, awaitPollPeriod),
-		verifier: opts.Verifier,
-		bp:       opts.Backpressure,
+		appender:   appender,
+		shutdown:   shutdown,
+		reader:     reader,
+		await:      tessera.NewPublicationAwaiter(ctx, reader.ReadCheckpoint, awaitPollPeriod),
+		verifier:   opts.Verifier,
+		bp:         opts.Backpressure,
+		cpInterval: cpInterval,
 	}, nil
 }
 
@@ -182,6 +186,21 @@ func (l *CellLog) Append(ctx context.Context, leaf Leaf) (uint64, error) {
 // feuille d'arrêt KindBackpressure du moniteur T5 (qui a déjà verrouillé
 // et drainé). Append reste le seul point d'entrée métier.
 func (l *CellLog) appendInternal(ctx context.Context, leaf Leaf) (uint64, error) {
+	data, err := encodeLeaf(leaf)
+	if err != nil {
+		return 0, err
+	}
+	idx, _, err := l.await.Await(ctx, l.appender.Add(ctx, tessera.NewEntry(data)))
+	if err != nil {
+		return 0, fmt.Errorf("append: %w", err)
+	}
+	return idx.Index, nil
+}
+
+// encodeLeaf sérialise une feuille pour le batcher tessera — partagé par
+// le chemin synchrone (appendInternal) et le chemin async borné
+// (AsyncWriter, T38/#71) : mêmes octets, seul le moment d'attente change.
+func encodeLeaf(leaf Leaf) ([]byte, error) {
 	if leaf.Timestamp == 0 {
 		// Défaut dev : horloge locale. En production, l'appelant fournit
 		// l'horodatage NTS de la cellule (src/registry/README.md).
@@ -189,13 +208,9 @@ func (l *CellLog) appendInternal(ctx context.Context, leaf Leaf) (uint64, error)
 	}
 	data, err := leaf.Marshal()
 	if err != nil {
-		return 0, fmt.Errorf("feuille invalide: %w", err)
+		return nil, fmt.Errorf("feuille invalide: %w", err)
 	}
-	idx, _, err := l.await.Await(ctx, l.appender.Add(ctx, tessera.NewEntry(data)))
-	if err != nil {
-		return 0, fmt.Errorf("append: %w", err)
-	}
-	return idx.Index, nil
+	return data, nil
 }
 
 // waitInflight bloque jusqu'au drainage des Append en vol — utilisé par le
