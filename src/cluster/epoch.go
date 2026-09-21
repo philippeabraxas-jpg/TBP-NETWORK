@@ -523,8 +523,12 @@ type TrackerStatus struct {
 }
 
 // Status rend l'état courant — y compris pour une cellule en quarantaine
-// (la quarantaine gèle le service, pas l'inspection).
-func (t *Tracker) Status() TrackerStatus {
+// (la quarantaine gèle le service, pas l'inspection). Lecture locale
+// infaillible : l'erreur est toujours nil ICI — elle existe dans la
+// signature parce que la couture EpochStatusSource de la console (T37,
+// D110 élargi après revue) peut être un adaptateur réseau, dont la
+// lecture peut échouer ; une zero-value serait une demi-vérité (§1).
+func (t *Tracker) Status() (TrackerStatus, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	quar := make([]string, 0, len(t.quarantined))
@@ -539,7 +543,7 @@ func (t *Tracker) Status() TrackerStatus {
 		st.NotBefore = t.current.notBefore
 		st.ExpiresAt = t.current.expiresAt
 	}
-	return st
+	return st, nil
 }
 
 // refuseLocked écrit la feuille de refus (KindEpoch, event donné) puis
