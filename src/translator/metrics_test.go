@@ -8,12 +8,35 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
+
+// fakeMetricsLeaves capture les feuilles inscrites (couture de test —
+// satisfait MetricsLeafSink).
+type fakeMetricsLeaves struct {
+	mu     sync.Mutex
+	leaves []registry.Leaf
+}
+
+func (f *fakeMetricsLeaves) Append(_ context.Context, leaf registry.Leaf) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.leaves = append(f.leaves, leaf)
+	return uint64(len(f.leaves) - 1), nil
+}
+
+func (f *fakeMetricsLeaves) snapshot() []registry.Leaf {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]registry.Leaf, len(f.leaves))
+	copy(out, f.leaves)
+	return out
+}
 
 var (
 	metricsSalt  = []byte("t26-metrics-test-salt-32o!!") // ≥ 16 octets
@@ -135,7 +158,7 @@ func TestMetricsReportFromJSON(t *testing.T) {
 
 func TestAppendMetricsLeafFailClosedConfig(t *testing.T) {
 	report := sampleReport(t)
-	sink := &fakeLeaves{}
+	sink := &fakeMetricsLeaves{}
 	ctx := context.Background()
 	if _, err := AppendMetricsLeaf(ctx, sink, "", metricsSalt, report, metricsClock); err == nil {
 		t.Fatal("cellID vide accepté")
@@ -152,7 +175,7 @@ func TestAppendMetricsLeafFailClosedConfig(t *testing.T) {
 // par une voie indépendante) — mutation du sel ou du record ⇒ échec.
 func TestAppendMetricsLeafHashOnlyExact(t *testing.T) {
 	report := sampleReport(t)
-	sink := &fakeLeaves{}
+	sink := &fakeMetricsLeaves{}
 	at := metricsClock
 	if _, err := AppendMetricsLeaf(context.Background(), sink, metricsCell, metricsSalt, report, at); err != nil {
 		t.Fatalf("AppendMetricsLeaf: %v", err)
