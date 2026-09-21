@@ -16,11 +16,12 @@
 //     publiée avant verdict) et produit les feuilles réelles pour
 //     leaves_export.json et la corrélation uninstrumented_holes (D88).
 //     Plancher structurel ~150 ms (checkpoint POSIX ≥ 100 ms + poll 50 ms)
-//     — suivi par l'issue #71, HORS budget §9.1.
+//     — HORS budget §9.1 ; #71 arbitré (T38) : ce bras mesure le mode sync
+//     = borne pire cas, la production par défaut est async borné.
 //
-// La production réelle paie le bras « durabilité » sur CHAQUE décision
-// (synchrone, fail-closed) : le rapport et le README affichent les deux
-// bras côte à côte, jamais l'un sans l'autre (condition A de la revue).
+// Le rapport et le README affichent les deux bras côte à côte, jamais l'un
+// sans l'autre (condition A de la revue) — le bras « durabilité » reste la
+// borne pire cas même si la prod ne le paie plus par défaut.
 //
 // Le verdict de seuil est rendu par leading_indicators.py (D89/D91) — ce
 // fichier ne fait que mesurer, exporter et leaf le rapport (D90).
@@ -639,7 +640,7 @@ func Run(ctx context.Context, cfg Config) (*Measurements, error) {
 
 	// --- Bras « durabilité » (registre tessera réel) — feuilles opposables
 	// pour la corrélation (D88) ; mesure le coût de la preuve fail-closed
-	// (suivi #71, hors budget §9.1).
+	// en mode sync (#71 arbitré par T38 : borne pire cas, hors budget §9.1).
 	cellLog, regDir, err := openRealRegistry(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pile durabilité: %w", err)
