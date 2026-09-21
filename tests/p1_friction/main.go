@@ -97,8 +97,8 @@ func cmdLeafReport(args []string) error {
 }
 
 // printSummary affiche les deux bras CÔTE À CÔTE (condition A de la revue
-// #29 : jamais le bras « décision » sans le coût réel de la durabilité
-// synchrone payé par la production — suivi #71).
+// #29 : jamais le bras « décision » sans le coût réel de la durabilité —
+// borne pire cas sync ; #71 arbitré par T38, prod par défaut async borné).
 func printSummary(m *Measurements) {
 	byTier := func(tier, op string) []Sample {
 		var out []Sample
@@ -113,7 +113,7 @@ func printSummary(m *Measurements) {
 	for _, t := range []struct{ tier, op, label string }{
 		{"tier1_baseline", "noop", "baseline no-op"},
 		{"tier1_decision", "evaluate", "tier1 DÉCISION (seuil §9.1 bloquant : p95 ajoutée < 5 ms)"},
-		{"tier1_durability", "evaluate", "tier1 DURABILITÉ (production réelle, synchrone — suivi #71)"},
+		{"tier1_durability", "evaluate", "tier1 DURABILITÉ (registre réel, mode sync = pire cas — T38/#71)"},
 		{"tier2_decision", "verify", "tier2 verify DÉCISION (bloquant : p95 ≤ 50 ms)"},
 		{"tier2_durability", "verify", "tier2 verify DURABILITÉ (surveillé)"},
 	} {

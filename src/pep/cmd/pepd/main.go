@@ -23,6 +23,16 @@
 //	                   (bascule de posture, levée classe W) — défaut 2.
 //	                   Vérifieur PAR COMPTAGE : la crypto de quorum est une
 //	                   phase ultérieure ; la couture est déjà là (T14).
+//	TBP_DURABILITY     modèle de durabilité du chemin de décision (T38,
+//	                   issue #71) : « async-bounded » (DÉFAUT — verdict à
+//	                   l'acceptation de la feuille, fenêtre d'opposabilité
+//	                   bornée, coupure fail-closed) ou « sync » (preuve
+//	                   publiée avant verdict — plancher structurel ~150 ms
+//	                   POSIX, hors budget §9.1, conservé pour mesure).
+//	TBP_DURABILITY_WINDOW_MS  fenêtre d'opposabilité en millisecondes —
+//	                   défaut 1000, plancher 4× l'intervalle de checkpoint
+//	                   (sous le plancher : refus de démarrer, coupures
+//	                   parasites garanties).
 //
 // Doctrine §5.3 : le démon démarre TOUJOURS en mode monitor — jamais
 // closed au premier déploiement, ni au redémarrage. La bascule closed
@@ -92,6 +102,10 @@ func run() error {
 		}
 		quorumMin = n
 	}
+	durabilityAsync, durabilityWindow, err := durabilityFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -122,6 +136,51 @@ func run() error {
 			log.Printf("pepd: fermeture du registre: %v", err)
 		}
 	}()
+
+	// Puits de feuilles du chemin de DÉCISION (T38, issue #71) : async
+	// borné par défaut — verdict à l'acceptation de la feuille, fenêtre
+	// d'opposabilité bornée, coupure fail-closed (ErrDurabilityCut → deny
+	// « leaf-write-failed », le chemin T9 existant) ; « sync » conserve
+	// l'ancien chemin (preuve publiée avant verdict — plancher structurel
+	// ~150 ms POSIX, hors budget §9.1). Les écritures ADMINISTRATIVES
+	// (T5, T14, quota, horloge, posture) restent synchrones dans les deux
+	// cas : rares, et leur opposabilité prime sur leur latence.
+	decisionLeaves := pep.LeafSink(cellLog)
+	var asyncWriter *registry.AsyncWriter
+	if durabilityAsync {
+		asyncWriter, err = registry.NewAsyncWriter(cellLog, registry.AsyncOptions{
+			CellID: cellID,
+			Salt:   salt,
+			Window: durabilityWindow,
+			OnTrip: func(detail string) {
+				log.Printf("pepd: ALARME durabilité registre — coupure fail-closed (%s)", detail)
+			},
+			OnClear: func() {
+				log.Printf("pepd: durabilité registre — rattrapage tracé, coupure levée")
+			},
+		})
+		if err != nil {
+			return err
+		}
+		// Fermé AVANT le CellLog (defer LIFO : ce defer s'exécute avant
+		// celui du registre) : le tracker vide sa file, le shutdown
+		// tessera publie le reste.
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := asyncWriter.Close(closeCtx); err != nil {
+				log.Printf("pepd: fermeture du writer async: %v", err)
+			}
+		}()
+		decisionLeaves = asyncWriter
+		windowLog := durabilityWindow
+		if windowLog == 0 {
+			windowLog = registry.DefaultOpposabilityWindow
+		}
+		log.Printf("pepd: durabilité async bornée (fenêtre %v) — chemin de décision T38", windowLog)
+	} else {
+		log.Printf("pepd: durabilité SYNCHRONE (preuve avant verdict, plancher ~150 ms POSIX — hors §9.1, mode mesure)")
+	}
 
 	// Point unique fail-closed (T14) — tous les détecteurs y basculent.
 	failClosed, err := pep.NewFailClosed(pep.FailClosedOptions{
@@ -189,7 +248,7 @@ func run() error {
 		Keyring:    keyring,
 		PolicyID:   policy,
 		Salt:       salt,
-		Leaves:     cellLog,
+		Leaves:     decisionLeaves,
 		AntiReplay: antiReplay,
 		Quota:      ledger,
 		Gate:       failClosed,
@@ -263,6 +322,30 @@ func envRequired(name string) (string, error) {
 		return "", fmt.Errorf("%s requis", name)
 	}
 	return v, nil
+}
+
+// durabilityFromEnv résout le modèle de durabilité du chemin de décision
+// (T38, issue #71). Fail-closed : une valeur inconnue est une erreur de
+// démarrage, jamais un mode par défaut silencieusement choisi — sauf
+// l'absence, qui vaut « async-bounded » (l'arbitrage de l'issue).
+func durabilityFromEnv(getenv func(string) string) (async bool, window time.Duration, err error) {
+	switch mode := getenv("TBP_DURABILITY"); mode {
+	case "", "async-bounded":
+		async = true
+	case "sync":
+		async = false
+	default:
+		return false, 0, fmt.Errorf("TBP_DURABILITY invalide %q (async-bounded|sync)", mode)
+	}
+	window = registry.DefaultOpposabilityWindow
+	if s := getenv("TBP_DURABILITY_WINDOW_MS"); s != "" {
+		ms, perr := strconv.Atoi(s)
+		if perr != nil || ms < 1 {
+			return false, 0, fmt.Errorf("TBP_DURABILITY_WINDOW_MS invalide %q (entier ≥ 1)", s)
+		}
+		window = time.Duration(ms) * time.Millisecond
+	}
+	return async, window, nil
 }
 
 func envHex(name string, minBytes int) ([]byte, error) {

@@ -35,7 +35,7 @@ Timestamp}` where `PayloadHash = HashPayload(salt, payload)` and the salt
 | kind | meaning | payload record |
 |-----:|---------|----------------|
 | 1    | PEP decision | `TBPD1` (`src/pep`) |
-| 2    | telemetry / alarms (`TBPC1` clock alarm, `TBFF1` fail-closed trip, mode switch) | several, `src/pep` |
+| 2    | telemetry / alarms (`TBPC1` clock alarm, `TBFF1` fail-closed trip, `TBAD1` durability episode, mode switch) | several, `src/pep` + `async_writer.go` |
 | 3    | backpressure engaged | `src/registry` |
 | 4    | master-chain anchor (T6) | `TBPA1` (`anchor.go`) |
 | 5    | retention purge | — |
@@ -61,6 +61,52 @@ The disk-quota policy described below is enforced as a `BackpressureChecker`
 seam wired into `CellLog.Append`: when engaged, appends fail closed; the
 stop is itself a leaf and an alarm, same doctrine as the telemetry-cut case
 in §5.3 ("classe W" treatment) — not a silent degradation.
+
+### Async bounded durability (`async_writer.go` — T38, issue #71)
+
+The T27 friction spike measured `CellLog.Append` at ~150–250 ms per
+decision on the POSIX driver (floor ≈ `CheckpointInterval` 100 ms +
+awaiter poll 50 ms — structural, not a tuning artifact): 30–50× the §9.1
+tier-1 budget. T38 arbitrates the hot path's durability model as **async
+borné** (bounded async); `pepd` selects it by default
+(`TBP_DURABILITY=async-bounded`), with `TBP_DURABILITY=sync` restoring the
+old fully synchronous behavior.
+
+- **Verdict at acceptance, never fire-and-forget.** `AsyncWriter.Append`
+  serializes the leaf, submits it to the Tessera appender (integration is
+  sequential, so FIFO order is the log's order), and enqueues the future —
+  then returns. The PEP pays ~0.2 ms (in-memory reference), not the
+  publication floor. A single tracker goroutine confirms entries in order.
+- **Opposability window.** A leaf accepted more than `Window` ago without
+  confirmation is a durability cut: the writer trips and every new append
+  is refused immediately (`ErrDurabilityCut`) until recovery. Default
+  `DefaultOpposabilityWindow` = 1 s (`TBP_DURABILITY_WINDOW_MS`), with a
+  hard floor of 4× `CheckpointInterval` — below that, normal publication
+  jitter would trip the cut spuriously.
+- **Cut = fail-closed, but not `FailClosed.Trip`.** The validator (T9)
+  already denies on leaf-write failure, so a cut denies new decisions
+  through the existing path with an alarm (`OnTrip`). `Trip` is
+  deliberately *not* used: it writes its trip leaf synchronously under the
+  same mutex `Gate()` holds, so a stalled publication would freeze the
+  entire hot path instead of just refusing it.
+- **Recovery is provable.** When the queue drains after a cut, the tracker
+  writes a kind-2 telemetry leaf `TBAD1` (episode number, leaves refused
+  at cut, cut/recovery timestamps, lag) **synchronously**, then fires
+  `OnClear`. The episode — and the count of decisions refused during it —
+  is on the log, never silent.
+- **Honesty clause.** A process crash inside the window loses at most
+  `Window` of accepted-but-unpublished leaves. That is the price of taking
+  the publication floor off the hot path; the sync path
+  (`CellLog.Append`) remains the writer for administrative leaves (T5 stop
+  leaf, T14 alarms, quota, clock, posture) where the decision is already
+  made and the write *is* the act.
+- **Backlog bound.** The queue is capped (`DefaultAsyncQueueCapacity` =
+  8192); a full queue refuses with `ErrDurabilityBacklog` — bounded memory
+  before throughput.
+- **T5 interplay.** `MonitorOptions.Drain` lets the backpressure monitor
+  drain the async writer during `engage()`, after in-flight writes settle
+  and before the stop leaf — so the kind-3 backpressure leaf stays
+  literally the last leaf of the log.
 
 ### Anchoring (`anchor.go`, `tsa.go` — T6)
 
