@@ -63,3 +63,8 @@ tests/p1_friction/out/
 # cell_log.key, evidence_salt.hex (sel local, §6.2), run_report.json,
 # leaves_export.json, evidence_log.jsonl. Régénérés à chaque run.
 tests/p2_redteam/out/
+
+# Selftest de déploiement T35 (#61) — binaires compilés (pepd), bundles
+# OPA, capabilities strippées, keyring DEV, registres tessera locaux
+# (cell_log.key), rapport JSON. Régénérés à chaque run, jamais commités.
+deploy/selftest/out/
