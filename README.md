@@ -118,7 +118,9 @@ src/
                            unit, seccomp allowlist, confinement audit) + controlled
                            degradation state machine (structured-only, no cloud
                            fallback; mirror failover / human escalation /
-                           default-deny per system class)
+                           default-deny per system class) + quality measurement
+                           (corpus replay, per-class FNR/FPR gate blocking CI,
+                           stratified human sampling, `TBTM1` registry leaf)
 deploy/                 Multi-machine deployment guides (router, cell, server,
                         supervisor) with per-machine checklists, monitor→closed
                         posture switch, and an executable selftest (82 controls)
@@ -133,29 +135,31 @@ tests/
 
 **Current status (as of 2026-09-22): the rollout code is implemented and
 tested along the full path — genesis → fencing → registry → broker → PEP →
-supervision → deployment.** Every `src/` package carries its own test
-suite (Go unit/integration tests, Python for the audit and measurement
-tooling), and `deploy/selftest/` executes the deployment guides end to
-end (**82 controls, 0 failures** — a guide that drifts from the code
-breaks there, not at the operator's). Bounded-async registry durability
-(T38, §9.1) merged most recently
-([#78](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/78)), just
-after the translator's controlled degradation (T25, §4.5,
-[#79](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/79)). One
-backlog item is **in review** as an open PR:
-[#80](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/80)
-(translator quality measurement — corpus replay, per-class metrics,
-registry leaf, T26, §4.5). What is deliberately **not** here yet: the
-native per-language translator corpora (to be constituted at the pilot,
-§15), the human-arbitration escalation path (brokerd v1 accepts only the
-`structured` translator), and the inter-domain layer (spec §13 — deferred
-by the spec itself, documented in issue #33). Do not deploy `config/`
-as-is — every file there says so explicitly, worth repeating here too.
-The protocol this rollout code governs against is not a skeleton either:
-`tbp4.2.1/` vendors the working core (HSM signer, Merkle audit chain,
-OPA policy engine, tests, adversarial review process) in-tree via git
-submodule, pinned to a specific commit — present here without being
-copied or duplicated.
+supervision → translator → deployment.** Every `src/` package carries its
+own test suite (Go unit/integration tests, Python for the audit and
+measurement tooling), and `deploy/selftest/` executes the deployment
+guides end to end (**82 controls, 0 failures** — a guide that drifts from
+the code breaks there, not at the operator's). No PR is open against this
+repository right now — the backlog that was in flight (T25 controlled
+degradation, T38 bounded-async registry durability, T26 translator
+quality measurement) has all merged. Two items remain open and tracked
+deliberately, neither blocking the pilot: the English translation of the
+remaining French documentation ([#83](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/83),
+in progress — most of `deploy/` and `docs/` already have English
+primaries, see "Note on language" above), and the inter-domain layer
+(spec §13 — deferred by the spec itself, tracked in
+[#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33) so
+"deferred" stays visible instead of silently absent). What is
+deliberately **not** here yet beyond that: the native per-language
+translator corpora (to be constituted at the pilot, §15 — the pipeline
+that replays and gates on them is built) and the human-arbitration
+escalation path (brokerd v1 accepts only the `structured` translator).
+Do not deploy `config/` as-is — every file there says so explicitly,
+worth repeating here too. The protocol this rollout code governs against
+is not a skeleton either: `tbp4.2.1/` vendors the working core (HSM
+signer, Merkle audit chain, OPA policy engine, tests, adversarial review
+process) in-tree via git submodule, pinned to a specific commit — present
+here without being copied or duplicated.
 
 ## Configuration guidance — where to start
 
@@ -205,23 +209,84 @@ measured user-experience regression = 0):
    fail-closed, MAB/IoT-VLAN and OCSP-remediation paths.
 6. **Host hardening** — [`config/sysctl/99-tbp-hardening.conf`](config/sysctl/99-tbp-hardening.conf)
    on every machine running a TBP component (broker, PEP, registry).
-7. **Translator last** (§13) — once everything else is stable. The
-   runtime hardening and the controlled-degradation state machine are
-   delivered in [`src/translator/`](src/translator/) (non-root, cap-drop,
-   seccomp — distinct from `dm-verity`, which protects the image at rest,
-   not the runtime; degradation: structured-only, no cloud fallback);
-   quality measurement is in review
-   (PR [#80](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/80)).
-8. **Multi-machine deployment** — [`deploy/`](deploy/) holds the per-role
-   guides (router, cell, server, supervisor), per-machine acceptance
-   checklists, and `deploy/selftest/` which **executes** the guides
-   (`bash deploy/selftest/selftest.sh`, 82 controls, fail-closed). Run
-   the selftest before touching a real machine.
+7. **Translator last** (§13) — once everything else is stable. Delivered
+   in [`src/translator/`](src/translator/): runtime hardening (non-root,
+   cap-drop, seccomp — distinct from `dm-verity`, which protects the
+   image at rest, not the runtime), the controlled-degradation state
+   machine (structured-only, no cloud fallback), and quality measurement
+   (`measure.py` replays the corpus and gates CI on FNR/FPR regression,
+   `tmetrics` inscribes the result as a registry leaf, T26, §4.5) — the
+   corpora themselves are constituted at the pilot, not shipped here.
+8. **Multi-machine deployment** — [`deploy/apercu.md`](deploy/apercu.md)
+   is the entry point (what, where, why, prerequisites); it synthesizes
+   the per-role guides (router, cell, server, supervisor) and their
+   per-machine acceptance checklists. `deploy/selftest/` **executes**
+   the guides (`bash deploy/selftest/selftest.sh`, 82 controls,
+   fail-closed) — run it before touching a real machine.
 
 At every step, measure against the friction budget (§9.1) — see
 [`tests/p1_friction/`](tests/p1_friction/) for the exact thresholds and
 the runnable harness. The pilot fails if latency or arbitration rate
 exceed these thresholds, even if everything else works.
+
+## Roadmap: right-sized deployment scales
+
+TBP is a complex, full-scale governance system — cluster fencing, quorum,
+an independent supervisor, a hardened translator, an inter-entity
+handshake. Not every deployment needs all of it. A single-server small
+business that wants "no AI agent acts without a provable, logged reason"
+does not need two-cell failover any more than a home network needs a
+SOC. The plan is to package what already exists in this repository into
+**four deployment scales**, each a strict superset of the previous one —
+same primitives throughout (fail-closed, hash-only leaves, monitor before
+closed), more of them wired together as the scale goes up, and the
+security posture — and the operational complexity that buys it —
+increasing accordingly:
+
+- **Scale 1 — Single machine.** One host, one governed perimeter: `pepd`
+  in front of the service, a local OPA sidecar, a single `CellLog`
+  registry. No cluster fencing (nothing to fence with one cell), no NAC
+  (nothing to admit onto a network — it's one box), no broker or
+  supervisor daemon. Genesis collapses to a single operator keypair,
+  documented as such rather than pretending a quorum ceremony that isn't
+  one. Lowest operational complexity: get the OPA rules right, deploy in
+  monitor mode, watch the friction budget, earn `closed`.
+- **Scale 2 — Small team / single site.** A handful of machines on one
+  LAN behind one `brokerd`, still a single registry (no fencing yet —
+  one authoritative cell is still enough at this size), NAC added
+  (`config/freeradius/`, 802.1X at the switch) to admit machines onto the
+  segment, host hardening applied everywhere. One more daemon, one more
+  subsystem, same registry model as scale 1.
+- **Scale 3 — Resilient multi-cell.** What is already fully built and
+  documented as the pilot P1 deployment above: 2+ cells, cluster fencing
+  (epoch issuance/rotation, k-of-n quorum for class-W actions,
+  mirror/canary promotion), an independent supervisor with a read-only
+  console, the hardened translator with controlled degradation, the full
+  `deploy/` guide sequence and its 82-control selftest. For organizations
+  that can't tolerate a single cell going down, or whose governed agents
+  justify the extra machines.
+- **Scale full — Multi-entity.** The inter-entity handshake (§3):
+  proving policy, history continuity, and liveness across organizational
+  boundaries, not just across cells of the same organization —
+  federation between independently-governed TBP deployments that have to
+  trust each other without trusting each other. Deliberately not started
+  yet; tracked in [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)
+  (T32) so it stays visible as a later, distinct phase rather than
+  silently absent. This is genuinely new protocol work, not just more
+  machines running what already exists.
+
+**Honesty about where this stands**: scale 3 is delivered today under
+the pilot-P1 name used throughout this README. Scales 1 and 2 are not
+yet packaged as their own guides — they're reachable today by deploying
+a subset of what's documented (skip cluster fencing and NAC for scale 1,
+add NAC but keep one cell for scale 2), but that path isn't written down
+yet, and nothing currently stops someone from wiring it correctly on
+their own subject to the same doctrine. Turning that into dedicated
+`deploy/scale-1.md` / `deploy/scale-2.md` guides and selftest phases —
+so a small deployment is a documented, tested path rather than "the
+pilot guide, minus what you figure out to skip" — is the next
+documentation-and-packaging work planned for this repository. Scale full
+requires actual new code (§3's three proofs), not just new guides.
 
 ## Licensing
 
