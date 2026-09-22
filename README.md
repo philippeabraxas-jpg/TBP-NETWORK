@@ -286,11 +286,12 @@ code (§3's three proofs), not just new guides.
 
 ### Next planned work
 
-Two work streams, tracked separately because they're different kinds of
-effort:
+Two work streams, tracked as separate issues because they're different
+kinds of effort:
 
 1. **Per-scale deployment guides, plus admin tooling sized to each
-   scale.** Turning the scales above into `deploy/scale-1.md` /
+   scale** ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
+   Turning the scales above into `deploy/scale-1.md` /
    `deploy/scale-2.md` — scale 3 already has its guide sequence, it's
    `deploy/apercu.md` and the per-role guides it synthesizes — is half
    of this: a documented, selftest-covered path per scale rather than
@@ -319,7 +320,8 @@ effort:
      does programmatically, made legible to a human auditor instead of a
      test assertion.
 2. **Standards alignment — from a proprietary policy model to an
-   interoperable one.** TBP's rule taxonomy (classes F/I/W/OUT, §5.3),
+   interoperable one** ([#87](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/87)).
+   TBP's rule taxonomy (classes F/I/W/OUT, §5.3),
    its audit trail (hash-only Merkle-logged leaves, §6.2), and its
    control set (fail-closed, monitor-before-closed, quorum for
    high-stakes actions) are TBP-specific today — internally consistent
