@@ -255,7 +255,7 @@ func TestClearClassWRequiresQuorum(t *testing.T) {
 	fc.Trip(CondAnchorLag, "ancrage en retard de 3 fenêtres")
 
 	// Pas de vérifieur de quorum configuré : la levée W est impossible.
-	if err := fc.Clear(CondAnchorLag, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err == nil {
+	if err := fc.Clear(CondAnchorLag, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err == nil {
 		t.Fatal("classe W levée sans vérifieur de quorum (fail-closed violé)")
 	}
 	if fc.Gate() == nil {
@@ -269,7 +269,7 @@ func TestClearClassWRequiresQuorum(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	fc2.Trip(CondAnchorLag, "")
-	if err := fc2.Clear(CondAnchorLag, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err == nil {
+	if err := fc2.Clear(CondAnchorLag, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err == nil {
 		t.Fatal("classe W levée avec preuve rejetée")
 	}
 	if fc2.Gate() == nil {
@@ -278,9 +278,9 @@ func TestClearClassWRequiresQuorum(t *testing.T) {
 
 	// Vérifieur qui accepte : levée tracée.
 	fc2.SetQuorumVerifier(func(condition string, proof QuorumProof) bool {
-		return condition == CondAnchorLag && len(proof.Signers) >= 2
+		return condition == CondAnchorLag && len(proof.Signatures) >= 2
 	})
-	if err := fc2.Clear(CondAnchorLag, QuorumProof{Signers: [][]byte{[]byte("op-1"), []byte("op-2")}}); err != nil {
+	if err := fc2.Clear(CondAnchorLag, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}, {KeyID: [16]byte{2}}}}); err != nil {
 		t.Fatalf("Clear classe W avec quorum: %v", err)
 	}
 	if ref := fc2.Gate(); ref != nil {

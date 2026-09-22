@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
@@ -98,12 +99,16 @@ func postJSON(url string, body any) (int, []byte, error) {
 }
 
 // evaluate frappe POST /v1/evaluate et décode le verdict.
-func evaluate(pepdURL string, token []byte, action, resource string, epoch uint64) (int, evalResponse, error) {
+//
+// PAS de champ epoch dans le corps (retiré — revue de sécurité #90, point
+// 2) : l'époque n'est plus une entrée de la requête, elle vient
+// exclusivement d'EpochSource côté pepd (TBP_BROKER_SOCKET, ou FixedEpoch(0)
+// par défaut) — l'envoyer aurait été un paramètre malhonnête, sans effet.
+func evaluate(pepdURL string, token []byte, action, resource string) (int, evalResponse, error) {
 	status, raw, err := postJSON(pepdURL+"/v1/evaluate", map[string]any{
 		"token":    base64.StdEncoding.EncodeToString(token),
 		"action":   action,
 		"resource": resource,
-		"epoch":    epoch,
 	})
 	var er evalResponse
 	if err != nil {
@@ -208,6 +213,22 @@ func runMono(s *suite, cfg config) {
 		s.fail(phaseMono, "sel registre", err)
 		return
 	}
+
+	// Trousseau de contrôleurs pour la preuve de quorum de /v1/mode (§5.3,
+	// revue de sécurité #89) : k=2 signatures Ed25519 DISTINCTES, jamais
+	// une liste d'identités déclarées.
+	ctrl1, ctrl2 := devKey("quorum-ctrl-1"), devKey("quorum-ctrl-2")
+	ctrl1KID, ctrl2KID := [16]byte{0x11}, [16]byte{0x22}
+	quorumKeyring, _ := json.Marshal(map[string]string{
+		hex.EncodeToString(ctrl1KID[:]): hex.EncodeToString(ctrl1.Public().(ed25519.PublicKey)),
+		hex.EncodeToString(ctrl2KID[:]): hex.EncodeToString(ctrl2.Public().(ed25519.PublicKey)),
+	})
+	quorumKeyringPath := filepath.Join(cfg.out, "quorum-keyring.dev.json")
+	if err := os.WriteFile(quorumKeyringPath, quorumKeyring, 0o600); err != nil {
+		s.fail(phaseMono, "trousseau de quorum dev", err)
+		return
+	}
+
 	pepdEnv := append(os.Environ(),
 		"TBP_CELL_ID="+monoCellID,
 		"TBP_SALT="+hex.EncodeToString(salt),
@@ -216,6 +237,7 @@ func runMono(s *suite, cfg config) {
 		"TBP_REGISTRY_DIR="+regDir,
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
 		"TBP_OPA_ENDPOINT="+opaURL+"/v1/data/tbp/example/action",
+		"TBP_QUORUM_KEYRING_FILE="+quorumKeyringPath,
 		// T38/#71 : explicite même si async-bounded est le défaut — le
 		// selftest éping le modèle de durabilité qu'il exerce.
 		"TBP_DURABILITY=async-bounded",
@@ -278,14 +300,14 @@ func runMono(s *suite, cfg config) {
 		s.fail(phaseMono, "menthe jeton read", err)
 		return
 	}
-	_, er, err := evaluate(pepdURL, tokRead, "read", "doc-1", 0)
+	_, er, err := evaluate(pepdURL, tokRead, "read", "doc-1")
 	s.add(phaseMono, "monitor: jeton valide (read) → allow, forwardé (log only)",
 		err == nil && er.Allow && er.Forwarded && er.Mode == "monitor",
 		fmt.Sprintf("allow=%v forwarded=%v reason=%s", er.Allow, er.Forwarded, er.Reason))
 
 	// --- Témoin : action hors politique (write → deny OPA), monitor ---------
 	tokWrite, _ := mintOK("write")
-	_, er, err = evaluate(pepdURL, tokWrite, "write", "doc-1", 0)
+	_, er, err = evaluate(pepdURL, tokWrite, "write", "doc-1")
 	// La raison DOIT être le veto OPA (opa_*) : un deny pour une autre cause
 	// (signature, TTL…) rendrait ce témoin non-vacuole.
 	s.add(phaseMono, "monitor: témoin write → deny OPA, forwardé quand même (§5.3)",
@@ -305,17 +327,37 @@ func runMono(s *suite, cfg config) {
 		action: "read", resource: "doc-1",
 		class: 1, epoch: 0, version: 1, kid: rogueKID,
 	})
-	_, er, err = evaluate(pepdURL, tokRogue, "read", "doc-1", 0)
+	_, er, err = evaluate(pepdURL, tokRogue, "read", "doc-1")
 	s.add(phaseMono, "témoin: jeton signé par une clé inconnue → refus",
 		err == nil && !er.Allow,
 		fmt.Sprintf("allow=%v reason=%s", er.Allow, er.Reason))
 
 	// --- Étape : bascule gouvernée monitor→closed (§5.3) --------------------
-	status, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1"}})
-	s.add(phaseMono, "bascule closed: 1 signataire < quorum → 403", status == http.StatusForbidden,
+	// Preuve de quorum RÉELLE (revue de sécurité #89) : k signatures Ed25519
+	// distinctes sur pep.QuorumMessage("mode-closed", expiry) — un ancien
+	// appelant qui se contenterait de déclarer des noms ("signers") est
+	// witnessé séparément juste après (attaque #89 exacte, refusée).
+	expiry := time.Now().Add(1 * time.Minute)
+	signCtrl := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
+		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-closed", expiry))
+		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
+	}
+
+	legacy, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-1"}})
+	s.add(phaseMono, "témoin #89: attaque historique (signers déclarés, sans signature) → refusée",
+		legacy == http.StatusForbidden, fmt.Sprintf("status=%d", legacy))
+
+	status, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{
+		"mode": "closed", "expiry": expiry.Unix(),
+		"signatures": []map[string]string{signCtrl(ctrl1, ctrl1KID)},
+	})
+	s.add(phaseMono, "bascule closed: 1 signature valide < quorum 2 → 403", status == http.StatusForbidden,
 		fmt.Sprintf("status=%d", status))
-	status, _, _ = postJSON(pepdURL+"/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-2"}})
-	s.add(phaseMono, "bascule closed: quorum 2/2 → 200", status == http.StatusOK,
+	status, _, _ = postJSON(pepdURL+"/v1/mode", map[string]any{
+		"mode": "closed", "expiry": expiry.Unix(),
+		"signatures": []map[string]string{signCtrl(ctrl1, ctrl1KID), signCtrl(ctrl2, ctrl2KID)},
+	})
+	s.add(phaseMono, "bascule closed: quorum 2/2 signatures valides → 200", status == http.StatusOK,
 		fmt.Sprintf("status=%d", status))
 	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
 	if err == nil {
@@ -326,12 +368,12 @@ func runMono(s *suite, cfg config) {
 
 	// --- Post-closed : le verdict s'APPLIQUE --------------------------------
 	tokWrite2, _ := mintOK("write")
-	_, er, err = evaluate(pepdURL, tokWrite2, "write", "doc-1", 0)
+	_, er, err = evaluate(pepdURL, tokWrite2, "write", "doc-1")
 	s.add(phaseMono, "closed: write → deny BLOQUÉ (forwarded=false)",
 		err == nil && !er.Allow && !er.Forwarded,
 		fmt.Sprintf("allow=%v forwarded=%v", er.Allow, er.Forwarded))
 	tokRead2, _ := mintOK("read")
-	_, er, err = evaluate(pepdURL, tokRead2, "read", "doc-1", 0)
+	_, er, err = evaluate(pepdURL, tokRead2, "read", "doc-1")
 	s.add(phaseMono, "closed: read → allow forwardé",
 		err == nil && er.Allow && er.Forwarded,
 		fmt.Sprintf("allow=%v forwarded=%v", er.Allow, er.Forwarded))
@@ -346,7 +388,7 @@ func runMono(s *suite, cfg config) {
 		return
 	}
 	tokDelta, _ := mintOK("read")
-	if _, _, err := evaluate(pepdURL, tokDelta, "read", "doc-1", 0); err != nil {
+	if _, _, err := evaluate(pepdURL, tokDelta, "read", "doc-1"); err != nil {
 		s.fail(phaseMono, "registre: évaluation delta", err)
 		return
 	}

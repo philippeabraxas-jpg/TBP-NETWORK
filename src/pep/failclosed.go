@@ -82,11 +82,18 @@ type FailClosedGate interface {
 	Gate() *Refusal
 }
 
-// QuorumProof atteste une décision de gouvernance (§5.3). Opaque pour
-// T14 : la vérification est une couture (QuorumVerifier) — les phases
-// ultérieures y brancheront la crypto de quorum.
+// QuorumProof atteste une décision de gouvernance (§5.3) : k signatures
+// Ed25519 DISTINCTES (QuorumSignature) sur QuorumMessage(condition,
+// Expiry), fraîches. Opaque pour T14 lui-même : la vérification
+// cryptographique est une couture (QuorumVerifier, voir
+// NewSignatureQuorumVerifier) — jamais une simple liste d'identités
+// déclarées par l'appelant (revue de sécurité #89 : l'ancien vérifieur de
+// pepd comptait des noms sans aucune signature, ce qui permettait à
+// n'importe qui joignant le port de données de couper l'application des
+// règles).
 type QuorumProof struct {
-	Signers [][]byte // identités des signataires de la levée
+	Expiry     time.Time
+	Signatures []QuorumSignature
 }
 
 // QuorumVerifier valide une preuve de quorum pour lever une condition

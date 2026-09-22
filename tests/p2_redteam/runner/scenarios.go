@@ -542,7 +542,7 @@ func scenarioTokenReplay(ctx context.Context, cfg Config, sink *countingSink, sa
 	}
 	mc, err := pep.NewModeController(pep.ModeOptions{
 		CellID: cfg.CellID, Salt: salt, Leaves: sink,
-		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signers) >= 1 },
+		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signatures) >= 1 },
 	})
 	if err != nil {
 		return false, "", fmt.Errorf("mode: %w", err)
@@ -582,7 +582,7 @@ func scenarioTokenReplay(ctx context.Context, cfg Config, sink *countingSink, sa
 	// S8 teste des REFUS : la posture doit être closed — en monitor (§5.3,
 	// défaut au démarrage) tout est forwardé par doctrine. La bascule est
 	// l'acte gouverné de T15 : preuve de quorum, feuille KindTelemetry.
-	if err := mc.SetMode(pep.ModeClosed, pep.QuorumProof{Signers: [][]byte{[]byte("operateur-p1")}}); err != nil {
+	if err := mc.SetMode(pep.ModeClosed, pep.QuorumProof{Signatures: []pep.QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
 		return false, "", fmt.Errorf("bascule closed: %w", err)
 	}
 	handler := l.Handler()

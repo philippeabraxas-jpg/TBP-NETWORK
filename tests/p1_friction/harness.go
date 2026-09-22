@@ -243,7 +243,7 @@ func newPEPStack(cfg Config, plans int, leaves interface {
 		CellID: cfg.CellID, Salt: salt, Leaves: leaves,
 		// Quorum vérificateur par comptage, comme pepd en P1 (crypto de
 		// quorum : phase ultérieure, couture déjà en place).
-		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signers) >= 1 },
+		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signatures) >= 1 },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mode: %w", err)

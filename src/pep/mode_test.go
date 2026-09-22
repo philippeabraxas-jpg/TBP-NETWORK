@@ -73,7 +73,7 @@ func TestModeSwitchToClosedGovernedTraced(t *testing.T) {
 
 	// Sans vérifieur de quorum : la bascule est impossible (fail-closed).
 	mc := newTestModeController(t, sink, alarm, nil)
-	if err := mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err == nil {
+	if err := mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err == nil {
 		t.Fatal("bascule closed acceptée sans vérifieur de quorum")
 	}
 	if mc.Mode() != ModeMonitor {
@@ -85,7 +85,7 @@ func TestModeSwitchToClosedGovernedTraced(t *testing.T) {
 
 	// Vérifieur qui rejette : toujours monitor.
 	mc.SetQuorumVerifier(rejectQuorum)
-	if err := mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err == nil {
+	if err := mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err == nil {
 		t.Fatal("bascule closed acceptée avec preuve rejetée")
 	}
 	if mc.Mode() != ModeMonitor {
@@ -94,7 +94,7 @@ func TestModeSwitchToClosedGovernedTraced(t *testing.T) {
 
 	// Quorum valide : bascule tracée et alarmée.
 	mc.SetQuorumVerifier(acceptQuorum)
-	if err := mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1"), []byte("op-2")}}); err != nil {
+	if err := mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}, {KeyID: [16]byte{2}}}}); err != nil {
 		t.Fatalf("SetMode(closed) avec quorum: %v", err)
 	}
 	if mc.Mode() != ModeClosed {
@@ -142,7 +142,7 @@ func TestModeSwitchIdempotentAndBack(t *testing.T) {
 		t.Fatalf("feuilles=%d, veut 0 (no-op)", sink.count())
 	}
 
-	if err := mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err != nil {
+	if err := mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
 		t.Fatalf("SetMode(closed): %v", err)
 	}
 	// closed → closed : no-op (pas de doublon).
@@ -154,7 +154,7 @@ func TestModeSwitchIdempotentAndBack(t *testing.T) {
 	}
 
 	// Retour à monitor : gouverné et tracé aussi.
-	if err := mc.SetMode(ModeMonitor, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err != nil {
+	if err := mc.SetMode(ModeMonitor, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
 		t.Fatalf("SetMode(monitor) retour: %v", err)
 	}
 	if mc.Mode() != ModeMonitor {
@@ -236,8 +236,8 @@ func TestModeControllerConcurrent(t *testing.T) {
 				_ = mc.Mode()
 				_ = mc.Allows(Decision{Allow: i%2 == 0})
 				if g%4 == 0 {
-					_ = mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1")}})
-					_ = mc.SetMode(ModeMonitor, QuorumProof{Signers: [][]byte{[]byte("op-1")}})
+					_ = mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}})
+					_ = mc.SetMode(ModeMonitor, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}})
 				}
 			}
 		}(g)

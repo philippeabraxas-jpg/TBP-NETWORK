@@ -5,8 +5,10 @@ _Version française : [monitor-to-closed.fr.md](monitor-to-closed.fr.md)._
 **Closed** mode is not installed: it is **earned**. The startup
 posture is monitor everywhere (§5.3); the switch requires the §9.1
 measurement points installed and fed (D100), an observation window, and
-a **quorum** — a single operator cannot close the network
-(demonstrated by the selftest's mono phase: 1 signer → 403, quorum →
+a **quorum** — k Ed25519 signatures from DISTINCT controllers pinned in
+`TBP_QUORUM_KEYRING_FILE`, never a self-declared list of names (security
+review #89) — a single operator cannot close the network (demonstrated by
+the selftest's mono phase: 1 valid signature → 403, k valid signatures →
 200).
 
 > MAB: see [checklists/routeur.md](checklists/routeur.md) — MAB is
@@ -61,31 +63,43 @@ closing without explaining it means blinding the network.
 
 #### Step 3 — Request the switch from the quorum (per PEP)
 
-**Verifiable prerequisite**: steps 1-2 green; the signers are
-notified and reachable; the rollback window (step 4) is decided.
+**Verifiable prerequisite**: steps 1-2 green; the controllers are
+notified and reachable; `TBP_QUORUM_KEYRING_FILE` on the PEP pins their
+public keys; the rollback window (step 4) is decided.
 
 **Command**:
 
 ```bash
-# The current quorum verifier counts signers (TBP_QUORUM_MIN,
-# default 2) — quorum crypto is a later phase, the seam is
-# in place. 1 signer MUST fail:
+# The quorum verifier is CRYPTOGRAPHIC (security review #89): k Ed25519
+# signatures (TBP_QUORUM_MIN, default 2) from DISTINCT controllers pinned
+# in TBP_QUORUM_KEYRING_FILE, each over
+# QuorumMessage("mode-closed", expiry) = "TBPQ1" ‖ len(condition) u16 BE
+# ‖ condition ‖ expiry u64 BE (pep.QuorumMessage). A body that only
+# DECLARES names ("signers": [...], the pre-#89 wire format) is no
+# longer even a valid field — it is silently ignored and the request is
+# refused for lack of any signature:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1"]}'
-# expected: 403. Then, quorum assembled:
-curl -s -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"closed","signers":["op-1","op-2"]}'
+  -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
+# expected: 403 (no signatures at all). One valid signature (k=2) MUST
+# also fail — see deploy/selftest/mono.go's mono phase for the full
+# worked example (signCtrl helper) that produces real per-controller
+# signatures and exercises 1-signature-403 → 2-signature-200:
+go run ./deploy/selftest -phase mono
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Observable success criterion**: 403 without quorum, 200 with;
-`GET /v1/mode` returns `{"mode":"closed"}`; the switch leaves a
-`KindTelemetry` leaf in the cell's registry (counted by the selftest).
+**Observable success criterion**: 403 without a valid k-of-n proof, 200
+with one (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
+"signature":"…"}, …]}`, hex-encoded, each signature by a DISTINCT
+controller pinned in `TBP_QUORUM_KEYRING_FILE`); `GET /v1/mode` returns
+`{"mode":"closed"}`; the switch leaves a `KindTelemetry` leaf in the
+cell's registry (counted by the selftest).
 
-**On failure: STOP** — a 200 without quorum = broken verifier:
-stay in monitor and fix; a 403 with quorum = insufficient
-signers, redo the request properly.
+**On failure: STOP** — a 200 without a valid quorum proof = broken
+verifier: stay in monitor and fix; a 403 with what should be a valid
+quorum = insufficient or invalid signatures (wrong key, stale/mismatched
+expiry, condition mismatch, or a repeated signer counted once), redo the
+request properly.
 
 #### Step 4 — Observe in closed, rollback ready
 
@@ -96,10 +110,9 @@ signers, redo the request properly.
 ```bash
 # In closed, an OPA veto blocks: forwarded=false (demonstrated by the
 # selftest's mono phase). Watch denied and the fail-closed alarms (T14).
-# Rollback = the reverse governed switch:
-curl -s -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"monitor","signers":["op-1","op-2"]}'
+# Rollback = the reverse governed switch — same k-of-n signed proof
+# requirement as step 3, this time over QuorumMessage("mode-monitor", …):
+# see deploy/selftest/mono.go for the worked example.
 ```
 
 **Observable success criterion**: the denies in closed match the

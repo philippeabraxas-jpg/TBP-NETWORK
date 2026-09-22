@@ -19,10 +19,22 @@
 //	                   premier démarrage, rechargée ensuite)
 //	TBP_LISTEN_ADDR    défaut ":8443" (le PEP_PORT de la règle nftables)
 //	TBP_OPA_ENDPOINT   optionnel — sidecar OPA (T11) consulté après validation
-//	TBP_QUORUM_MIN     signatures exigées pour les actes gouvernés
-//	                   (bascule de posture, levée classe W) — défaut 2.
-//	                   Vérifieur PAR COMPTAGE : la crypto de quorum est une
-//	                   phase ultérieure ; la couture est déjà là (T14).
+//	TBP_QUORUM_MIN     signatures Ed25519 DISTINCTES exigées pour les actes
+//	                   gouvernés (bascule de posture, levée classe W) —
+//	                   défaut 2. Vérifié cryptographiquement contre
+//	                   TBP_QUORUM_KEYRING_FILE (revue de sécurité #89 :
+//	                   l'ancien vérifieur comptait des identités déclarées
+//	                   sans aucune signature).
+//	TBP_QUORUM_KEYRING_FILE  trousseau de contrôleurs épinglé (§12) pour la
+//	                   preuve de quorum : JSON {"kid_hex": "pubkey_ed25519_hex"},
+//	                   même format que TBP_KEYRING_FILE. Requis (fail-closed :
+//	                   sans lui, AUCUNE bascule de posture n'est possible).
+//	TBP_CELL_BROKER_SOCKET  optionnel — socket Unix du brokerd co-localisé
+//	                   (deploy/apercu.md : même rôle « Cell »), lu en direct
+//	                   pour l'époque VÉRIFIÉE (§7.2-§7.3, revue #90 point 2).
+//	                   Absent ⇒ FixedEpoch(0), choix EXPLICITE du scale 1
+//	                   (cellule unique, aucun fencing) — jamais un défaut
+//	                   silencieux.
 //	TBP_DURABILITY     modèle de durabilité du chemin de décision (T38,
 //	                   issue #71) : « async-bounded » (DÉFAUT — verdict à
 //	                   l'acceptation de la feuille, fenêtre d'opposabilité
@@ -84,7 +96,7 @@ func run() error {
 	copy(policy[:], policyID)
 	keyring, err := loadKeyring(os.Getenv("TBP_KEYRING_FILE"))
 	if err != nil {
-		return err
+		return fmt.Errorf("TBP_KEYRING_FILE: %w", err)
 	}
 	regDir, err := envRequired("TBP_REGISTRY_DIR")
 	if err != nil {
@@ -101,6 +113,10 @@ func run() error {
 			return fmt.Errorf("TBP_QUORUM_MIN invalide %q", s)
 		}
 		quorumMin = n
+	}
+	quorumKeyring, err := loadKeyring(os.Getenv("TBP_QUORUM_KEYRING_FILE"))
+	if err != nil {
+		return fmt.Errorf("TBP_QUORUM_KEYRING_FILE: %w", err)
 	}
 	durabilityAsync, durabilityWindow, err := durabilityFromEnv(os.Getenv)
 	if err != nil {
@@ -242,6 +258,28 @@ func run() error {
 	}
 	go watchdog.Run(ctx) // poll ntp_adjtime toutes les secondes (défaut §6.2)
 
+	// Source d'époque (§7.2 — revue de sécurité #90, point 2) : jamais la
+	// requête (le champ a été retiré du protocole). TBP_CELL_BROKER_SOCKET
+	// absent ⇒ FixedEpoch(0), choix EXPLICITE du scale 1 (cellule unique,
+	// aucun fencing possible, donc rien à révoquer). Présent ⇒ lecture live
+	// de l'époque VÉRIFIÉE par le tracker de la cellule via le brokerd
+	// co-localisé (scale 3, §7.3), jamais un cache qui fige une demi-vérité.
+	var epochs pep.EpochSource = pep.FixedEpoch(0)
+	if sock := os.Getenv("TBP_CELL_BROKER_SOCKET"); sock != "" {
+		src := newBrokerEpochSource(sock, nil)
+		probeCtx, cancel := context.WithTimeout(ctx, epochSourceHTTPTimeout)
+		err := src.Probe(probeCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("source d'époque (TBP_CELL_BROKER_SOCKET=%s) injoignable au démarrage: %w", sock, err)
+		}
+		go src.Run(ctx)
+		epochs = src
+		log.Printf("pepd: époque lue en direct de brokerd sur unix://%s (scale 3, §7.3)", sock)
+	} else {
+		log.Printf("pepd: époque fixée à 0 (TBP_CELL_BROKER_SOCKET absent — scale 1, cellule unique, aucun fencing)")
+	}
+
 	// Validateurs et arbitrage.
 	validator, err := pep.NewValidator(pep.ValidatorOptions{
 		CellID:     cellID,
@@ -252,6 +290,7 @@ func run() error {
 		AntiReplay: antiReplay,
 		Quota:      ledger,
 		Gate:       failClosed,
+		Epochs:     epochs,
 	})
 	if err != nil {
 		return err
@@ -271,10 +310,14 @@ func run() error {
 	}
 
 	// Posture (§5.3) : TOUJOURS monitor au démarrage ; bascules gouvernées
-	// par quorum (vérificateur par comptage — crypto de quorum : phase
-	// ultérieure, couture déjà en place).
-	quorum := func(_ string, proof pep.QuorumProof) bool {
-		return len(proof.Signers) >= quorumMin
+	// par quorum CRYPTOGRAPHIQUE — k signatures Ed25519 distinctes d'un
+	// trousseau de contrôleurs épinglé (§12), jamais un comptage
+	// d'identités déclarées par l'appelant (revue de sécurité #89 : sous
+	// l'ancien vérifieur, quiconque joignait le port de données pouvait
+	// couper l'application des règles en inventant des noms).
+	quorum, err := pep.NewSignatureQuorumVerifier(quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
+	if err != nil {
+		return fmt.Errorf("quorum: %w", err)
 	}
 	mode, err := pep.NewModeController(pep.ModeOptions{
 		CellID:       cellID,
@@ -364,7 +407,7 @@ func envHex(name string, minBytes int) ([]byte, error) {
 // "pubkey_ed25519_hex"}. Aucune résolution dynamique.
 func loadKeyring(path string) (map[[16]byte]ed25519.PublicKey, error) {
 	if path == "" {
-		return nil, errors.New("TBP_KEYRING_FILE requis")
+		return nil, errors.New("chemin de fichier requis")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
