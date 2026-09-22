@@ -7,8 +7,9 @@
 // Pile assemblée :
 //
 //	CellLog propre (T7, clé note créée/rechargée) → OPA (T11) →
-//	Tracker d'époques (T29, epoch0 accepté au démarrage) →
-//	QuorumGate classe W (§7.5) → ContractStore (T30) →
+//	Tracker d'époques (T29, epoch0 accepté au démarrage — SEULEMENT si
+//	TBP_CLUSTER_MEMBERS porte ≥ 2 cellules ; mode mono-cellule sinon,
+//	issue #97) → QuorumGate classe W (§7.5) → ContractStore (T30) →
 //	[Enveloppe §4.1-bis, optionnelle] → Issuer (T33, clé de dev — §12) →
 //	Broker → serveur HTTP sur socket Unix (déploiement v1).
 //
@@ -46,12 +47,20 @@
 //	                        la cérémonie de genèse, pas ce démon)
 //	TBP_ISSUER_PKCS11_PIN_FILE     PIN utilisateur du jeton, fichier 0600
 //	                        (même exigence de custody que la seed de dev)
-//	TBP_GENESIS_DIR         répertoire de genèse (manifest.json +
-//	                        epoch0.json — scripts/genesis)
+//	TBP_GENESIS_DIR         répertoire de genèse (scripts/genesis) —
+//	                        manifest.json (contrôleurs, toujours requis :
+//	                        sert le quorum classe W, §7.5) ; epoch0.json
+//	                        requis SEULEMENT si TBP_CLUSTER_MEMBERS porte
+//	                        ≥ 2 cellules (voir ci-dessous, issue #97)
 //	TBP_QUORUM_MIN          M du quorum M-of-N (défaut 2, ≤ N contrôleurs)
 //	TBP_CLUSTER_MEMBERS     cellules autorisées à porter l'autorité,
 //	                        séparées par des virgules — DOIT contenir
-//	                        TBP_CELL_ID
+//	                        TBP_CELL_ID. Une SEULE cellule ⇒ mode
+//	                        mono-cellule (issue #97, décision actée pour
+//	                        #86) : aucun bail d'époque, aucun epoch0.json
+//	                        requis — le fencing (§7.2) n'a rien à
+//	                        arbitrer entre une cellule et elle-même. ≥ 2
+//	                        cellules ⇒ fencing complet, epoch0.json requis
 //	TBP_OPERATOR_KEYS_FILE  JSON ["pubkey_ed25519_hex", …] ≥ 1 — clés
 //	                        d'opérateurs du store de contrats (T30)
 //	TBP_ENVELOPE_ENDPOINT   optionnel — règle d'enveloppe §4.1-bis ;
@@ -282,8 +291,9 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return err
 	}
 
-	// Fencing d'époque (T29) : manifest de genèse → contrôleurs épinglés ;
-	// epoch0 accepté au démarrage — pas d'autorité, pas de service.
+	// Manifest de genèse → contrôleurs épinglés (T3, hors-bande) : sert
+	// TOUJOURS le quorum classe W (§7.5) ci-dessous, quelle que soit
+	// l'échelle — un seul jeu de clés, une seule cérémonie.
 	controllers, err := loadGenesisControllers(filepath.Join(cfg.genesisDir, "manifest.json"))
 	if err != nil {
 		return err
@@ -291,24 +301,46 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if cfg.quorumMin > len(controllers) {
 		return fmt.Errorf("TBP_QUORUM_MIN=%d > %d contrôleurs du manifest — un quorum impossible est un refus de démarrage", cfg.quorumMin, len(controllers))
 	}
-	tracker, err := cluster.NewTracker(cluster.TrackerConfig{
-		CellID:      cfg.cellID,
-		Salt:        cfg.salt,
-		Leaves:      cellLog,
-		Controllers: controllers,
-		Quorum:      cfg.quorumMin,
-		Members:     cfg.members,
-		OnAlarm:     onTrip,
-	})
-	if err != nil {
-		return fmt.Errorf("tracker: %w", err)
-	}
-	epoch0, err := os.ReadFile(filepath.Join(cfg.genesisDir, "epoch0.json"))
-	if err != nil {
-		return fmt.Errorf("epoch0: %w", err)
-	}
-	if err := tracker.Accept(ctx, epoch0); err != nil {
-		return fmt.Errorf("epoch0 refusé par le tracker (la genèse ne correspond pas au manifest ?): %w", err)
+
+	// Fencing d'époque (T29, §7.2-§7.3) : résout UN problème précis —
+	// empêcher que deux cellules revendiquent l'autorité en même temps.
+	// Avec UNE seule cellule dans TBP_CLUSTER_MEMBERS, ce conflit ne peut
+	// structurellement pas se produire : rien à arbitrer entre une
+	// cellule et elle-même. Mode mono-cellule (décision actée pour #86,
+	// correctif de la revue #97) : pas de tracker, pas d'epoch0 à
+	// importer, pas de bail à renouveler — donc rien qui expire. En
+	// scale ≥ 2 cellules, le fencing s'applique sans changement : le bail
+	// (10-300 s, §7.2) protège contre un split-brain réel, et son
+	// renouvellement reste un chantier séparé (#97 : ne PAS allonger le
+	// TTL pour compenser l'absence de renouvellement — ce serait élargir
+	// la fenêtre où une autorité révoquée reste acceptée, une régression
+	// de sécurité pour corriger un bug de disponibilité).
+	var tracker *cluster.Tracker
+	var epochs broker.EpochProvider
+	if len(cfg.members) == 1 {
+		epochs = broker.StaticEpoch(0)
+		log.Printf("brokerd: TBP_CLUSTER_MEMBERS ne porte que %s — mode mono-cellule (issue #97), aucun bail d'époque", cfg.cellID)
+	} else {
+		tracker, err = cluster.NewTracker(cluster.TrackerConfig{
+			CellID:      cfg.cellID,
+			Salt:        cfg.salt,
+			Leaves:      cellLog,
+			Controllers: controllers,
+			Quorum:      cfg.quorumMin,
+			Members:     cfg.members,
+			OnAlarm:     onTrip,
+		})
+		if err != nil {
+			return fmt.Errorf("tracker: %w", err)
+		}
+		epoch0, err := os.ReadFile(filepath.Join(cfg.genesisDir, "epoch0.json"))
+		if err != nil {
+			return fmt.Errorf("epoch0: %w", err)
+		}
+		if err := tracker.Accept(ctx, epoch0); err != nil {
+			return fmt.Errorf("epoch0 refusé par le tracker (la genèse ne correspond pas au manifest ?): %w", err)
+		}
+		epochs = tracker
 	}
 
 	// Quorum classe W (§7.5) : mêmes contrôleurs épinglés, K = M.
@@ -380,7 +412,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		OPA:        opaClient,
 		Translator: broker.StructuredTranslator{},
 		Issuer:     issuer,
-		Epochs:     tracker,
+		Epochs:     epochs,
 		Quorum:     quorumGate,
 		Contract:   contracts,
 		Envelope:   envelope,
@@ -411,6 +443,14 @@ func run(ctx context.Context, getenv func(string) string) error {
 		writeJSON(w, http.StatusOK, newStatsView(st))
 	})
 	mux.HandleFunc("GET /v1/supervision/epoch", func(w http.ResponseWriter, _ *http.Request) {
+		if tracker == nil {
+			// Mode mono-cellule (issue #97) : honnête sur l'absence de
+			// fencing plutôt que de simuler un epochView avec des champs
+			// de bail vides ou trompeurs (not_before/expires_at n'ont
+			// aucun sens sans tracker).
+			writeJSON(w, http.StatusOK, monoEpochView{Mode: "mono-cellule", Epoch: 0, Authority: cfg.cellID})
+			return
+		}
 		st, err := tracker.Status() // lecture locale — erreur structurellement nil
 		if err != nil {
 			http.Error(w, `{"error":"source indisponible"}`, http.StatusInternalServerError)
@@ -444,12 +484,16 @@ func run(ctx context.Context, getenv func(string) string) error {
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
-	epochSt, err := tracker.Status() // lecture locale — erreur structurellement nil
-	if err != nil {
-		return fmt.Errorf("état d'époque au démarrage: %w", err)
+	epoch, authority := 0, cfg.cellID
+	if tracker != nil {
+		epochSt, err := tracker.Status() // lecture locale — erreur structurellement nil
+		if err != nil {
+			return fmt.Errorf("état d'époque au démarrage: %w", err)
+		}
+		epoch, authority = epochSt.Epoch, epochSt.Authority
 	}
 	log.Printf("brokerd: cellule %s en écoute sur unix://%s (époque %d, autorité %s)",
-		cfg.cellID, cfg.socketPath, epochSt.Epoch, epochSt.Authority)
+		cfg.cellID, cfg.socketPath, epoch, authority)
 	if err := httpSrv.Serve(lis); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -495,6 +539,16 @@ type epochView struct {
 	ExpiresAt         time.Time `json:"expires_at"`
 	Quarantined       []string  `json:"quarantined"`
 	AutoFailoversHour int       `json:"auto_failovers_hour"`
+}
+
+// monoEpochView est la vue rendue en mode mono-cellule (issue #97) — pas
+// de bail, pas de fencing : des champs not_before/expires_at à zéro
+// seraient lisibles comme « bail déjà expiré » par un lecteur de
+// epochView, donc un type dédié plutôt qu'un epochView à moitié rempli.
+type monoEpochView struct {
+	Mode      string `json:"mode"`
+	Epoch     int    `json:"epoch"`
+	Authority string `json:"authority"`
 }
 
 func newEpochView(st cluster.TrackerStatus) epochView {

@@ -167,16 +167,19 @@ the repo. Closed mode IS NOT the goal of this step.
 
 #### Step 7 — Build and start brokerd (full decision chain, T37)
 
-**Verifiable prerequisite**: step 6 green; genesis artefacts (step 1)
-in place (`manifest.json` + `epoch0.json` under `$GENESIS_HOME`); PUBLIC
-operator keys from the contract store installed (T30 — JSON
-`["pubkey_ed25519_hex", …]`, ≥ 1); issuer custody provisioned — EITHER a
-DEV issuer seed at 0600 (P1 lab/CI only) OR a real HSM/SoftHSM2 token with
-an Ed25519 key pair generated inside it and its PIN at 0600 (security
-review #90, point 5 — the private key never leaves the module; see
-`src/broker/pkcs11_signer_test.go` for a runnable SoftHSM2 example); broker
-salt generated locally (≥ 16 bytes, stays here — the broker's chain is its
-OWN, distinct from pepd's).
+**Verifiable prerequisite**: step 6 green; genesis manifest (step 1) in
+place under `$GENESIS_HOME` — `epoch0.json` too, UNLESS `TBP_CLUSTER_MEMBERS`
+below names a single cell (mono-cellule mode, security review #97: with one
+cell there is no authority conflict to fence against, so no epoch lease is
+minted or required — the two-cell example that follows still needs its
+`epoch0.json`); PUBLIC operator keys from the contract store installed
+(T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1); issuer custody provisioned —
+EITHER a DEV issuer seed at 0600 (P1 lab/CI only) OR a real HSM/SoftHSM2
+token with an Ed25519 key pair generated inside it and its PIN at 0600
+(security review #90, point 5 — the private key never leaves the module;
+see `src/broker/pkcs11_signer_test.go` for a runnable SoftHSM2 example);
+broker salt generated locally (≥ 16 bytes, stays here — the broker's chain
+is its OWN, distinct from pepd's).
 
 **Command**:
 
@@ -202,7 +205,9 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   # TBP_ISSUER_PKCS11_PIN_FILE=/etc/tbp/issuer.pin
 #   TBP_GENESIS_DIR=<GENESIS_HOME>
 #   TBP_QUORUM_MIN=2
-#   TBP_CLUSTER_MEMBERS=cell-a,cell-b
+#   TBP_CLUSTER_MEMBERS=cell-a,cell-b  # ONE cell here (e.g. "cell-a") ⇒
+#                                      # mono-cellule mode (#97): no epoch
+#                                      # lease minted, epoch0.json not read
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
