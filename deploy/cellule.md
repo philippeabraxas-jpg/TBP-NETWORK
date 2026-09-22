@@ -1,178 +1,180 @@
-# deploy/cellule.md — machine « cellule » (T35, issue #61)
+# deploy/cellule.md — "cell" machine (T35, issue #61)
 
-Une cellule porte : le **broker** `brokerd` (T37 — issue #74), le
-**registre tessera** (T7), **OPA** (T11, capabilities restreintes
-§12), le **tracker d'époques** (§7.2) et le PEP `pepd`. Chaque décision
-laisse une feuille (§4.1) ; le sel des feuilles reste sur CETTE machine
-(§6.2). Posture au démarrage : **monitor**, toujours (§5.3).
+_Version française : [cellule.fr.md](cellule.fr.md)._
 
-> La phase mono de `deploy/selftest/` exécute les étapes 1 à 6 de ce
-> guide contre les vrais binaires, et la phase daemons l'étape 7
-> (brokerd réel, OPA réel, action de bout en bout). Si une commande
-> ci-dessous diverge du selftest, le selftest casse : corrigez le guide
-> ou le code, jamais les deux à l'insu l'un de l'autre.
+A cell runs: the **broker** `brokerd` (T37 — issue #74), the
+**tessera registry** (T7), **OPA** (T11, restricted capabilities
+§12), the **epoch tracker** (§7.2) and the PEP `pepd`. Every decision
+leaves a leaf (§4.1); the leaf salt stays on THIS machine
+(§6.2). Posture at startup: **monitor**, always (§5.3).
 
-#### Étape 1 — Vérifier les prérequis de la machine
+> The mono phase of `deploy/selftest/` executes steps 1 to 6 of this
+> guide against the real binaries, and the daemons phase executes step 7
+> (real brokerd, real OPA, end-to-end action). If a command
+> below diverges from the selftest, the selftest breaks: fix the guide
+> or the code, never both behind each other's back.
 
-**Prérequis vérifiable** : étapes communes de [README.md](README.md)
-vertes ; artefacts de genèse reçus selon la matrice de custody
-(`pubkeys/*.hex` des contrôleurs, `epoch0.json` — JAMAIS de clé privée de
-contrôleur sur cette machine).
+#### Step 1 — Verify the machine prerequisites
 
-**Commande** :
+**Verifiable prerequisite**: common steps of [README.md](README.md)
+green; genesis artefacts received per the custody matrix
+(`pubkeys/*.hex` of the controllers, `epoch0.json` — NEVER a controller
+private key on this machine).
+
+**Command**:
 
 ```bash
 go version && opa version
 ls "$GENESIS_HOME/manifest.json" "$GENESIS_HOME/pubkeys/" "$GENESIS_HOME/epoch0.json"
 ```
 
-**Critère de succès observable** : versions conformes ; les trois
-artefacts de genèse existent et sont lisibles.
+**Observable success criterion**: conforming versions; all three
+genesis artefacts exist and are readable.
 
-**En cas d'échec : STOP** — sans artefacts de genèse, pas de tracker
-d'époques ; retour à l'étape 3 du README.
+**On failure: STOP** — without genesis artefacts, no epoch
+tracker; back to step 3 of the README.
 
-#### Étape 2 — Compiler le PEP (pepd)
+#### Step 2 — Build the PEP (pepd)
 
-**Prérequis vérifiable** : étape 1 verte ; dépôt présent sur la machine.
+**Verifiable prerequisite**: step 1 green; repository present on the machine.
 
-**Commande** :
+**Command**:
 
 ```bash
 go build -o /usr/local/bin/pepd ./src/pep/cmd/pepd
-/usr/local/bin/pepd 2>&1 | head -1   # sans TBP_SALT : doit refuser
+/usr/local/bin/pepd 2>&1 | head -1   # without TBP_SALT: must refuse
 ```
 
-**Critère de succès observable** : le binaire se construit ; lancé sans
-environnement, il sort immédiatement avec `pepd: TBP_SALT requis`
-(fail-closed au démarrage — ce refus EST le critère).
+**Observable success criterion**: the binary builds; launched without
+environment, it exits immediately with `pepd: TBP_SALT requis`
+(fail-closed at startup — this refusal IS the criterion).
 
-**En cas d'échec : STOP** — un PEP qui démarre sans sel est fail-open ;
-ne pas continuer, corriger la cause (binaire, environnement).
+**On failure: STOP** — a PEP that starts without a salt is fail-open;
+do not continue, fix the cause (binary, environment).
 
-#### Étape 3 — Générer les capabilities OPA restreintes (§12)
+#### Step 3 — Generate the restricted OPA capabilities (§12)
 
-**Prérequis vérifiable** : `opa` ≥ 1.0 installé (étape 1).
+**Verifiable prerequisite**: `opa` ≥ 1.0 installed (step 1).
 
-**Commande** :
+**Command**:
 
 ```bash
 bash policies/gen_capabilities.sh
-# écrit policies/capabilities.json (gitignoré, jamais commité) et prouve
-# qu'une règle appelant http.send est refusée au chargement
+# writes policies/capabilities.json (gitignored, never committed) and proves
+# that a rule calling http.send is refused at load time
 ```
 
-**Critère de succès observable** : `vérification négative OK` affiché ;
-`capabilities.json` écrit ; les built-ins interdits (`http.send`,
-`net.lookup_ip_addr`, `time.now_ns`, `opa.runtime`) y sont absents.
+**Observable success criterion**: `vérification négative OK` displayed;
+`capabilities.json` written; the forbidden built-ins (`http.send`,
+`net.lookup_ip_addr`, `time.now_ns`, `opa.runtime`) are absent from it.
 
-**En cas d'échec : STOP** — si un interdit est « absent de la liste
-générée », la version d'OPA a changé : revoir FORBIDDEN avant tout
-déploiement. Ne jamais écrire capabilities.json à la main.
+**On failure: STOP** — if a forbidden built-in is "absent from the
+generated list", the OPA version has changed: review FORBIDDEN before any
+deployment. Never hand-write capabilities.json.
 
-#### Étape 4 — Compiler le bundle de règles AVEC les capabilities (OPA ≥ 1.0)
+#### Step 4 — Build the rule bundle WITH the capabilities (OPA ≥ 1.0)
 
-**Prérequis vérifiable** : étape 3 verte ; règles propres du pilote
-rédigées (les squelettes de `policies/rego/` sont des exemples à adapter,
-§14 — jamais une politique de référence à copier).
+**Verifiable prerequisite**: step 3 green; the pilot's own rules
+written (the skeletons in `policies/rego/` are examples to adapt,
+§14 — never a reference policy to copy).
 
-**Commande** :
+**Command**:
 
 ```bash
-# 'opa run' n'a PLUS de flag --capabilities depuis OPA 1.0 : la
-# restriction se fige à la compilation du bundle.
+# 'opa run' no longer has a --capabilities flag since OPA 1.0: the
+# restriction is frozen at bundle compile time.
 opa build --capabilities policies/capabilities.json policies/rego/ \
   -o /etc/tbp/bundle.tar.gz
-sha256sum /etc/tbp/bundle.tar.gz   # ce hash = TBP_POLICY_ID (claim −1)
+sha256sum /etc/tbp/bundle.tar.gz   # this hash = TBP_POLICY_ID (claim −1)
 ```
 
-**Critère de succès observable** : le build réussit ; une règle appelant
-`http.send` ajoutée à titre de test casse le build (retirer le test
-après).
+**Observable success criterion**: the build succeeds; a rule calling
+`http.send` added as a test breaks the build (remove the test
+afterwards).
 
-**En cas d'échec : STOP** — un bundle compilé sans capabilities n'impose
-rien à l'exécution ; ne pas contourner avec `opa run` sur les .rego nus.
+**On failure: STOP** — a bundle compiled without capabilities imposes
+nothing at execution; do not work around it with `opa run` on bare .rego files.
 
-#### Étape 5 — Lancer OPA en serveur local (bundle uniquement)
+#### Step 5 — Run OPA as a local server (bundle only)
 
-**Prérequis vérifiable** : étape 4 verte ; bundle présent.
+**Verifiable prerequisite**: step 4 green; bundle present.
 
-**Commande** :
+**Command**:
 
 ```bash
 opa run --server --addr 127.0.0.1:8181 /etc/tbp/bundle.tar.gz &
 curl -s http://127.0.0.1:8181/health
 ```
 
-**Critère de succès observable** : `/health` répond 200 ; OPA n'écoute
-QUE sur loopback (seul pepd l'appelle — pas d'exposition réseau).
+**Observable success criterion**: `/health` answers 200; OPA listens
+ONLY on loopback (pepd alone calls it — no network exposure).
 
-**En cas d'échec : STOP** — lire le log OPA ; un bundle invalide ou un
-port déjà pris se corrigent avant pepd, jamais après.
+**On failure: STOP** — read the OPA log; an invalid bundle or an
+already-taken port gets fixed before pepd, never after.
 
-#### Étape 6 — Démarrer pepd en mode monitor (§5.3)
+#### Step 6 — Start pepd in monitor mode (§5.3)
 
-**Prérequis vérifiable** : étapes 2 et 5 vertes ; keyring des émetteurs
-de la cellule installé (JSON `{"kid_hex": "pubkey_ed25519_hex"}`, kid de
-16 octets) ; sel de cellule généré localement (≥ 16 octets, reste ici) ;
-`/etc/tbp/pepd.env` en 0600, propriété du service.
+**Verifiable prerequisite**: steps 2 and 5 green; the cell's issuer
+keyring installed (JSON `{"kid_hex": "pubkey_ed25519_hex"}`, 16-byte
+kid); cell salt generated locally (≥ 16 bytes, stays here);
+`/etc/tbp/pepd.env` at 0600, owned by the service.
 
-**Commande** :
+**Command**:
 
 ```bash
-# /etc/tbp/pepd.env — valeurs d'exemple, à adapter à la cellule :
+# /etc/tbp/pepd.env — example values, to adapt to the cell:
 #   TBP_CELL_ID=cell-a
-#   TBP_SALT=<hex 32 car. — généré localement, jamais partagé>
+#   TBP_SALT=<32-char hex — generated locally, never shared>
 #   TBP_KEYRING_FILE=/etc/tbp/keyring.json
-#   TBP_POLICY_ID=<sha256 du bundle, étape 4>
+#   TBP_POLICY_ID=<sha256 of the bundle, step 4>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
 #   TBP_LISTEN_ADDR=127.0.0.1:8443
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
 #   TBP_QUORUM_MIN=2
-#   TBP_DURABILITY=async-bounded   # défaut (T38/#71) : verdict à
-#                                  # l'acceptation, rattrapage borné ;
-#                                  # "sync" = ancien chemin synchrone
-#   TBP_DURABILITY_WINDOW_MS=1000  # fenêtre d'opposabilité (défaut 1 s ;
-#                                  # plancher 4 × intervalle de checkpoint)
+#   TBP_DURABILITY=async-bounded   # default (T38/#71): verdict at
+#                                  # acceptance, bounded catch-up;
+#                                  # "sync" = former synchronous path
+#   TBP_DURABILITY_WINDOW_MS=1000  # opposability window (default 1 s;
+#                                  # floor 4 × checkpoint interval)
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s http://127.0.0.1:8443/healthz
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Critère de succès observable** : `/healthz` répond 200 ;
-`GET /v1/mode` rend `{"mode":"monitor"}` — pepd démarre TOUJOURS en
-monitor, la bascule closed est gouvernée (étape 8 et
-[monitor-to-closed.md](monitor-to-closed.md)) ; au premier démarrage,
-`cell_log.key` (0600) et `cell_log.vkey` sont créés dans
-`TBP_REGISTRY_DIR` (clé de registre de LA cellule — custody D97).
+**Observable success criterion**: `/healthz` answers 200;
+`GET /v1/mode` returns `{"mode":"monitor"}` — pepd ALWAYS starts in
+monitor, the closed switch is governed (step 8 and
+[monitor-to-closed.md](monitor-to-closed.md)); on first startup,
+`cell_log.key` (0600) and `cell_log.vkey` are created in
+`TBP_REGISTRY_DIR` (registry key of THE cell — D97 custody).
 
-**En cas d'échec : STOP** — un démarrage sans keyring, sans policy ID ou
-sans sel doit échouer ; s'il réussit, le binaire n'est pas celui du
-dépôt. Le mode closed N'EST PAS l'objectif de cette étape.
+**On failure: STOP** — a startup without keyring, without policy ID or
+without salt must fail; if it succeeds, the binary is not the one from
+the repo. Closed mode IS NOT the goal of this step.
 
-#### Étape 7 — Compiler et démarrer brokerd (chaîne de décision complète, T37)
+#### Step 7 — Build and start brokerd (full decision chain, T37)
 
-**Prérequis vérifiable** : étape 6 verte ; artefacts de genèse (étape 1)
-en place (`manifest.json` + `epoch0.json` sous `$GENESIS_HOME`) ; clés
-PUBLIQUES d'opérateurs du store de contrats installées (T30 — JSON
-`["pubkey_ed25519_hex", …]`, ≥ 1) ; seed émetteur de DEV en 0600
-(custody §12 : labo P1 uniquement — la clé de gouvernance réelle vit
-dans le HSM, la couture Signer est déjà HSM-ready) ; sel du broker
-généré localement (≥ 16 octets, reste ici — la chaîne du broker est la
-SIENNE, distincte de celle de pepd).
+**Verifiable prerequisite**: step 6 green; genesis artefacts (step 1)
+in place (`manifest.json` + `epoch0.json` under `$GENESIS_HOME`); PUBLIC
+operator keys from the contract store installed (T30 — JSON
+`["pubkey_ed25519_hex", …]`, ≥ 1); DEV issuer seed at 0600
+(§12 custody: P1 lab only — the real governance key lives
+in the HSM, the Signer seam is already HSM-ready); broker salt
+generated locally (≥ 16 bytes, stays here — the broker's chain is its
+OWN, distinct from pepd's).
 
-**Commande** :
+**Command**:
 
 ```bash
 go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
-/usr/local/bin/brokerd 2>&1 | head -1   # sans environnement : doit refuser
+/usr/local/bin/brokerd 2>&1 | head -1   # without environment: must refuse
 
-# /etc/tbp/brokerd.env (0600, propriété du service) — valeurs d'exemple,
-# à adapter à la cellule :
+# /etc/tbp/brokerd.env (0600, owned by the service) — example values,
+# to adapt to the cell:
 #   TBP_CELL_ID=cell-a
-#   TBP_SALT=<hex 32 car. — sel de la chaîne DU BROKER, généré ici>
-#   TBP_POLICY_ID=<sha256 du bundle, étape 4>
+#   TBP_SALT=<32-char hex — salt of the BROKER's chain, generated here>
+#   TBP_POLICY_ID=<sha256 of the bundle, step 4>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/broker
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
 #   TBP_TRANSLATOR=structured
@@ -187,56 +189,56 @@ systemctl daemon-reload && systemctl enable --now tbp-brokerd
 curl -s --unix-socket /run/tbp/broker.sock http://localhost/v1/supervision/epoch
 ```
 
-**Critère de succès observable** : le binaire se construit ; lancé sans
-environnement, il sort immédiatement avec `brokerd: TBP_CELL_ID requis`
-(fail-closed au démarrage — ce refus EST le critère) ; le service est
-actif ; le socket Unix répond en GET seul :
-`/v1/supervision/epoch` rend l'époque 0 et l'autorité de la cellule,
-`/v1/supervision/arbitration` rend le `policy_id` du bundle (étape 4)
-et une file d'arbitrage, `/v1/supervision/stats` les compteurs du
-broker ; un POST sur ces vues reçoit 405. Au premier démarrage,
-`cell_log.key` (0600) et `cell_log.vkey` sont créés dans
-`TBP_REGISTRY_DIR` — la chaîne du broker est la sienne (§7.1).
+**Observable success criterion**: the binary builds; launched without
+environment, it exits immediately with `brokerd: TBP_CELL_ID requis`
+(fail-closed at startup — this refusal IS the criterion); the service is
+active; the Unix socket answers in GET only:
+`/v1/supervision/epoch` returns epoch 0 and the cell's authority,
+`/v1/supervision/arbitration` returns the bundle's `policy_id` (step 4)
+and an arbitration queue, `/v1/supervision/stats` the broker's
+counters; a POST on these views gets 405. On first startup,
+`cell_log.key` (0600) and `cell_log.vkey` are created in
+`TBP_REGISTRY_DIR` — the broker's chain is its own (§7.1).
 
-**En cas d'échec : STOP** — un brokerd qui démarre sans sel, sans
-genèse, sans OPA ou sans clés d'opérateurs est fail-open : corriger la
-cause, ne jamais contourner. Un `epoch0` refusé signifie une genèse qui
-ne correspond pas au manifest : refaire la distribution (étape 1),
-jamais bricoler le jeton à la main.
+**On failure: STOP** — a brokerd that starts without salt, without
+genesis, without OPA or without operator keys is fail-open: fix the
+cause, never work around it. A refused `epoch0` means a genesis that
+does not match the manifest: redo the distribution (step 1),
+never hand-tinker the token.
 
-#### Étape 8 — Points de mesure §9.1 AVANT toute bascule (D100)
+#### Step 8 — §9.1 measurement points BEFORE any switch (D100)
 
-**Prérequis vérifiable** : étapes 6-7 vertes ; la cellule tourne en
-monitor depuis une fenêtre d'observation convenue avec le superviseur.
+**Verifiable prerequisite**: steps 6-7 green; the cell has been running in
+monitor for an observation window agreed with the supervisor.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Le harness T27 est la référence exécutable des points de mesure §9.1 :
+# The T27 harness is the executable reference for the §9.1 measurement points:
 go test ./tests/p1_friction/ -run . -count=1
-# Registre de la cellule : scan vérifié (checkpoint signé + Merkle) —
-# le moniteur indépendant (deploy/superviseur.md) le rejoue à distance.
+# Cell registry: verified scan (signed checkpoint + Merkle) —
+# the independent monitor (deploy/superviseur.md) replays it remotely.
 ```
 
-**Critère de succès observable** : métriques collectées (latences,
-would-deny, forwarded) ; le registre de la cellule contient des feuilles
-`KindDecision` en monitor (le trafic est journalisé, pas bloqué).
+**Observable success criterion**: metrics collected (latencies,
+would-deny, forwarded); the cell's registry contains
+`KindDecision` leaves in monitor (traffic is logged, not blocked).
 
-**En cas d'échec : STOP** — sans mesure, pas de closed : la bascule est
-la procédure [monitor-to-closed.md](monitor-to-closed.md), avec quorum.
+**On failure: STOP** — no measurement, no closed: the switch is
+the [monitor-to-closed.md](monitor-to-closed.md) procedure, with quorum.
 
-## Unités systemd
+## systemd units
 
-Patron de durcissement : `src/translator/tbp-translator.service` (T24 —
+Hardening pattern: `src/translator/tbp-translator.service` (T24 —
 cap-drop, seccomp `@system-service`, `ProtectSystem=strict`,
-`MemoryDenyWriteExecute`). L'unité du broker est LIVRÉE :
-`src/broker/tbp-brokerd.service` (T37 — registre propre seul inscriptible,
-aucun périphérique, W^X tenue). Reste à adapter sur le même patron :
-`pepd.service` et `opa.service`, avec `EnvironmentFile=/etc/tbp/pepd.env`
-(0600). Le script `src/translator/audit_confinement.sh` donne le motif de
-vérification post-déploiement, à adapter aux unités de la cellule.
+`MemoryDenyWriteExecute`). The broker's unit is DELIVERED:
+`src/broker/tbp-brokerd.service` (T37 — own registry alone writable,
+no devices, W^X enforced). Still to adapt on the same pattern:
+`pepd.service` and `opa.service`, with `EnvironmentFile=/etc/tbp/pepd.env`
+(0600). The `src/translator/audit_confinement.sh` script gives the
+post-deployment verification pattern, to adapt to the cell's units.
 
-## Durcissement système
+## System hardening
 
-`config/sysctl/99-tbp-hardening.conf` est un point de départ à adapter au
-noyau et à la carte réseau locaux — jamais copié tel quel (D99).
+`config/sysctl/99-tbp-hardening.conf` is a starting point to adapt to the
+local kernel and network card — never copied as-is (D99).

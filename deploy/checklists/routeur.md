@@ -1,35 +1,37 @@
-# Checklist de recette — routeur (T35, issue #61)
+# Acceptance checklist — router (T35, issue #61)
 
-À cocher sur la machine, dans l'ordre. Une case rouge = STOP.
+_Version française : [routeur.fr.md](routeur.fr.md)._
+
+To be checked on the machine, in order. One red box = STOP.
 
 ## §5.1 Segmentation
 
-- [ ] Les six VLANs existent et sont `UP` (10 serveur, 20 auth, 33 IoT/MAB,
-      66 captif, 77 remédiation, 99 mgmt — plan à adapter au pilote).
-- [ ] `nft list table inet tbp_p1` montre les murs et leurs compteurs
-      (fichier de référence `config/nftables/router-p1.nft`, à adapter).
-- [ ] Les compteurs bougent quand le trafic traverse (visibilité avant
-      filtrage — même doctrine que monitor avant closed, §5.3).
+- [ ] The six VLANs exist and are `UP` (10 server, 20 auth, 33 IoT/MAB,
+      66 captive, 77 remediation, 99 mgmt — plan to adapt to the pilot).
+- [ ] `nft list table inet tbp_p1` shows the walls and their counters
+      (reference file `config/nftables/router-p1.nft`, to adapt).
+- [ ] The counters move when traffic crosses (visibility before
+      filtering — same doctrine as monitor before closed, §5.3).
 
-## §3/§12 Authentification
+## §3/§12 Authentication
 
-- [ ] EAP-TLS uniquement (pas de PEAP/MSCHAP), PKI du pilote (§3).
-- [ ] `freeradius -XC` vert ; RADIUS n'écoute que sur le VLAN auth.
-- [ ] Aucun certificat/clé n'est commité (`config/freeradius/certs/` est
-      gitignoré ; la PKI se génère pour CE déploiement).
+- [ ] EAP-TLS only (no PEAP/MSCHAP), pilot PKI (§3).
+- [ ] `freeradius -XC` green; RADIUS listens only on the auth VLAN.
+- [ ] No certificate/key is committed (`config/freeradius/certs/` is
+      gitignored; the PKI is generated for THIS deployment).
 
-## Fail-closed au switch
+## Fail-closed at the switch
 
-- [ ] VLAN par défaut = captif (66) : un inconnu n'est JAMAIS admis.
-- [ ] Certificat révoqué ou OCSP/CRL injoignable = remédiation (77),
-      observé avec un certificat de test révoqué.
-- [ ] Les trois issues (admis → 10, inconnu → 66, révoqué → 77) ont été
-      OBSERVÉES en lab, pas supposées (router-debian.md étape 7).
+- [ ] Default VLAN = captive (66): an unknown device is NEVER admitted.
+- [ ] Revoked certificate or unreachable OCSP/CRL = remediation (77),
+      observed with a revoked test certificate.
+- [ ] All three outcomes (admitted → 10, unknown → 66, revoked → 77) have been
+      OBSERVED in the lab, not assumed (router-debian.md step 7).
 
-## MAB (équipements sans supplicant 802.1X)
+## MAB (devices without an 802.1X supplicant)
 
-- [ ] Le MAB est confiné au VLAN IoT dédié (33) — jamais sur un VLAN de
-      confiance.
-- [ ] Chaque admission MAB est journalisée et comptée : un équipement MAB
-      **jamais silencieux** — canal instrumenté, pas une porte dérobée.
-- [ ] Un équipement MAB inconnu tombe en captif comme tout inconnu.
+- [ ] MAB is confined to the dedicated IoT VLAN (33) — never on a trusted
+      VLAN.
+- [ ] Every MAB admission is logged and counted: a MAB device
+      **never silent** — instrumented channel, not a backdoor.
+- [ ] An unknown MAB device falls to captive like any unknown.

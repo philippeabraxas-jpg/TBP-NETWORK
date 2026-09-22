@@ -1,175 +1,177 @@
-# deploy/router-debian.md — machine « routeur » (T35, issue #61)
+# deploy/router-debian.md — "router" machine (T35, issue #61)
 
-Le routeur est le point d'entrée réseau (§5.1) : NAC 802.1X (FreeRADIUS
-EAP-TLS, même PKI que le handshake §3), segmentation VLAN, murs nftables
-entre segments. Doctrine : **fail-closed au switch** — le VLAN par défaut
-est le VLAN captif, jamais un VLAN de confiance ; un équipement non authentifié
-ne devient jamais silencieusement un équipement admis.
+_Version française : [router-debian.fr.md](router-debian.fr.md)._
 
-Segments du pilote P1 (§5.1, config à adapter) :
+The router is the network entry point (§5.1): NAC 802.1X (FreeRADIUS
+EAP-TLS, same PKI as the §3 handshake), VLAN segmentation, nftables walls
+between segments. Doctrine: **fail-closed at the switch** — the default
+VLAN is the captive VLAN, never a trusted VLAN; an unauthenticated device
+never silently becomes an admitted device.
 
-| VLAN | Rôle | Doctrine |
+P1 pilot segments (§5.1, config to adapt):
+
+| VLAN | Role | Doctrine |
 |---|---|---|
-| 10 | serveurs + cellules | trafic gouverné (PEP/broker) |
-| 20 | authentification | EAP/RADIUS uniquement |
-| 33 | IoT / MAB | canal instrumenté — JAMAIS silencieux (checklist) |
-| 66 | captif | VLAN par défaut (échec/sans auth) |
-| 77 | remédiation | certificat révoqué, OCSP/CRL injoignable |
-| 99 | management | administration hors production |
+| 10 | servers + cells | governed traffic (PEP/broker) |
+| 20 | authentication | EAP/RADIUS only |
+| 33 | IoT / MAB | instrumented channel — NEVER silent (checklist) |
+| 66 | captive | default VLAN (failure/no auth) |
+| 77 | remediation | revoked certificate, unreachable OCSP/CRL |
+| 99 | management | out-of-production administration |
 
-#### Étape 1 — Prérequis machine
+#### Step 1 — Machine prerequisites
 
-**Prérequis vérifiable** : Debian 12, ≥ 2 interfaces, accès root ; étapes
-communes de [README.md](README.md) vertes ; les cellules et serveurs
-sont déjà en monitor (le NAC est le DERNIER maillon, ordre §13).
+**Verifiable prerequisite**: Debian 12, ≥ 2 interfaces, root access; common
+steps of [README.md](README.md) green; cells and servers
+are already in monitor (the NAC is the LAST link, §13 order).
 
-**Commande** :
+**Command**:
 
 ```bash
 lsb_release -d; ip -brief link; command -v nft freeradius hostapd
 ```
 
-**Critère de succès observable** : Debian 12 ; interfaces listées ;
-`nft`, `freeradius` présents (installer sinon).
+**Observable success criterion**: Debian 12; interfaces listed;
+`nft`, `freeradius` present (install otherwise).
 
-**En cas d'échec : STOP** — pas de nftables/FreeRADIUS, pas de NAC ;
-installer avant toute règle.
+**On failure: STOP** — no nftables/FreeRADIUS, no NAC;
+install before any rule.
 
-#### Étape 2 — Créer les VLANs §5.1
+#### Step 2 — Create the §5.1 VLANs
 
-**Prérequis vérifiable** : étape 1 verte ; plan d'adressage du pilote
-arrêté (le fichier config est à adapter, pas à copier).
+**Verifiable prerequisite**: step 1 green; the pilot's addressing plan
+settled (the config file is to adapt, not to copy).
 
-**Commande** :
+**Command**:
 
 ```bash
-# À adapter : noms d'interfaces, VLAN IDs, plan d'adressage —
-# config/nftables/router-p1.nft est le point de départ à adapter (D99) :
-ip link add link eth0 name eth0.10 type vlan id 10    # serveur
+# To adapt: interface names, VLAN IDs, addressing plan —
+# config/nftables/router-p1.nft is the starting point to adapt (D99):
+ip link add link eth0 name eth0.10 type vlan id 10    # server
 ip link add link eth0 name eth0.20 type vlan id 20    # auth
 ip link add link eth0 name eth0.33 type vlan id 33    # IoT/MAB
-ip link add link eth0 name eth0.66 type vlan id 66    # captif
-ip link add link eth0 name eth0.77 type vlan id 77    # remédiation
+ip link add link eth0 name eth0.66 type vlan id 66    # captive
+ip link add link eth0 name eth0.77 type vlan id 77    # remediation
 ip link add link eth0 name eth0.99 type vlan id 99    # mgmt
 ip -brief link | grep -c eth0.
 ```
 
-**Critère de succès observable** : les six sous-interfaces existent et
-sont `UP` après adressage.
+**Observable success criterion**: all six sub-interfaces exist and
+are `UP` after addressing.
 
-**En cas d'échec : STOP** — « Operation not supported » = noyau sans
-802.1Q ou conteneur sans CAP_NET_ADMIN : corriger l'hôte, ne pas
-« simplifier » le plan de segmentation.
+**On failure: STOP** — "Operation not supported" = kernel without
+802.1Q or container without CAP_NET_ADMIN: fix the host, do not
+"simplify" the segmentation plan.
 
-#### Étape 3 — Installer les murs nftables
+#### Step 3 — Install the nftables walls
 
-**Prérequis vérifiable** : étape 2 verte.
+**Verifiable prerequisite**: step 2 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# À adapter : table inet tbp_p1, compteurs par voie (mur_captif_serveur,
-# mur_iot_serveur, voie_auth_serveur…) — le fichier de référence est à
-# adapter au plan local (D99) :
-nft -c -f /etc/nftables/tbp-p1.nft   # vérification syntaxique d'abord
+# To adapt: table inet tbp_p1, per-path counters (mur_captif_serveur,
+# mur_iot_serveur, voie_auth_serveur…) — the reference file is to
+# adapt to the local plan (D99):
+nft -c -f /etc/nftables/tbp-p1.nft   # syntax check first
 nft -f /etc/nftables/tbp-p1.nft
 nft list table inet tbp_p1 | grep -c counter
 ```
 
-**Critère de succès observable** : la table est chargée ; les compteurs
-par voie existent (tout paquet traversant un mur est compté — la
-visibilité précède le filtrage, comme monitor précède closed §5.3).
+**Observable success criterion**: the table is loaded; the per-path
+counters exist (every packet crossing a wall is counted —
+visibility precedes filtering, as monitor precedes closed §5.3).
 
-**En cas d'échec : STOP** — `nft -c` rouge = syntaxe à corriger ; ne
-jamais charger un fichier non vérifié (couperait le management).
+**On failure: STOP** — red `nft -c` = syntax to fix; never
+load an unverified file (it would cut off management).
 
-#### Étape 4 — FreeRADIUS en EAP-TLS sur la PKI §3
+#### Step 4 — FreeRADIUS in EAP-TLS on the §3 PKI
 
-**Prérequis vérifiable** : étape 3 verte ; PKI du pilote issue de §3 —
-les fichiers de config/freeradius/ sont un point de départ à adapter
-(D99) et `config/freeradius/certs/` est gitignoré — config à adapter,
-certificats jamais commités : ils se génèrent pour CE déploiement.
+**Verifiable prerequisite**: step 3 green; pilot PKI from §3 —
+the config/freeradius/ files are a starting point to adapt
+(D99) and `config/freeradius/certs/` is gitignored — config to adapt,
+certificates never committed: they are generated for THIS deployment.
 
-**Commande** :
+**Command**:
 
 ```bash
-# À adapter : mods-enabled/eap (tls-config), clients.conf (switch),
-# sites-enabled/default. EAP-TLS uniquement — pas de PEAP/MSCHAP.
-freeradius -XC   # vérification de configuration
+# To adapt: mods-enabled/eap (tls-config), clients.conf (switch),
+# sites-enabled/default. EAP-TLS only — no PEAP/MSCHAP.
+freeradius -XC   # configuration check
 systemctl start freeradius && ss -lunp | grep 1812
 ```
 
-**Critère de succès observable** : `freeradius -XC` conclut «
-configuration appears to be OK » ; RADIUS écoute en UDP/1812 sur le VLAN
-auth (20) uniquement.
+**Observable success criterion**: `freeradius -XC` concludes "
+configuration appears to be OK"; RADIUS listens on UDP/1812 on the
+auth VLAN (20) only.
 
-**En cas d'échec : STOP** — une config RADIUS invalide ne se « teste »
-pas en production : corriger en `-XC` jusqu'au vert.
+**On failure: STOP** — an invalid RADIUS config is not "tested"
+in production: fix in `-XC` until green.
 
-#### Étape 5 — Politique d'échec : captif ou remédiation, jamais confiance
+#### Step 5 — Failure policy: captive or remediation, never trust
 
-**Prérequis vérifiable** : étape 4 verte.
+**Verifiable prerequisite**: step 4 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Au switch (802.1X) : VLAN par défaut = 66 (captif) ; certificat révoqué
-# ou OCSP/CRL injoignable = 77 (remédiation) — cf. config/freeradius/ (à adapter).
-# Le MAB (équipements sans supplicant) est configuré
-# sur le VLAN 33 : canal instrumenté, journalisé, JAMAIS silencieux —
-# item dédié de checklists/routeur.md.
-radtest -x -t eap-tls …  # à adapter au supplicant de test du pilote
+# At the switch (802.1X): default VLAN = 66 (captive); revoked certificate
+# or unreachable OCSP/CRL = 77 (remediation) — cf. config/freeradius/ (to adapt).
+# MAB (devices without supplicant) is configured
+# on VLAN 33: instrumented channel, logged, NEVER silent —
+# dedicated item in checklists/routeur.md.
+radtest -x -t eap-tls …  # to adapt to the pilot's test supplicant
 ```
 
-**Critère de succès observable** : un supplicant valide obtient le VLAN
-10 ; un inconnu tombe en 66 ; un révoqué en 77 — les trois issues sont
-observées, pas supposées.
+**Observable success criterion**: a valid supplicant gets VLAN
+10; an unknown one lands in 66; a revoked one in 77 — all three outcomes are
+observed, not assumed.
 
-**En cas d'échec : STOP** — si l'échec d'authentification admet quand
-même (VLAN de confiance par défaut), le switch est fail-open : corriger
-la politique avant tout branchement.
+**On failure: STOP** — if authentication failure admits anyway
+(trusted default VLAN), the switch is fail-open: fix
+the policy before any connection.
 
-#### Étape 6 — Redirection vers le PEP
+#### Step 6 — Redirection to the PEP
 
-**Prérequis vérifiable** : étapes 2-5 vertes ; pepd en monitor sur les
-serveurs (serveur.md).
+**Verifiable prerequisite**: steps 2-5 green; pepd in monitor on the
+servers (serveur.md).
 
-**Commande** :
+**Command**:
 
 ```bash
-# À adapter : config/nftables/pep-redirect.nft — redirection du trafic
-# du VLAN 10 vers le PEP de la cellule (D99).
+# To adapt: config/nftables/pep-redirect.nft — redirection of VLAN 10
+# traffic to the cell's PEP (D99).
 nft -c -f /etc/nftables/pep-redirect.nft && nft -f /etc/nftables/pep-redirect.nft
 nft list table inet tbp_p1 | grep -c redirect
 ```
 
-**Critère de succès observable** : les règles de redirection sont
-chargées ; en monitor, le trafic est journalisé par le PEP (feuilles
-`KindDecision`) sans être bloqué.
+**Observable success criterion**: the redirection rules are
+loaded; in monitor, traffic is logged by the PEP (`KindDecision`
+leaves) without being blocked.
 
-**En cas d'échec : STOP** — une redirection vers un PEP absent casse le
-service ; vérifier pepd d'abord (serveur.md étape 2).
+**On failure: STOP** — a redirection to an absent PEP breaks the
+service; verify pepd first (serveur.md step 2).
 
-#### Étape 7 — Rejouer le scénario en lab avant la production
+#### Step 7 — Replay the scenario in the lab before production
 
-**Prérequis vérifiable** : étapes 2-6 vertes ; machine de lab avec root +
-CAP_NET_ADMIN, ou containerlab (`lab/containerlab/p1.clab.yml` décrit la
-topologie P1 : routeur, switch, radius, cell-a, cell-b, hostapd filaire).
+**Verifiable prerequisite**: steps 2-6 green; lab machine with root +
+CAP_NET_ADMIN, or containerlab (`lab/containerlab/p1.clab.yml` describes the
+P1 topology: router, switch, radius, cell-a, cell-b, wired hostapd).
 
-**Commande** :
+**Command**:
 
 ```bash
-# Honnêteté de sandbox (constaté à la relecture) : selon l'hôte,
-#   unshare -n -- true   → « Operation not permitted » (sans CAP_NET_ADMIN)
-# ou réussit puis casse plus tard (VLAN « Operation not supported »,
-# bind IPv6 FreeRADIUS). Les deux causes sont réelles ; le lab lève les
-# deux. En containerlab :
-containerlab deploy -t lab/containerlab/p1.clab.yml   # lab uniquement
+# Sandbox honesty (observed at review time): depending on the host,
+#   unshare -n -- true   → "Operation not permitted" (without CAP_NET_ADMIN)
+# or succeeds then breaks later (VLAN "Operation not supported",
+# FreeRADIUS IPv6 bind). Both causes are real; the lab removes
+# both. In containerlab:
+containerlab deploy -t lab/containerlab/p1.clab.yml   # lab only
 ```
 
-**Critère de succès observable** : le scénario EAP-TLS complet (admis →
-VLAN 10, inconnu → captif, révoqué → remédiation) est rejoué en lab avec
-les compteurs nftables qui bougent.
+**Observable success criterion**: the full EAP-TLS scenario (admitted →
+VLAN 10, unknown → captive, revoked → remediation) is replayed in the lab with
+the nftables counters moving.
 
-**En cas d'échec : STOP** — ne pas promouvoir en production une politique
-jamais rejouée ; le lab est le dernier prérequis avant le pilote miroir.
+**On failure: STOP** — do not promote to production a policy
+never replayed; the lab is the last prerequisite before the mirror pilot.

@@ -1,130 +1,132 @@
-# deploy/monitor-to-closed.md — bascule gouvernée §5.3 (T35, issue #61)
+# deploy/monitor-to-closed.md — governed §5.3 switch (T35, issue #61)
 
-Le mode **closed** ne s'installe pas : il se **mérite**. La posture de
-démarrage est monitor partout (§5.3) ; la bascule exige les points de
-mesure §9.1 installés et alimentés (D100), une fenêtre d'observation, et
-un **quorum** — un opérateur seul ne peut pas fermer le réseau
-(démontré par la phase mono du selftest : 1 signataire → 403, quorum →
+_Version française : [monitor-to-closed.fr.md](monitor-to-closed.fr.md)._
+
+**Closed** mode is not installed: it is **earned**. The startup
+posture is monitor everywhere (§5.3); the switch requires the §9.1
+measurement points installed and fed (D100), an observation window, and
+a **quorum** — a single operator cannot close the network
+(demonstrated by the selftest's mono phase: 1 signer → 403, quorum →
 200).
 
-> MAB : voir [checklists/routeur.md](checklists/routeur.md) — le MAB est
-> une affaire NAC/switch (machine routeur), pas de posture PEP. La
-> doctrine partagée est « jamais silencieux » : ni un équipement MAB non
-> journalisé, ni une bascule non tracée (feuille `KindTelemetry`, §4.1).
+> MAB: see [checklists/routeur.md](checklists/routeur.md) — MAB is
+> a NAC/switch matter (router machine), not a PEP posture. The
+> shared doctrine is "never silent": neither an unlogged MAB device,
+> nor an untraced switch (`KindTelemetry` leaf, §4.1).
 
-#### Étape 1 — Vérifier que la mesure précède la posture (D100)
+#### Step 1 — Verify that measurement precedes posture (D100)
 
-**Prérequis vérifiable** : toutes les machines en monitor (cellule.md,
-serveur.md) depuis la fenêtre d'observation convenue ; le superviseur
-collecte les feuilles des cellules (superviseur.md étape 4).
+**Verifiable prerequisite**: all machines in monitor (cellule.md,
+serveur.md) for the agreed observation window; the supervisor
+collects the cells' leaves (superviseur.md step 4).
 
-**Commande** :
+**Command**:
 
 ```bash
-# Référence exécutable des points de mesure §9.1 (T27) :
+# Executable reference for the §9.1 measurement points (T27):
 go test ./tests/p1_friction/ -count=1
-# Sur chaque PEP :
-curl -s http://127.0.0.1:8443/v1/mode    # attendu : {"mode":"monitor"}
+# On each PEP:
+curl -s http://127.0.0.1:8443/v1/mode    # expected: {"mode":"monitor"}
 ```
 
-**Critère de succès observable** : les points de mesure §9.1 (forwarded,
-would-deny, denied, latences p50/p99) sont installés ET alimentés ; le
-registre de chaque cellule montre des feuilles `KindDecision` en monitor
-(une évaluation allow = verdict + passeport, §4.1-bis — mesuré par le
+**Observable success criterion**: the §9.1 measurement points (forwarded,
+would-deny, denied, p50/p99 latencies) are installed AND fed; each
+cell's registry shows `KindDecision` leaves in monitor
+(an allow evaluation = verdict + passport, §4.1-bis — measured by the
 selftest).
 
-**En cas d'échec : STOP** — sans mesure alimentée, aucune demande de
-closed ; « on verra après » est exactement ce que §5.3 interdit.
+**On failure: STOP** — without fed measurement, no
+closed request; "we'll see afterwards" is exactly what §5.3 forbids.
 
-#### Étape 2 — Lire la fenêtre d'observation
+#### Step 2 — Read the observation window
 
-**Prérequis vérifiable** : étape 1 verte.
+**Verifiable prerequisite**: step 1 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Pour chaque cellule : compter les would-deny de la fenêtre (verdicts
-# deny journalisés en monitor). Chaque would-deny est un flux qui AURAIT
-# été bloqué en closed — chacun doit être expliqué ou accepté
-# explicitement avant la bascule.
-go run ./deploy/selftest -phase mono   # montre would-deny sur témoin write
+# For each cell: count the window's would-denies (deny verdicts
+# logged in monitor). Every would-deny is a flow that WOULD HAVE
+# been blocked in closed — each must be explained or explicitly
+# accepted before the switch.
+go run ./deploy/selftest -phase mono   # shows would-deny on the write witness
 ```
 
-**Critère de succès observable** : liste des would-deny de la fenêtre,
-chacun classé (légitime / à corriger / règle à adapter dans les policies
-propres du pilote, §14).
+**Observable success criterion**: list of the window's would-denies,
+each classified (legitimate / to fix / rule to adapt in the pilot's
+own policies, §14).
 
-**En cas d'échec : STOP** — un would-deny inexpliqué bloque la bascule ;
-fermer sans l'expliquer, c'est aveugler le réseau.
+**On failure: STOP** — an unexplained would-deny blocks the switch;
+closing without explaining it means blinding the network.
 
-#### Étape 3 — Demander la bascule au quorum (par PEP)
+#### Step 3 — Request the switch from the quorum (per PEP)
 
-**Prérequis vérifiable** : étapes 1-2 vertes ; les signataires sont
-prévenus et joignables ; la fenêtre de rollback (étape 4) est décidée.
+**Verifiable prerequisite**: steps 1-2 green; the signers are
+notified and reachable; the rollback window (step 4) is decided.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Le vérificateur de quorum actuel compte les signataires (TBP_QUORUM_MIN,
-# défaut 2) — la crypto de quorum est une phase ultérieure, la couture est
-# en place. 1 signataire DOIT échouer :
+# The current quorum verifier counts signers (TBP_QUORUM_MIN,
+# default 2) — quorum crypto is a later phase, the seam is
+# in place. 1 signer MUST fail:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1"]}'
-# attendu : 403. Puis, quorum réuni :
+# expected: 403. Then, quorum assembled:
 curl -s -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' \
   -d '{"mode":"closed","signers":["op-1","op-2"]}'
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Critère de succès observable** : 403 sans quorum, 200 avec ;
-`GET /v1/mode` rend `{"mode":"closed"}` ; la bascule laisse une feuille
-`KindTelemetry` dans le registre de la cellule (comptée par le selftest).
+**Observable success criterion**: 403 without quorum, 200 with;
+`GET /v1/mode` returns `{"mode":"closed"}`; the switch leaves a
+`KindTelemetry` leaf in the cell's registry (counted by the selftest).
 
-**En cas d'échec : STOP** — un 200 sans quorum = vérificateur cassé :
-rester en monitor et corriger ; un 403 avec quorum = signataires
-insuffisants, refaire la demande proprement.
+**On failure: STOP** — a 200 without quorum = broken verifier:
+stay in monitor and fix; a 403 with quorum = insufficient
+signers, redo the request properly.
 
-#### Étape 4 — Observer en closed, rollback prêt
+#### Step 4 — Observe in closed, rollback ready
 
-**Prérequis vérifiable** : étape 3 verte.
+**Verifiable prerequisite**: step 3 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# En closed, un veto OPA bloque : forwarded=false (démontré par la phase
-# mono du selftest). Surveiller denied et les alarmes fail-closed (T14).
-# Rollback = bascule gouvernée inverse :
+# In closed, an OPA veto blocks: forwarded=false (demonstrated by the
+# selftest's mono phase). Watch denied and the fail-closed alarms (T14).
+# Rollback = the reverse governed switch:
 curl -s -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' \
   -d '{"mode":"monitor","signers":["op-1","op-2"]}'
 ```
 
-**Critère de succès observable** : les denies en closed correspondent aux
-would-deny classés à l'étape 2 — aucune surprise ; le rollback rend
-`{"mode":"monitor"}` et laisse sa feuille.
+**Observable success criterion**: the denies in closed match the
+would-denies classified at step 2 — no surprise; the rollback returns
+`{"mode":"monitor"}` and leaves its leaf.
 
-**En cas d'échec : STOP** — un deny inattendu en closed = rollback
-immédiat, analyse au registre, nouvelle fenêtre d'observation.
+**On failure: STOP** — an unexpected deny in closed = immediate
+rollback, analysis at the registry, new observation window.
 
-#### Étape 5 — Généraliser cellule par cellule
+#### Step 5 — Generalize cell by cell
 
-**Prérequis vérifiable** : étape 4 stable sur la première cellule pendant
-la durée convenue.
+**Verifiable prerequisite**: step 4 stable on the first cell for
+the agreed duration.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Rejouer les étapes 1-4 par cellule — jamais en vague. Le fencing §7.2
-# garantit qu'une époque révoquée (roster, §7.3) invalide les jetons
-# pré-émis par incrément : la révocation d'une cellule compromise est
-# démontrée par la phase fencing du selftest.
+# Replay steps 1-4 per cell — never as a wave. §7.2 fencing
+# guarantees that a revoked epoch (roster, §7.3) invalidates
+# pre-issued tokens by increment: revoking a compromised cell is
+# demonstrated by the selftest's fencing phase.
 go run ./deploy/selftest -phase fencing
 ```
 
-**Critère de succès observable** : chaque cellule passe en closed avec
-son quorum, sa fenêtre, ses feuilles — la dernière cellule est aussi
-prouvée que la première.
+**Observable success criterion**: each cell switches to closed with
+its quorum, its window, its leaves — the last cell is as
+proven as the first.
 
-**En cas d'échec : STOP** — une cellule qui déroge reste en monitor ; la
-campagne continue ailleurs, elle se traite au registre.
+**On failure: STOP** — a cell that deviates stays in monitor; the
+campaign continues elsewhere, that one is handled at the registry.

@@ -1,66 +1,68 @@
-# Déploiement multi-machine (T35, issue #61)
+# Multi-machine deployment (T35, issue #61)
 
-Guides de déploiement du réseau TBP à l'échelle : rôles par machine, ordre
-d'installation (§13), instructions côté serveur (§5.1). Public visé : un
-opérateur **non-auteur** — chaque étape porte un prérequis vérifiable, un
-critère de succès observable, et un « En cas d'échec : STOP ». Ne jamais
-continuer après un prérequis rouge.
+_Version française : [README.fr.md](README.fr.md)._
 
-**Commencer par la vue d'ensemble** — quoi, où, pourquoi, prérequis :
-[apercu.md](apercu.md). Revenir ici pour l'ordre d'installation, la
-custody des clés et les étapes communes.
+Deployment guides for the TBP network at scale: roles per machine,
+installation order (§13), server-side instructions (§5.1). Target audience:
+a **non-author** operator — every step carries a verifiable prerequisite,
+an observable success criterion, and an "On failure: STOP". Never
+continue after a red prerequisite.
 
-## Rôles et machines
+**Start with the overview** — what, where, why, requirements:
+[apercu.md](apercu.md). Come back here for the installation order, key
+custody and the common steps.
 
-| Rôle | Machine | Services | Guide |
+## Roles and machines
+
+| Role | Machine | Services | Guide |
 |---|---|---|---|
-| Routeur | Debian 12 dédiée (ou VM, 2+ interfaces) | NAC 802.1X (FreeRADIUS EAP-TLS), nftables, VLANs §5.1 | [router-debian.md](router-debian.md) |
-| Cellule | VM par cellule (a, b, …) | broker, registre tessera, OPA, tracker d'époques, HSM (genèse §12) | [cellule.md](cellule.md) |
-| Serveur | hôte applicatif (PostgreSQL, …) | PEP (pepd), acceptation via le broker de SA cellule uniquement | [serveur.md](serveur.md) |
-| Superviseur | VM indépendante | registre maître (master chain), moniteur indépendant, console | [superviseur.md](superviseur.md) |
+| Router | dedicated Debian 12 (or VM, 2+ interfaces) | NAC 802.1X (FreeRADIUS EAP-TLS), nftables, VLANs §5.1 | [router-debian.md](router-debian.md) |
+| Cell | one VM per cell (a, b, …) | broker, tessera registry, OPA, epoch tracker, HSM (genesis §12) | [cellule.md](cellule.md) |
+| Server | application host (PostgreSQL, …) | PEP (pepd), acceptance via ITS OWN cell's broker only | [serveur.md](serveur.md) |
+| Supervisor | independent VM | master registry (master chain), independent monitor, console | [superviseur.md](superviseur.md) |
 
-Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.md).
-Checklists de recette par machine : [checklists/](checklists/).
+Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md).
+Per-machine acceptance checklists: [checklists/](checklists/).
 
-## Custody des clés (décision D97 — « jamais de clé de gouvernance hors son rôle »)
+## Key custody (decision D97 — "no governance key outside its role")
 
-| Clé | Vit sur | Jamais sur | Référence |
+| Key | Lives on | Never on | Reference |
 |---|---|---|---|
-| Clés des contrôleurs de quorum (genèse) | HSM de la cérémonie (superviseur) | cellules, serveurs, routeur | §12, scripts/genesis |
-| Clé de registre de cellule (`cell_log.key`) | SA cellule uniquement | toute autre machine | §4.1, motif pepd |
-| Sel de hachage des feuilles (≥ 16 octets) | le producteur des feuilles | registres, superviseur | §6.2 |
-| Clés privées EAP-TLS (PKI §3) | routeur (RADIUS) + supplicants | repo, cellules | config/freeradius (à adapter) |
-| Clé du moniteur indépendant | superviseur | cellules surveillées | §2, §7.1 (T34) |
+| Quorum controller keys (genesis) | ceremony HSM (supervisor) | cells, servers, router | §12, scripts/genesis |
+| Cell registry key (`cell_log.key`) | ITS cell only | any other machine | §4.1, pepd pattern |
+| Leaf hashing salt (≥ 16 bytes) | the leaf producer | registries, supervisor | §6.2 |
+| EAP-TLS private keys (PKI §3) | router (RADIUS) + supplicants | repo, cells | config/freeradius (to adapt) |
+| Independent monitor key | supervisor | monitored cells | §2, §7.1 (T34) |
 
-Conséquence repo : `*.pem`, `*.key`, `config/freeradius/certs/` (à adapter, jamais copiée),
-`policies/capabilities.json` et les sorties de selftest sont gitignorés —
-rien de tout cela ne se committe, jamais.
+Repo consequence: `*.pem`, `*.key`, `config/freeradius/certs/` (to adapt, never copied),
+`policies/capabilities.json` and selftest outputs are gitignored —
+none of that is ever committed.
 
-## Ordre d'installation (§13 décliné — décision D98)
+## Installation order (§13 instantiated — decision D98)
 
 ```
-0. prérequis communs (ci-dessous)
-1. genèse              scripts/genesis — clés contrôleurs + epoch 0 (HSM)
-2. fencing             trackers d'époques sur chaque cellule (éprouvé par
-                       deploy/selftest, phase fencing 2-cellules)
-3. OPA + registre      capabilities restreintes, registre tessera
-4. PEP / broker        pepd en mode MONITOR (§5.3), rien d'autre
-5. NAC routeur         802.1X + VLANs — dernier maillon réseau
-6. traducteur          optionnel, en dernier (src/translator, T24)
+0. common prerequisites (below)
+1. genesis             scripts/genesis — controller keys + epoch 0 (HSM)
+2. fencing             epoch trackers on each cell (exercised by
+                       deploy/selftest, 2-cell fencing phase)
+3. OPA + registry      restricted capabilities, tessera registry
+4. PEP / broker        pepd in MONITOR mode (§5.3), nothing else
+5. router NAC          802.1X + VLANs — last network link
+6. translator          optional, last (src/translator, T24)
 ```
 
-L'ordre n'est pas cosmétique : la gouvernance (1-2) précède la politique
-(3), qui précède l'application (4), qui précède le réseau (5). Déployer le
-NAC avant le fencing laisserait des clients admis sans gouvernance
-d'époque — exactement le défaut que le fencing existe pour empêcher.
+The order is not cosmetic: governance (1-2) precedes policy
+(3), which precedes application (4), which precedes network (5). Deploying
+the NAC before fencing would admit clients without epoch
+governance — exactly the defect fencing exists to prevent.
 
-## Étapes communes
+## Common steps
 
-#### Étape 1 — Vérifier les binaires de base sur CHAQUE machine
+#### Step 1 — Verify the base binaries on EVERY machine
 
-**Prérequis vérifiable** : accès shell à la machine, droits sudo.
+**Verifiable prerequisite**: shell access to the machine, sudo rights.
 
-**Commande** :
+**Command**:
 
 ```bash
 go version    # ≥ 1.24
@@ -68,86 +70,86 @@ opa version   # ≥ 1.0
 python3 --version
 ```
 
-**Critère de succès observable** : les trois commandes répondent avec des
-versions conformes.
+**Observable success criterion**: all three commands answer with
+conforming versions.
 
-**En cas d'échec : STOP** — installer les binaires avant toute chose ; ne
-jamais « adapter » une étape suivante pour contourner un prérequis rouge.
+**On failure: STOP** — install the binaries before anything else; never
+"adapt" a later step to work around a red prerequisite.
 
-#### Étape 2 — Récupérer le dépôt et vérifier l'auto-test de déploiement
+#### Step 2 — Fetch the repository and verify the deployment self-test
 
-**Prérequis vérifiable** : étape 1 verte ; le dépôt est cloné.
+**Verifiable prerequisite**: step 1 green; the repository is cloned.
 
-**Commande** :
+**Command**:
 
 ```bash
 bash deploy/selftest/selftest.sh
 ```
 
-**Critère de succès observable** : `selftest.sh: tout est vert` — 82
-contrôles (cellule mono réelle, fencing 2-cellules, démons
-brokerd/supervisord réels) et la vérification formelle des guides
-passent ; rapport dans `deploy/selftest/out/selftest-report.json`.
+**Observable success criterion**: `selftest.sh: tout est vert` — 82
+controls (real single cell, 2-cell fencing, real
+brokerd/supervisord daemons) and the formal guide verification
+pass; report in `deploy/selftest/out/selftest-report.json`.
 
-**En cas d'échec : STOP** — le guide lu dérive du code ; lire le contrôle
-rouge du rapport, corriger la cause (jamais le contrôle).
+**On failure: STOP** — the guide you read has drifted from the code; read the
+red control in the report, fix the cause (never the control).
 
-#### Étape 3 — Préparer la genèse (machine superviseur, HSM requis)
+#### Step 3 — Prepare genesis (supervisor machine, HSM required)
 
-**Prérequis vérifiable** : étape 2 verte ; HSM ou SoftHSM (DEV
-uniquement — SoftHSM n'est jamais une racine de gouvernance, §12) ;
-`softhsm2-util` et `libsofthsm2.so` présents.
+**Verifiable prerequisite**: step 2 green; HSM or SoftHSM (DEV
+only — SoftHSM is never a governance root, §12);
+`softhsm2-util` and `libsofthsm2.so` present.
 
-**Commande** :
+**Command**:
 
 ```bash
 N=3 M=2 AUTHORITY=cell-a GENESIS_HOME=scripts/genesis/out \
   bash scripts/genesis/genesis_dev.sh
 ```
 
-**Critère de succès observable** : `manifest.json`, `pubkeys/*.hex`,
-`epoch0.json`, `anchor_epoch0.txt` produits sous `GENESIS_HOME`.
+**Observable success criterion**: `manifest.json`, `pubkeys/*.hex`,
+`epoch0.json`, `anchor_epoch0.txt` produced under `GENESIS_HOME`.
 
-**En cas d'échec : STOP** — pas de jeton d'époque 0, pas de cluster ;
-corriger la cérémonie, ne pas fabriquer d'epoch 0 à la main.
+**On failure: STOP** — no epoch 0 token, no cluster;
+fix the ceremony, do not hand-craft an epoch 0.
 
-#### Étape 4 — Dérouler les guides par rôle dans l'ordre §13
+#### Step 4 — Run the per-role guides in §13 order
 
-**Prérequis vérifiable** : étapes 1-3 vertes ; artefacts de genèse
-distribués selon la matrice de custody ci-dessus (pubkeys aux cellules,
-jamais les clés privées des contrôleurs).
+**Verifiable prerequisite**: steps 1-3 green; genesis artefacts
+distributed per the custody matrix above (pubkeys to cells,
+never the controllers' private keys).
 
-**Commande** :
+**Command**:
 
 ```bash
-# Dans l'ordre : cellules (deploy/cellule.md), serveurs
-# (deploy/serveur.md), superviseur (deploy/superviseur.md),
-# routeur (deploy/router-debian.md). Posture : MONITOR partout.
-ls deploy/checklists/   # une checklist de recette par machine
+# In order: cells (deploy/cellule.md), servers
+# (deploy/serveur.md), supervisor (deploy/superviseur.md),
+# router (deploy/router-debian.md). Posture: MONITOR everywhere.
+ls deploy/checklists/   # one acceptance checklist per machine
 ```
 
-**Critère de succès observable** : chaque checklist de recette est verte
-sur sa machine ; tous les PEP répondent `{"mode":"monitor"}` sur
+**Observable success criterion**: every acceptance checklist is green
+on its machine; all PEPs answer `{"mode":"monitor"}` on
 `GET /v1/mode`.
 
-**En cas d'échec : STOP** — une checklist rouge bloque la suite ; le mode
-closed ne se demande qu'après [monitor-to-closed.md](monitor-to-closed.md).
+**On failure: STOP** — a red checklist blocks the rest; closed
+mode is only requested after [monitor-to-closed.md](monitor-to-closed.md).
 
-## Règles transverses (rappelées dans chaque guide)
+## Cross-cutting rules (repeated in every guide)
 
-- **`config/` est un point de départ à adapter**, jamais copié tel quel
-  (D99 — le vérificateur formel casse toute référence sans « adapter »).
-- **Monitor avant closed** (§5.3) : aucune instruction de mode fermé tant
-  que les points de mesure §9.1 ne sont pas installés (D100).
-- **Points de mesure §9.1 d'abord** : le harness T27
-  (`tests/p1_friction/`) est la référence exécutable des métriques.
-- **Ed25519 partout** (§12) ; le sel des feuilles reste chez le
-  producteur (§6.2) ; toute décision laisse une feuille (§4.1).
-- **Trous déclarés** : `opa run --capabilities` a disparu en OPA ≥ 1.0 :
-  la forme supportée (bundle compilé avec capabilities restreintes) est
-  documentée dans [cellule.md](cellule.md) et exécutée par le selftest.
-  Le scénario netns/FreeRADIUS complet se joue en lab
-  (`lab/containerlab/`), pas en sandbox — les causes réelles sont citées
-  dans [router-debian.md](router-debian.md). Les démons `brokerd` et
-  `supervisord` (T37, issue #74) sont livrés avec leurs units systemd —
-  la phase daemons du selftest les exerce réellement.
+- **`config/` is a starting point to adapt**, never copied as-is
+  (D99 — the formal checker breaks any reference without "adapt").
+- **Monitor before closed** (§5.3): no closed-mode instruction as long
+  as the §9.1 measurement points are not installed (D100).
+- **§9.1 measurement points first**: the T27 harness
+  (`tests/p1_friction/`) is the executable reference for the metrics.
+- **Ed25519 everywhere** (§12); the leaf salt stays with the
+  producer (§6.2); every decision leaves a leaf (§4.1).
+- **Declared gaps**: `opa run --capabilities` disappeared in OPA ≥ 1.0:
+  the supported form (bundle compiled with restricted capabilities) is
+  documented in [cellule.md](cellule.md) and exercised by the selftest.
+  The full netns/FreeRADIUS scenario runs in the lab
+  (`lab/containerlab/`), not in the sandbox — the real causes are cited
+  in [router-debian.md](router-debian.md). The `brokerd` and
+  `supervisord` daemons (T37, issue #74) ship with their systemd units —
+  the selftest's daemons phase exercises them for real.

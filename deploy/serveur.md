@@ -1,38 +1,40 @@
-# deploy/serveur.md — machine « serveur » (T35, issue #61)
+# deploy/serveur.md — "server" machine (T35, issue #61)
 
-Le serveur héberge l'application (PostgreSQL, service métier…). Sa
-doctrine : **acceptation via le broker de SA cellule uniquement** — le
-serveur ne fait confiance ni au réseau, ni à un autre PEP, ni à lui-même.
-Le PEP `pepd` tourne ici (ou sur la cellule selon le partitionnement
-choisi) ; les instructions ci-dessous supposent pepd sur le serveur.
+_Version française : [serveur.fr.md](serveur.fr.md)._
 
-#### Étape 1 — Prérequis machine
+The server hosts the application (PostgreSQL, business service…). Its
+doctrine: **acceptance via ITS cell's broker only** — the
+server trusts neither the network, nor another PEP, nor itself.
+The PEP `pepd` runs here (or on the cell depending on the chosen
+partitioning); the instructions below assume pepd on the server.
 
-**Prérequis vérifiable** : étapes communes de [README.md](README.md)
-vertes ; la cellule de rattachement est installée
-([cellule.md](cellule.md)) et en monitor ; la matrice de custody (D97)
-est respectée — aucune clé de gouvernance ne transite par ce serveur.
+#### Step 1 — Machine prerequisites
 
-**Commande** :
+**Verifiable prerequisite**: common steps of [README.md](README.md)
+green; the attachment cell is installed
+([cellule.md](cellule.md)) and in monitor; the custody matrix (D97)
+is respected — no governance key transits through this server.
+
+**Command**:
 
 ```bash
 go version
-getent hosts cell-a   # ou IP : joignabilité de la cellule de rattachement
+getent hosts cell-a   # or IP: reachability of the attachment cell
 ```
 
-**Critère de succès observable** : go ≥ 1.24 ; la cellule répond au nom
-ou à l'IP prévue.
+**Observable success criterion**: go ≥ 1.24; the cell answers at the
+expected name or IP.
 
-**En cas d'échec : STOP** — pas de cellule joignable, pas de PEP utile ;
-finir la cellule d'abord.
+**On failure: STOP** — no reachable cell, no useful PEP;
+finish the cell first.
 
-#### Étape 2 — Installer et démarrer pepd (monitor, §5.3)
+#### Step 2 — Install and start pepd (monitor, §5.3)
 
-**Prérequis vérifiable** : étape 1 verte ; keyring, policy ID et sel
-préparés SELON cellule.md étapes 4-6 (sel local ≥ 16 octets, jamais
-partagé ; `/etc/tbp/pepd.env` en 0600).
+**Verifiable prerequisite**: step 1 green; keyring, policy ID and salt
+prepared PER cellule.md steps 4-6 (local salt ≥ 16 bytes, never
+shared; `/etc/tbp/pepd.env` at 0600).
 
-**Commande** :
+**Command**:
 
 ```bash
 go build -o /usr/local/bin/pepd ./src/pep/cmd/pepd
@@ -41,87 +43,87 @@ set -a; . /etc/tbp/pepd.env; set +a
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Critère de succès observable** : `{"mode":"monitor"}` ; `/healthz` 200 ;
-registre tessera initialisé dans `TBP_REGISTRY_DIR` (clé de cellule
-locale, 0600).
+**Observable success criterion**: `{"mode":"monitor"}`; `/healthz` 200;
+tessera registry initialized in `TBP_REGISTRY_DIR` (local cell
+key, 0600).
 
-**En cas d'échec : STOP** — toute absence d'environnement (`TBP_SALT`,
-`TBP_KEYRING_FILE`, `TBP_POLICY_ID`) DOIT faire échouer le démarrage ; un
-pepd qui démarre incomplet est un faux pepd.
+**On failure: STOP** — any missing environment (`TBP_SALT`,
+`TBP_KEYRING_FILE`, `TBP_POLICY_ID`) MUST make startup fail; a
+pepd that starts incomplete is a fake pepd.
 
-#### Étape 3 — Brancher l'application sur le PEP (acceptation broker-only)
+#### Step 3 — Wire the application to the PEP (broker-only acceptance)
 
-**Prérequis vérifiable** : étape 2 verte.
+**Verifiable prerequisite**: step 2 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# PostgreSQL : l'extension applique les deux hooks §4.4(3) —
-# structurel (post_parse_analyze) + sceau du plan figé (ExecutorStart) :
+# PostgreSQL: the extension applies both §4.4(3) hooks —
+# structural (post_parse_analyze) + frozen-plan seal (ExecutorStart):
 ls src/pep/postgres-extension/
-# L'app métier appelle POST /v1/evaluate AVANT d'exécuter, et
-# POST /v1/consume à l'exécution (passeport de quota §4.1-bis).
+# The business app calls POST /v1/evaluate BEFORE executing, and
+# POST /v1/consume at execution time (quota passport §4.1-bis).
 curl -s -X POST http://127.0.0.1:8443/v1/evaluate \
   -H 'Content-Type: application/json' \
   -d '{"token":"<cwt base64>","action":"read","resource":"doc-1","epoch":0}'
 ```
 
-**Critère de succès observable** : le verdict JSON rend `allow`, `mode`
-(monitor), `forwarded` ; en monitor, même un deny est `forwarded=true`
-(log only) avec `reason` explicite — le témoin de la phase mono du
-selftest montre `opa-deny`.
+**Observable success criterion**: the JSON verdict returns `allow`, `mode`
+(monitor), `forwarded`; in monitor, even a deny is `forwarded=true`
+(log only) with an explicit `reason` — the selftest's mono phase
+witness shows `opa-deny`.
 
-**En cas d'échec : STOP** — un verdict illisible ou un HTTP non-200 n'est
-pas un deny exploitable ; corriger la chaîne avant de poursuivre.
+**On failure: STOP** — an unreadable verdict or a non-200 HTTP is
+not a usable deny; fix the chain before going further.
 
-#### Étape 4 — Durcissement de l'hôte
+#### Step 4 — Host hardening
 
-**Prérequis vérifiable** : étapes 2-3 vertes.
+**Verifiable prerequisite**: steps 2-3 green.
 
-**Commande** :
+**Command**:
 
 ```bash
-# Point de départ à adapter au noyau local (D99) — jamais copié tel quel :
-less config/sysctl/99-tbp-hardening.conf   # à adapter avant application
-# Patron d'unité durcie (T24) à adapter pour pepd.service :
+# Starting point to adapt to the local kernel (D99) — never copied as-is:
+less config/sysctl/99-tbp-hardening.conf   # to adapt before applying
+# Hardened unit pattern (T24) to adapt for pepd.service:
 less src/translator/tbp-translator.service
 ```
 
-**Critère de succès observable** : l'unité pepd est en place avec
+**Observable success criterion**: the pepd unit is in place with
 cap-drop, seccomp `@system-service`, `ProtectSystem=strict`,
-`EnvironmentFile` en 0600 ; `audit_confinement.sh` (motif T24, à adapter)
-ne rapporte aucun écart.
+`EnvironmentFile` at 0600; `audit_confinement.sh` (T24 pattern, to adapt)
+reports no drift.
 
-**En cas d'échec : STOP** — un PEP non confiné est une surface ; corriger
-l'unité avant d'ouvrir le service aux applications.
+**On failure: STOP** — an unconfined PEP is an attack surface; fix
+the unit before opening the service to applications.
 
-#### Étape 5 — Mesures §9.1 en monitor, puis demande de bascule
+#### Step 5 — §9.1 measurements in monitor, then switch request
 
-**Prérequis vérifiable** : étapes 2-4 vertes ; fenêtre d'observation
-monitor convenue écoulée ; le superviseur collecte les feuilles
+**Verifiable prerequisite**: steps 2-4 green; agreed monitor observation
+window elapsed; the supervisor collects the leaves
 (deploy/superviseur.md).
 
-**Commande** :
+**Command**:
 
 ```bash
-# Compteurs exposés par le listener (GET /v1/stats si câblé, sinon
-# registre) : forwarded, would-deny, denied, latences. Référence
-# exécutable des points de mesure : tests/p1_friction/ (T27).
+# Counters exposed by the listener (GET /v1/stats if wired, otherwise
+# registry): forwarded, would-deny, denied, latencies. Executable
+# reference for the measurement points: tests/p1_friction/ (T27).
 curl -s http://127.0.0.1:8443/healthz
 ```
 
-**Critère de succès observable** : les points de mesure §9.1 sont
-installés ET alimentés en monitor — c'est un préalable de
-[monitor-to-closed.md](monitor-to-closed.md) (D100), pas une option.
+**Observable success criterion**: the §9.1 measurement points are
+installed AND fed in monitor — this is a prerequisite of
+[monitor-to-closed.md](monitor-to-closed.md) (D100), not an option.
 
-**En cas d'échec : STOP** — pas de mesure, pas de demande de closed. La
-bascule se décide au quorum (§5.3), jamais en local sur ce serveur.
+**On failure: STOP** — no measurement, no closed request. The
+switch is decided by quorum (§5.3), never locally on this server.
 
-## Ce que ce serveur ne fait JAMAIS
+## What this server NEVER does
 
-- accepter un jeton sans passer par le PEP/broker de sa cellule ;
-- héberger une clé de contrôleur, le sel d'une autre cellule, ou un
-  capabilities.json copié d'un autre déploiement (il se régénère depuis
-  L'OPA déployé — voir cellule.md étape 3, et config/ reste à adapter) ;
-- basculer lui-même en closed : `POST /v1/mode` exige le quorum (403
-  sinon — démontré par la phase mono du selftest).
+- accept a token without going through its cell's PEP/broker;
+- host a controller key, another cell's salt, or a
+  capabilities.json copied from another deployment (it is regenerated from
+  THE deployed OPA — see cellule.md step 3, and config/ remains to adapt);
+- switch itself to closed: `POST /v1/mode` requires the quorum (403
+  otherwise — demonstrated by the selftest's mono phase).
