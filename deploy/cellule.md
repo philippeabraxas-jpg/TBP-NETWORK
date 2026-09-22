@@ -116,8 +116,10 @@ already-taken port gets fixed before pepd, never after.
 
 **Verifiable prerequisite**: steps 2 and 5 green; the cell's issuer
 keyring installed (JSON `{"kid_hex": "pubkey_ed25519_hex"}`, 16-byte
-kid); cell salt generated locally (≥ 16 bytes, stays here);
-`/etc/tbp/pepd.env` at 0600, owned by the service.
+kid); the quorum controllers' keyring installed likewise
+(`TBP_QUORUM_KEYRING_FILE` — security review #89: no posture switch is
+possible without it); cell salt generated locally (≥ 16 bytes, stays
+here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 
 **Command**:
 
@@ -130,7 +132,17 @@ kid); cell salt generated locally (≥ 16 bytes, stays here);
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
 #   TBP_LISTEN_ADDR=127.0.0.1:8443
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
-#   TBP_QUORUM_MIN=2
+#   TBP_QUORUM_MIN=2               # k distinct Ed25519 signatures (security
+#                                  # review #89 — no longer a name count)
+#   TBP_QUORUM_KEYRING_FILE=/etc/tbp/quorum-keyring.json  # controller
+#                                  # public keys pinned (§12), same JSON
+#                                  # shape as TBP_KEYRING_FILE — required:
+#                                  # without it, NO posture switch is possible
+#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock  # optional (scale 3): live
+#                                  # VERIFIED epoch from the co-located
+#                                  # brokerd (step 7), §7.2-§7.3. Absent ⇒
+#                                  # FixedEpoch(0), the explicit scale-1
+#                                  # choice (single cell, no fencing)
 #   TBP_DURABILITY=async-bounded   # default (T38/#71): verdict at
 #                                  # acceptance, bounded catch-up;
 #                                  # "sync" = former synchronous path
@@ -158,10 +170,12 @@ the repo. Closed mode IS NOT the goal of this step.
 **Verifiable prerequisite**: step 6 green; genesis artefacts (step 1)
 in place (`manifest.json` + `epoch0.json` under `$GENESIS_HOME`); PUBLIC
 operator keys from the contract store installed (T30 — JSON
-`["pubkey_ed25519_hex", …]`, ≥ 1); DEV issuer seed at 0600
-(§12 custody: P1 lab only — the real governance key lives
-in the HSM, the Signer seam is already HSM-ready); broker salt
-generated locally (≥ 16 bytes, stays here — the broker's chain is its
+`["pubkey_ed25519_hex", …]`, ≥ 1); issuer custody provisioned — EITHER a
+DEV issuer seed at 0600 (P1 lab/CI only) OR a real HSM/SoftHSM2 token with
+an Ed25519 key pair generated inside it and its PIN at 0600 (security
+review #90, point 5 — the private key never leaves the module; see
+`src/broker/pkcs11_signer_test.go` for a runnable SoftHSM2 example); broker
+salt generated locally (≥ 16 bytes, stays here — the broker's chain is its
 OWN, distinct from pepd's).
 
 **Command**:
@@ -171,14 +185,21 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 /usr/local/bin/brokerd 2>&1 | head -1   # without environment: must refuse
 
 # /etc/tbp/brokerd.env (0600, owned by the service) — example values,
-# to adapt to the cell:
+# to adapt to the cell. Issuer custody is EXACTLY ONE of the two blocks
+# below — never both, never neither (fail-closed, security review #90.5):
 #   TBP_CELL_ID=cell-a
 #   TBP_SALT=<32-char hex — salt of the BROKER's chain, generated here>
 #   TBP_POLICY_ID=<sha256 of the bundle, step 4>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/broker
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
 #   TBP_TRANSLATOR=structured
+#   # --- custody DEV (lab/CI only) ---
 #   TBP_ISSUER_SEED_FILE=/etc/tbp/issuer.seed
+#   # --- OR custody HSM (production, §12) ---
+#   # TBP_ISSUER_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
+#   # TBP_ISSUER_PKCS11_TOKEN_LABEL=cell-a
+#   # TBP_ISSUER_PKCS11_KEY_LABEL=issuer-key-1
+#   # TBP_ISSUER_PKCS11_PIN_FILE=/etc/tbp/issuer.pin
 #   TBP_GENESIS_DIR=<GENESIS_HOME>
 #   TBP_QUORUM_MIN=2
 #   TBP_CLUSTER_MEMBERS=cell-a,cell-b

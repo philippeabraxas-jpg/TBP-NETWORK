@@ -92,6 +92,30 @@ func TestLoadConfigOK(t *testing.T) {
 	}
 }
 
+// TestLoadConfigPKCS11 : la custody HSM (revue de sécurité #90, point 5)
+// est acceptée à la place de la seed de dev, et REND les quatre champs.
+func TestLoadConfigPKCS11(t *testing.T) {
+	env := validConfigEnv()
+	delete(env, "TBP_ISSUER_SEED_FILE")
+	env["TBP_ISSUER_PKCS11_MODULE"] = "/usr/lib/softhsm/libsofthsm2.so"
+	env["TBP_ISSUER_PKCS11_TOKEN_LABEL"] = "cell-a"
+	env["TBP_ISSUER_PKCS11_KEY_LABEL"] = "issuer-key-1"
+	env["TBP_ISSUER_PKCS11_PIN_FILE"] = "/etc/tbp/issuer.pin"
+	cfg, err := loadConfig(mapGetenv(env))
+	if err != nil {
+		t.Fatalf("config PKCS#11 valide refusée: %v", err)
+	}
+	if cfg.issuerSeedFile != "" {
+		t.Fatalf("issuerSeedFile = %q, veut vide (custody HSM)", cfg.issuerSeedFile)
+	}
+	if cfg.issuerPKCS11Module != env["TBP_ISSUER_PKCS11_MODULE"] ||
+		cfg.issuerPKCS11Token != env["TBP_ISSUER_PKCS11_TOKEN_LABEL"] ||
+		cfg.issuerPKCS11KeyLabel != env["TBP_ISSUER_PKCS11_KEY_LABEL"] ||
+		cfg.issuerPKCS11PINFile != env["TBP_ISSUER_PKCS11_PIN_FILE"] {
+		t.Fatalf("champs PKCS#11 mal lus: %+v", cfg)
+	}
+}
+
 // TestLoadConfigFailClosed : chaque pièce manquante ou invalide est une
 // erreur — un broker à moitié configuré émettrait des décisions à moitié
 // contrôlées (§1).
@@ -109,7 +133,16 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		{"opa_absent", func(e map[string]string) { delete(e, "TBP_OPA_ENDPOINT") }, "TBP_OPA_ENDPOINT requis"},
 		{"traducteur_refuse", func(e map[string]string) { e["TBP_TRANSLATOR"] = "natural" }, "structured"},
 		{"traducteur_vide_refuse", func(e map[string]string) { delete(e, "TBP_TRANSLATOR") }, "structured"},
-		{"seed_absente", func(e map[string]string) { delete(e, "TBP_ISSUER_SEED_FILE") }, "TBP_ISSUER_SEED_FILE requis"},
+		{"seed_absente", func(e map[string]string) { delete(e, "TBP_ISSUER_SEED_FILE") }, "custody de l'émetteur requise"},
+		{"custody_double", func(e map[string]string) {
+			e["TBP_ISSUER_PKCS11_MODULE"] = "/usr/lib/softhsm/libsofthsm2.so"
+		}, "mutuellement exclusifs"},
+		{"pkcs11_incomplet", func(e map[string]string) {
+			delete(e, "TBP_ISSUER_SEED_FILE")
+			e["TBP_ISSUER_PKCS11_MODULE"] = "/usr/lib/softhsm/libsofthsm2.so"
+			e["TBP_ISSUER_PKCS11_TOKEN_LABEL"] = "cell-a"
+			// KEY_LABEL et PIN_FILE manquants.
+		}, "requis ensemble"},
 		{"genesis_absente", func(e map[string]string) { delete(e, "TBP_GENESIS_DIR") }, "TBP_GENESIS_DIR requis"},
 		{"quorum_zero", func(e map[string]string) { e["TBP_QUORUM_MIN"] = "0" }, "TBP_QUORUM_MIN invalide"},
 		{"quorum_non_numerique", func(e map[string]string) { e["TBP_QUORUM_MIN"] = "deux" }, "TBP_QUORUM_MIN invalide"},

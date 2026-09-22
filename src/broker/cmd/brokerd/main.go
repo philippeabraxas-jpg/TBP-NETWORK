@@ -33,10 +33,19 @@
 //	                        n'émet rien sans arbitrage des règles
 //	TBP_TRANSLATOR          "structured" — seule valeur admise en v1
 //	                        (le traducteur langage naturel est T24/T25)
+//	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
+//	jamais les deux, jamais aucun (revue de sécurité #90, point 5) :
 //	TBP_ISSUER_SEED_FILE    seed Ed25519 de l'émetteur, hex 64, fichier
-//	                        0600 — CUSTODY DEV (§12 : la clé de
-//	                        gouvernance réelle vit dans le HSM ; la
-//	                        couture Signer est déjà HSM-ready)
+//	                        0600 — CUSTODY DEV UNIQUEMENT (labo/CI)
+//	TBP_ISSUER_PKCS11_MODULE       chemin du module PKCS#11 (.so) — HSM
+//	                        réel ou SoftHSM2 ; la clé privée ne quitte
+//	                        jamais le module (broker.PKCS11Signer)
+//	TBP_ISSUER_PKCS11_TOKEN_LABEL  étiquette du jeton portant la clé
+//	TBP_ISSUER_PKCS11_KEY_LABEL    étiquette de la paire de clés Ed25519
+//	                        dans le jeton (provisionnée hors-bande, §12 :
+//	                        la cérémonie de genèse, pas ce démon)
+//	TBP_ISSUER_PKCS11_PIN_FILE     PIN utilisateur du jeton, fichier 0600
+//	                        (même exigence de custody que la seed de dev)
 //	TBP_GENESIS_DIR         répertoire de genèse (manifest.json +
 //	                        epoch0.json — scripts/genesis)
 //	TBP_QUORUM_MIN          M du quorum M-of-N (défaut 2, ≤ N contrôleurs)
@@ -62,6 +71,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -100,18 +110,27 @@ func main() {
 // config est la configuration validée du démon — loadConfig ne rend QUE
 // des valeurs complètes et cohérentes (fail-closed §1).
 type config struct {
-	cellID           string
-	salt             []byte
-	policyID         [32]byte
-	registryDir      string
-	opaEndpoint      string
-	issuerSeedFile   string
-	genesisDir       string
-	quorumMin        int
-	members          []string
-	operatorKeysFile string
-	envelopeEndpoint string // "" = enveloppe non câblée (doctrine existante)
-	socketPath       string
+	cellID      string
+	salt        []byte
+	policyID    [32]byte
+	registryDir string
+	opaEndpoint string
+	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes.
+	// issuerSeedFile ("" ⇒ HSM) : seed Ed25519 DEV, fichier 0600 — labo/CI
+	// uniquement. Les quatre champs issuerPKCS11* ("" ⇒ dev), tous requis
+	// ensemble : custody HSM réelle (revue de sécurité #90, point 5) — la
+	// clé privée ne quitte jamais le module PKCS#11.
+	issuerSeedFile       string
+	issuerPKCS11Module   string
+	issuerPKCS11Token    string
+	issuerPKCS11KeyLabel string
+	issuerPKCS11PINFile  string
+	genesisDir           string
+	quorumMin            int
+	members              []string
+	operatorKeysFile     string
+	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
+	socketPath           string
 }
 
 // loadConfig lit et valide TOUTE la configuration — la moindre pièce
@@ -142,9 +161,21 @@ func loadConfig(getenv func(string) string) (*config, error) {
 	if tr := getenv("TBP_TRANSLATOR"); tr != "structured" {
 		return nil, fmt.Errorf("TBP_TRANSLATOR=%q refusé — seul \"structured\" est assemblé en v1 (traducteur langage naturel : T24/T25)", tr)
 	}
-	issuerSeedFile, err := envRequired(getenv, "TBP_ISSUER_SEED_FILE")
-	if err != nil {
-		return nil, err
+	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes —
+	// jamais les deux (ambiguïté de custody), jamais aucun (fail-closed).
+	issuerSeedFile := getenv("TBP_ISSUER_SEED_FILE")
+	pkcs11Module := getenv("TBP_ISSUER_PKCS11_MODULE")
+	pkcs11Token := getenv("TBP_ISSUER_PKCS11_TOKEN_LABEL")
+	pkcs11KeyLabel := getenv("TBP_ISSUER_PKCS11_KEY_LABEL")
+	pkcs11PINFile := getenv("TBP_ISSUER_PKCS11_PIN_FILE")
+	usingPKCS11 := pkcs11Module != "" || pkcs11Token != "" || pkcs11KeyLabel != "" || pkcs11PINFile != ""
+	switch {
+	case issuerSeedFile != "" && usingPKCS11:
+		return nil, errors.New("TBP_ISSUER_SEED_FILE et TBP_ISSUER_PKCS11_* sont mutuellement exclusifs — un seul mécanisme de custody par cellule (§12)")
+	case issuerSeedFile == "" && !usingPKCS11:
+		return nil, errors.New("custody de l'émetteur requise : TBP_ISSUER_SEED_FILE (dev) OU TBP_ISSUER_PKCS11_MODULE+TOKEN_LABEL+KEY_LABEL+PIN_FILE (HSM, §12, revue #90 point 5)")
+	case usingPKCS11 && (pkcs11Module == "" || pkcs11Token == "" || pkcs11KeyLabel == "" || pkcs11PINFile == ""):
+		return nil, errors.New("TBP_ISSUER_PKCS11_MODULE, _TOKEN_LABEL, _KEY_LABEL et _PIN_FILE sont tous requis ensemble")
 	}
 	genesisDir, err := envRequired(getenv, "TBP_GENESIS_DIR")
 	if err != nil {
@@ -184,18 +215,22 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		socketPath = defaultBrokerSocket
 	}
 	return &config{
-		cellID:           cellID,
-		salt:             salt,
-		policyID:         policy,
-		registryDir:      registryDir,
-		opaEndpoint:      opaEndpoint,
-		issuerSeedFile:   issuerSeedFile,
-		genesisDir:       genesisDir,
-		quorumMin:        quorumMin,
-		members:          members,
-		operatorKeysFile: operatorKeysFile,
-		envelopeEndpoint: getenv("TBP_ENVELOPE_ENDPOINT"),
-		socketPath:       socketPath,
+		cellID:               cellID,
+		salt:                 salt,
+		policyID:             policy,
+		registryDir:          registryDir,
+		opaEndpoint:          opaEndpoint,
+		issuerSeedFile:       issuerSeedFile,
+		issuerPKCS11Module:   pkcs11Module,
+		issuerPKCS11Token:    pkcs11Token,
+		issuerPKCS11KeyLabel: pkcs11KeyLabel,
+		issuerPKCS11PINFile:  pkcs11PINFile,
+		genesisDir:           genesisDir,
+		quorumMin:            quorumMin,
+		members:              members,
+		operatorKeysFile:     operatorKeysFile,
+		envelopeEndpoint:     getenv("TBP_ENVELOPE_ENDPOINT"),
+		socketPath:           socketPath,
 	}, nil
 }
 
@@ -323,11 +358,19 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 	}
 
-	// Émetteur (T33) : seed Ed25519 de DEV — §12 : la clé de gouvernance
-	// réelle vit dans le HSM ; la couture Signer est déjà HSM-ready.
-	issuer, err := loadIssuer(cfg.issuerSeedFile, cfg.cellID, cfg.policyID)
+	// Émetteur (T33) : seed Ed25519 DEV (labo/CI) OU custody HSM réelle
+	// via PKCS#11 (§12, revue de sécurité #90 point 5 — la clé privée ne
+	// quitte jamais le module). loadIssuer choisit selon la config validée.
+	issuer, signerCloser, err := loadIssuer(cfg)
 	if err != nil {
 		return err
+	}
+	if signerCloser != nil {
+		defer func() {
+			if cerr := signerCloser.Close(); cerr != nil {
+				log.Printf("brokerd: fermeture du signataire PKCS#11: %v", cerr)
+			}
+		}()
 	}
 
 	brk, err := broker.NewBroker(broker.BrokerOptions{
@@ -594,11 +637,39 @@ func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
 	return keys, nil
 }
 
-// loadIssuer construit l'émetteur depuis la seed de dev (custody §12 —
-// DEV/labo P1 ; le HSM se branche sur la même couture Signer sans changer
-// une ligne de ce fichier). Le fichier est vérifié 0600 : une seed lisible
-// par d'autres que le démon est une faute de custody, pas un réglage.
-func loadIssuer(seedFile, cellID string, policyID [32]byte) (*broker.Issuer, error) {
+// loadIssuer construit l'émetteur — EXACTEMENT un des deux mécanismes de
+// custody (§12, loadConfig les a déjà rendus mutuellement exclusifs) :
+// seed de dev (labo/CI) ou HSM réel via PKCS#11 (revue de sécurité #90,
+// point 5). Rend aussi le Closer du signataire (non nil UNIQUEMENT pour
+// PKCS#11 — la session doit être fermée à l'arrêt du démon) ; le
+// signataire lui-même n'est JAMAIS retourné directement : Issuer est le
+// seul point qui le consomme (§12 : la clé ne doit transiter que par la
+// couture Signer, jamais être manipulée ailleurs).
+func loadIssuer(cfg *config) (*broker.Issuer, io.Closer, error) {
+	if cfg.issuerSeedFile != "" {
+		signer, err := loadDevSigner(cfg.issuerSeedFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		issuer, err := broker.NewIssuer(broker.IssuerOptions{CellID: cfg.cellID, Signer: signer, PolicyID: cfg.policyID})
+		return issuer, nil, err
+	}
+	signer, err := loadPKCS11Signer(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	issuer, err := broker.NewIssuer(broker.IssuerOptions{CellID: cfg.cellID, Signer: signer, PolicyID: cfg.policyID})
+	if err != nil {
+		_ = signer.Close()
+		return nil, nil, err
+	}
+	return issuer, signer, nil
+}
+
+// loadDevSigner charge la seed de dev (custody §12 — DEV/labo P1
+// UNIQUEMENT). Le fichier est vérifié 0600 : une seed lisible par
+// d'autres que le démon est une faute de custody, pas un réglage.
+func loadDevSigner(seedFile string) (*broker.DevSigner, error) {
 	st, err := os.Stat(seedFile)
 	if err != nil {
 		return nil, fmt.Errorf("seed émetteur: %w", err)
@@ -614,14 +685,33 @@ func loadIssuer(seedFile, cellID string, policyID [32]byte) (*broker.Issuer, err
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("seed émetteur: hex %d octets requis (Ed25519)", ed25519.SeedSize)
 	}
-	signer, err := broker.NewDevSigner(seed)
+	return broker.NewDevSigner(seed)
+}
+
+// loadPKCS11Signer charge le PIN (fichier 0600, même exigence de custody
+// que la seed de dev) et ouvre le signataire HSM (revue de sécurité #90,
+// point 5) : la clé privée d'émission ne quitte jamais le module.
+func loadPKCS11Signer(cfg *config) (*broker.PKCS11Signer, error) {
+	st, err := os.Stat(cfg.issuerPKCS11PINFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("PIN PKCS#11: %w", err)
 	}
-	return broker.NewIssuer(broker.IssuerOptions{
-		CellID:   cellID,
-		Signer:   signer,
-		PolicyID: policyID,
+	if perm := st.Mode().Perm(); perm != 0o600 {
+		return nil, fmt.Errorf("PIN PKCS#11: permissions %04o — 0600 exigé (custody §12)", perm)
+	}
+	data, err := os.ReadFile(cfg.issuerPKCS11PINFile)
+	if err != nil {
+		return nil, fmt.Errorf("PIN PKCS#11: %w", err)
+	}
+	pin := strings.TrimSpace(string(data))
+	if pin == "" {
+		return nil, errors.New("PIN PKCS#11: fichier vide")
+	}
+	return broker.NewPKCS11Signer(broker.PKCS11SignerOptions{
+		ModulePath: cfg.issuerPKCS11Module,
+		TokenLabel: cfg.issuerPKCS11Token,
+		KeyLabel:   cfg.issuerPKCS11KeyLabel,
+		PIN:        pin,
 	})
 }
 
