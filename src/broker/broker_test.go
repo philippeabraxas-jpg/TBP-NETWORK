@@ -214,6 +214,8 @@ func newTestValidator(t *testing.T, issuer *Issuer, signer *DevSigner, leaves *l
 		Leaves:     leaves,
 		AntiReplay: ar,
 		Quota:      quota,
+		// newTestBroker (seul appelant restant) émet sous StaticEpoch(7).
+		Epochs: pep.FixedEpoch(7),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
@@ -445,7 +447,6 @@ func TestIssueValidateRoundTrip(t *testing.T) {
 	d := v.Validate(context.Background(), res.Token, pep.Request{
 		Action:   "http.send",
 		Resource: "https://api.example.com/v1/messages",
-		Epoch:    7,
 	})
 	if !d.Allow {
 		t.Fatalf("T9 refuse le jeton du broker : %q — le format n'est pas partagé", d.Reason)
@@ -467,7 +468,6 @@ func TestIssueValidateRoundTrip(t *testing.T) {
 	d2 := v.Validate(context.Background(), res.Token, pep.Request{
 		Action:   "http.send",
 		Resource: "https://api.example.com/v1/messages",
-		Epoch:    7,
 	})
 	if d2.Allow || d2.Reason != pep.ReasonReplay {
 		t.Fatalf("rejeu : allow=%v reason=%q, veut deny/replay", d2.Allow, d2.Reason)
@@ -526,6 +526,7 @@ func TestPassportOpensQuotaCounter(t *testing.T) {
 		Leaves:     leaves,
 		AntiReplay: mustAntiReplay(t),
 		Quota:      ql,
+		Epochs:     pep.FixedEpoch(7),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
@@ -533,7 +534,6 @@ func TestPassportOpensQuotaCounter(t *testing.T) {
 	d := v.Validate(context.Background(), res.Token, pep.Request{
 		Action:   "http.send",
 		Resource: "https://api.example.com/v1/messages",
-		Epoch:    7,
 	})
 	if !d.Allow {
 		t.Fatalf("T9 refuse le passeport : %q", d.Reason)
@@ -865,6 +865,17 @@ func TestEnvelopeFaultDeniesWithAlarm(t *testing.T) {
 // Époque, déterminisme, concurrence
 // ---------------------------------------------------------------------------
 
+// TestEpochChangeRevokes : la révocation (§7.3) est une rotation de
+// l'ÉPOQUE COURANTE VÉRIFIÉE (pep.EpochSource), jamais une valeur que le
+// demandeur pourrait fournir (revue de sécurité #90, point 2 — l'ancien
+// contrôle comparait le jeton à req.Epoch, un champ du corps de requête ;
+// n'importe quel appelant pouvait donc « rester » à l'ancienne époque en
+// la répétant, ce qui rendait la révocation inopérante à l'endroit même
+// où le jeton est présenté). Ici, deux validateurs sur la MÊME source
+// d'époque fixée à des valeurs différentes modélisent un rollover réel :
+// v (epoch 7, celle sous laquelle le jeton a été émis) l'accepte ; v2
+// (epoch 8, une rotation qui a réellement eu lieu) le rejette — le
+// jeton lui-même n'a pas changé, seule la vérité de terrain a bougé.
 func TestEpochChangeRevokes(t *testing.T) {
 	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
 	defer srv.Close()
@@ -876,16 +887,30 @@ func TestEpochChangeRevokes(t *testing.T) {
 		t.Fatalf("émission refusée : %q", res.Reason)
 	}
 	signer, _ := NewDevSigner(testSeed)
-	v := newTestValidator(t, issuer, signer, leaves, nil)
+	ar1 := mustAntiReplay(t)
+	v, err := pep.NewValidator(pep.ValidatorOptions{
+		CellID:     "c",
+		Keyring:    map[[16]byte]ed25519.PublicKey{issuer.KeyID(): signer.Public()},
+		PolicyID:   testPolicyID,
+		Salt:       testSalt,
+		Leaves:     leaves,
+		AntiReplay: ar1,
+		Epochs:     pep.FixedEpoch(7),
+	})
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
 
-	// Époque 7 : valide.
-	d := v.Validate(context.Background(), res.Token, pep.Request{Action: "a", Resource: "r", Epoch: 7})
+	// Époque VÉRIFIÉE 7 : valide (le jeton a été émis sous epoch 7).
+	d := v.Validate(context.Background(), res.Token, pep.Request{Action: "a", Resource: "r"})
 	if !d.Allow {
 		t.Fatalf("jeton refusé à son époque : %q", d.Reason)
 	}
 
-	// Révocation = nouvelle époque (§7.3) : le même jeton à l'époque 8 est
-	// mort — avant même le contrôle anti-rejeu.
+	// Révocation = nouvelle époque VÉRIFIÉE (§7.3) : le même jeton, présenté
+	// à un validateur dont l'EpochSource a réellement tourné à 8, est mort
+	// — avant même le contrôle anti-rejeu. Rien dans la requête n'a besoin
+	// de changer : c'est la source qui fait foi, pas l'appelant.
 	ar2 := mustAntiReplay(t)
 	v2, err := pep.NewValidator(pep.ValidatorOptions{
 		CellID:     "c",
@@ -894,11 +919,12 @@ func TestEpochChangeRevokes(t *testing.T) {
 		Salt:       testSalt,
 		Leaves:     leaves,
 		AntiReplay: ar2,
+		Epochs:     pep.FixedEpoch(8),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
 	}
-	d2 := v2.Validate(context.Background(), res.Token, pep.Request{Action: "a", Resource: "r", Epoch: 8})
+	d2 := v2.Validate(context.Background(), res.Token, pep.Request{Action: "a", Resource: "r"})
 	if d2.Allow || d2.Reason != pep.ReasonEpochMismatch {
 		t.Fatalf("ancienne époque : allow=%v reason=%q, veut deny/%q", d2.Allow, d2.Reason, pep.ReasonEpochMismatch)
 	}

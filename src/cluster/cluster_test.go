@@ -582,8 +582,8 @@ func TestRevocationQuarantine(t *testing.T) {
 	// Un jeton d'action est ÉMIS à l'époque 1 (broker réel, signataire
 	// dev RFC 8032) et validé par le PEP T9 : allow à son époque.
 	token := issueActionToken(t, 1)
-	v := newActionValidator(t, leavesA)
-	d := v.Validate(context.Background(), token, pep.Request{Action: "a", Resource: "r", Epoch: 1})
+	v := newActionValidator(t, leavesA, 1)
+	d := v.Validate(context.Background(), token, pep.Request{Action: "a", Resource: "r"})
 	if !d.Allow {
 		t.Fatalf("jeton époque 1 refusé à son époque : %q", d.Reason)
 	}
@@ -628,11 +628,12 @@ func TestRevocationQuarantine(t *testing.T) {
 		Salt:       testSalt,
 		Leaves:     leavesA,
 		AntiReplay: ar2,
+		Epochs:     pep.FixedEpoch(2),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
 	}
-	d2 := v2.Validate(context.Background(), token, pep.Request{Action: "a", Resource: "r", Epoch: 2})
+	d2 := v2.Validate(context.Background(), token, pep.Request{Action: "a", Resource: "r"})
 	if d2.Allow || d2.Reason != pep.ReasonEpochMismatch {
 		t.Fatalf("jeton pré-émis post-bascule : allow=%v reason=%q, veut deny/%q — §7.3 violé", d2.Allow, d2.Reason, pep.ReasonEpochMismatch)
 	}
@@ -724,8 +725,11 @@ func issueActionToken(t *testing.T, epoch uint64) []byte {
 	return wire
 }
 
-// newActionValidator assemble le validateur T9 du même trousseau.
-func newActionValidator(t *testing.T, leaves *leafRecorder) *pep.Validator {
+// newActionValidator assemble le validateur T9 du même trousseau, à
+// l'époque courante donnée. Depuis la revue de sécurité #90 (point 2),
+// l'époque n'est plus lue sur la requête : elle vient d'une source
+// autoritaire (ici, une valeur fixe simulant l'observation du tracker).
+func newActionValidator(t *testing.T, leaves *leafRecorder, epoch uint64) *pep.Validator {
 	t.Helper()
 	ar, err := pep.NewAntiReplay(pep.AntiReplayOptions{Capacity: 16})
 	if err != nil {
@@ -739,6 +743,7 @@ func newActionValidator(t *testing.T, leaves *leafRecorder) *pep.Validator {
 		Salt:       testSalt,
 		Leaves:     leaves,
 		AntiReplay: ar,
+		Epochs:     pep.FixedEpoch(epoch),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)

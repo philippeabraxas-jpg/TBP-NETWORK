@@ -92,7 +92,6 @@ func evalBody(t *testing.T, tok []byte) []byte {
 		Token:    base64.StdEncoding.EncodeToString(tok),
 		Action:   "read.list",
 		Resource: "registry/docs/42",
-		Epoch:    0,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -189,7 +188,7 @@ func TestListenerClosedAppliesVerdict(t *testing.T) {
 	f := newListenerFixture(t, false)
 
 	// Bascule gouvernée monitor → closed via l'endpoint HTTP.
-	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed", Signers: []string{"op-1", "op-2"}})
+	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed"})
 	status, data := postJSON(t, f.srv.URL+"/v1/mode", body)
 	if status != http.StatusOK {
 		t.Fatalf("bascule closed: status=%d body=%s", status, data)
@@ -245,7 +244,7 @@ func TestListenerGateTripMonitorVsClosed(t *testing.T) {
 	}
 
 	// Closed : le refus du portillon bloque.
-	if err := f.mc.SetMode(ModeClosed, QuorumProof{Signers: [][]byte{[]byte("op-1")}}); err != nil {
+	if err := f.mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
 		t.Fatalf("SetMode: %v", err)
 	}
 	claims := nominalClaims()
@@ -272,9 +271,12 @@ func quotaClaims(volumeMax, windowS uint64) testClaims {
 	return claims
 }
 
-func consume(t *testing.T, f *listenerFixture, jti [16]byte, n uint64) (int, ConsumeResponse) {
+// consume présente le JETON signé (revue de sécurité #90, point 3 : le
+// jti n'est plus déclaré nu — il est extrait du jeton après vérification
+// de possession) et décrémente le passeport de son jti.
+func consume(t *testing.T, f *listenerFixture, tok []byte, n uint64) (int, ConsumeResponse) {
 	t.Helper()
-	body, _ := json.Marshal(ConsumeRequest{JTI: hex.EncodeToString(jti[:]), N: n})
+	body, _ := json.Marshal(ConsumeRequest{Token: base64.StdEncoding.EncodeToString(tok), N: n})
 	status, data := postJSON(t, f.srv.URL+"/v1/passport/consume", body)
 	var out ConsumeResponse
 	if err := json.Unmarshal(data, &out); err != nil {
@@ -293,11 +295,11 @@ func TestListenerPassportFlow(t *testing.T) {
 	}
 
 	// Décrément à l'exécution : 100 puis dépassement net.
-	status, c := consume(t, f, testJTI, 100)
+	status, c := consume(t, f, tok, 100)
 	if status != http.StatusOK || !c.OK || c.Remaining != 0 {
 		t.Fatalf("consume(100): status=%d %+v", status, c)
 	}
-	_, c = consume(t, f, testJTI, 1)
+	_, c = consume(t, f, tok, 1)
 	if c.OK || c.Err != ReasonQuotaExceeded || !c.Closed {
 		t.Fatalf("consume(1) au-delà: %+v, veut coupure nette %s", c, ReasonQuotaExceeded)
 	}
@@ -312,9 +314,43 @@ func TestListenerPassportFlow(t *testing.T) {
 
 func TestListenerConsumeUnknownPassport(t *testing.T) {
 	f := newListenerFixture(t, true)
-	_, c := consume(t, f, jtiOf(0x99), 1)
+	// Jeton valide (preuve de possession admise) mais dont le jti n'a
+	// JAMAIS ouvert de compteur — distinct du témoin de possession refusée
+	// (TestListenerConsumeForgedProofRejected, ci-dessous).
+	claims := nominalClaims()
+	j := jtiOf(0x99)
+	claims.jti = j[:]
+	tok := mintToken(t, claims)
+	_, c := consume(t, f, tok, 1)
 	if c.OK || c.Err == "" {
 		t.Fatalf("consume passeport inconnu: %+v, veut erreur", c)
+	}
+}
+
+// TestListenerConsumeForgedProofRejected : revue de sécurité #90, point 3
+// — présenter un jti nu (ancien format), ou n'importe quel octet ne
+// formant pas un jeton signé valide, est refusé AVANT même de chercher un
+// compteur. C'est exactement l'attaque qu'un attaquant ayant seulement
+// observé ou deviné le jti d'un AUTRE agent aurait pu monter sous l'ancien
+// contrat (déni de service coopératif sur son passeport).
+func TestListenerConsumeForgedProofRejected(t *testing.T) {
+	f := newListenerFixture(t, true)
+
+	// Attaque historique exacte : jti nu, aucun jeton signé présenté.
+	legacyBody, _ := json.Marshal(map[string]any{"jti": hex.EncodeToString(testJTI[:]), "n": 1})
+	status, data := postJSON(t, f.srv.URL+"/v1/passport/consume", legacyBody)
+	var legacy ConsumeResponse
+	_ = json.Unmarshal(data, &legacy)
+	if status != http.StatusForbidden {
+		t.Fatalf("jti nu (attaque #90.3 historique) : status=%d, veut 403 (aucun champ token ⇒ preuve de possession vide)", status)
+	}
+
+	// Octets aléatoires en Token : pas un COSE_Sign1 valide — possession
+	// refusée AVANT toute recherche de compteur (aucun jti n'est même
+	// extrait), exactement le contrôle qui manquait §90.3.
+	status, out := consume(t, f, []byte("pas-un-jeton-cose-sign1"), 1)
+	if status != http.StatusForbidden || out.OK {
+		t.Fatalf("token forgé : status=%d out=%+v, veut 403", status, out)
 	}
 }
 
@@ -451,7 +487,7 @@ func TestListenerModeEndpoint(t *testing.T) {
 
 	// POST avec preuve rejetée par le vérifieur ⇒ 403, toujours monitor.
 	f.mc.SetQuorumVerifier(rejectQuorum)
-	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed", Signers: []string{"op-1"}})
+	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed"})
 	status, _ := postJSON(t, f.srv.URL+"/v1/mode", body)
 	if status != http.StatusForbidden {
 		t.Fatalf("bascule sans quorum: status=%d, veut 403", status)
@@ -461,7 +497,7 @@ func TestListenerModeEndpoint(t *testing.T) {
 	}
 
 	// POST mode inconnu ⇒ 400.
-	body, _ = json.Marshal(ModeChangeRequest{Mode: "ouvert", Signers: []string{"op-1"}})
+	body, _ = json.Marshal(ModeChangeRequest{Mode: "ouvert"})
 	if status, _ := postJSON(t, f.srv.URL+"/v1/mode", body); status != http.StatusBadRequest {
 		t.Fatalf("mode inconnu: status=%d, veut 400", status)
 	}

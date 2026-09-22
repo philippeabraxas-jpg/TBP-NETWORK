@@ -230,7 +230,7 @@ func newValidatorP(t *testing.T, sink LeafSink, ar AntiReplayCache, qc QuotaChec
 }
 
 func nominalRequest() Request {
-	return Request{Action: "read.list", Resource: "registry/docs/42", Epoch: 0}
+	return Request{Action: "read.list", Resource: "registry/docs/42"}
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ func TestScenarioScopeMismatch(t *testing.T) {
 	v := newValidator(t, sink, ar, nil)
 	tok := mintToken(t, nominalClaims())
 
-	d := v.Validate(context.Background(), tok, Request{Action: "write.append", Resource: "registry/docs/42", Epoch: 0})
+	d := v.Validate(context.Background(), tok, Request{Action: "write.append", Resource: "registry/docs/42"})
 	if d.Allow || d.Reason != "scope-mismatch" {
 		t.Fatalf("portée: allow=%v reason=%q, veut deny/scope-mismatch", d.Allow, d.Reason)
 	}
@@ -326,15 +326,29 @@ func TestGoldenVectorT8(t *testing.T) {
 	sink := &stubSink{}
 	ar := &stubAntiReplay{}
 	// Le vecteur d'exemple T8 (schema.md §9) : policy_id = 0×32, epoch 7,
-	// classe I explicite, sceau 0×32, passeport POST 1 Mio / 60 s.
-	v := newValidatorP(t, sink, ar, &stubQuota{}, [32]byte{})
+	// classe I explicite, sceau 0×32, passeport POST 1 Mio / 60 s. L'époque
+	// n'est plus déclarée par la requête (revue #90) : le vecteur exige une
+	// EpochSource fixée à 7 pour que ce jeton figé valide.
+	v, err := NewValidator(ValidatorOptions{
+		CellID:     "tbp/registry/cell-alpha-01",
+		Keyring:    map[[16]byte]ed25519.PublicKey{testKID: ed25519.NewKeyFromSeed(testSeed).Public().(ed25519.PublicKey)},
+		PolicyID:   [32]byte{},
+		Salt:       testSalt,
+		Leaves:     sink,
+		AntiReplay: ar,
+		Quota:      &stubQuota{},
+		Epochs:     FixedEpoch(7),
+		Now:        func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
 
 	seal := [32]byte{}
 	req := Request{
 		Action:     "http.send",
 		Resource:   "https://api.example.com/v1/messages",
 		ObjectSeal: &seal,
-		Epoch:      7,
 	}
 	d := v.Validate(context.Background(), wire, req)
 	if !d.Allow || d.Reason != "ok" {
@@ -365,6 +379,133 @@ func TestGoldenVectorT8(t *testing.T) {
 	if d.Token.Quota == nil || d.Token.Quota.Operation != "POST" ||
 		d.Token.Quota.VolumeMax != 1048576 || d.Token.Quota.WindowS != 60 {
 		t.Errorf("quota = %+v", d.Token.Quota)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Revue de sécurité #90, point 2 : l'époque vérifiée par T9 doit venir d'une
+// source autoritaire (EpochSource), jamais d'une valeur que le demandeur
+// pourrait choisir. Request n'a plus de champ Epoch (suppression
+// structurelle) ; ces tests couvrent le comportement de la source elle-même.
+// ---------------------------------------------------------------------------
+
+// stubEpochSource simule une source d'époque contrôlable par le test :
+// une valeur fixe, ou une panne (source indisponible).
+type stubEpochSource struct {
+	epoch uint64
+	err   error
+}
+
+func (s stubEpochSource) CurrentEpoch() (uint64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.epoch, nil
+}
+
+// TestEpochMismatchGovernedBySourceNotRequest : un même jeton, frappé à
+// l'époque 5, est jugé exclusivement sur ce que rapporte l'EpochSource — pas
+// sur une valeur transmise par l'appelant (Request n'en porte plus aucune).
+// Faire varier UNIQUEMENT la source (5 → 6) fait basculer allow → deny, ce
+// qui prouve que c'est bien elle, et rien d'autre, qui arbitre le contrôle.
+func TestEpochMismatchGovernedBySourceNotRequest(t *testing.T) {
+	c := nominalClaims()
+	c.epoch = 5
+	tok := mintToken(t, c)
+
+	sink := &stubSink{}
+	ar := &stubAntiReplay{}
+	vMatch, err := NewValidator(ValidatorOptions{
+		CellID: "tbp/registry/cell-alpha-01",
+		Keyring: map[[16]byte]ed25519.PublicKey{
+			testKID: ed25519.NewKeyFromSeed(testSeed).Public().(ed25519.PublicKey),
+		},
+		PolicyID:   arr32(policyV1),
+		Salt:       testSalt,
+		Leaves:     sink,
+		AntiReplay: ar,
+		Epochs:     stubEpochSource{epoch: 5},
+		Now:        func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	if d := vMatch.Validate(context.Background(), tok, nominalRequest()); !d.Allow {
+		t.Fatalf("source à 5, jeton à 5 : deny/%q, veut allow", d.Reason)
+	}
+
+	sink2 := &stubSink{}
+	ar2 := &stubAntiReplay{}
+	vMismatch, err := NewValidator(ValidatorOptions{
+		CellID: "tbp/registry/cell-alpha-01",
+		Keyring: map[[16]byte]ed25519.PublicKey{
+			testKID: ed25519.NewKeyFromSeed(testSeed).Public().(ed25519.PublicKey),
+		},
+		PolicyID:   arr32(policyV1),
+		Salt:       testSalt,
+		Leaves:     sink2,
+		AntiReplay: ar2,
+		Epochs:     stubEpochSource{epoch: 6},
+		Now:        func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	d := vMismatch.Validate(context.Background(), tok, nominalRequest())
+	if d.Allow || d.Reason != ReasonEpochMismatch {
+		t.Fatalf("source à 6, même jeton (époque 5) : allow=%v reason=%q, veut deny/%q", d.Allow, d.Reason, ReasonEpochMismatch)
+	}
+	if ar2.consumed {
+		t.Fatal("un jeton refusé à l'époque ne doit PAS consommer son jti")
+	}
+}
+
+// TestEpochSourceUnavailableDeniesFailClosed : quand l'EpochSource échoue
+// (ex. source distante injoignable), T9 refuse — jamais un jeton jugé sur
+// une époque non confirmée (§1, fail-closed).
+func TestEpochSourceUnavailableDeniesFailClosed(t *testing.T) {
+	tok := mintToken(t, nominalClaims())
+
+	sink := &stubSink{}
+	ar := &stubAntiReplay{}
+	v, err := NewValidator(ValidatorOptions{
+		CellID: "tbp/registry/cell-alpha-01",
+		Keyring: map[[16]byte]ed25519.PublicKey{
+			testKID: ed25519.NewKeyFromSeed(testSeed).Public().(ed25519.PublicKey),
+		},
+		PolicyID:   arr32(policyV1),
+		Salt:       testSalt,
+		Leaves:     sink,
+		AntiReplay: ar,
+		Epochs:     stubEpochSource{err: errors.New("source d'époque injoignable")},
+		Now:        func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	d := v.Validate(context.Background(), tok, nominalRequest())
+	if d.Allow || d.Reason != ReasonEpochUnavailable {
+		t.Fatalf("source en panne : allow=%v reason=%q, veut deny/%q", d.Allow, d.Reason, ReasonEpochUnavailable)
+	}
+	if ar.consumed {
+		t.Fatal("un jeton refusé faute d'époque vérifiable ne doit PAS consommer son jti")
+	}
+}
+
+// TestFixedEpochDefaultIsHonest : nil ⇒ FixedEpoch(0), jamais une valeur
+// dérivée de la requête. FixedEpoch(0) ne peut pas être choisie par
+// l'attaquant (contrairement à l'ancien req.Epoch) : c'est une constante du
+// déploiement, adaptée au scale 1 (cellule unique, pas de rotation).
+func TestFixedEpochDefaultIsHonest(t *testing.T) {
+	got, err := FixedEpoch(0).CurrentEpoch()
+	if err != nil || got != 0 {
+		t.Fatalf("FixedEpoch(0).CurrentEpoch() = (%d, %v), veut (0, nil)", got, err)
+	}
+	v := newValidatorP(t, &stubSink{}, &stubAntiReplay{}, nil, arr32(policyV1))
+	tok := mintToken(t, nominalClaims())
+	d := v.Validate(context.Background(), tok, nominalRequest())
+	if !d.Allow {
+		t.Fatalf("défaut (Epochs non fourni) avec jeton à l'époque 0 : deny/%q, veut allow", d.Reason)
 	}
 }
 
@@ -733,7 +874,7 @@ func TestLeavesLandInCellLog(t *testing.T) {
 	v := newValidator(t, log, &stubAntiReplay{}, nil)
 
 	d1 := v.Validate(ctx, mintToken(t, nominalClaims()), nominalRequest())
-	d2 := v.Validate(ctx, mintToken(t, nominalClaims()), Request{Action: "bad", Resource: "x", Epoch: 0})
+	d2 := v.Validate(ctx, mintToken(t, nominalClaims()), Request{Action: "bad", Resource: "x"})
 	d3 := v.ValidateAt(ctx, mintToken(t, nominalClaims()), nominalRequest(), time.Unix(testEXP+1, 0))
 
 	if !d1.Allow || d2.Allow || d3.Allow {

@@ -455,7 +455,6 @@ func evaluateTransfer(t *testing.T, f *dryRunFixture, tok []byte) EvaluateRespon
 		Token:    base64.StdEncoding.EncodeToString(tok),
 		Action:   "transfer",
 		Resource: "account/42",
-		Epoch:    0,
 	})
 	status, data := postJSON(t, f.srv.URL+"/v1/evaluate", body)
 	if status != http.StatusOK {

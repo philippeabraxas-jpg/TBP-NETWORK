@@ -26,6 +26,7 @@ package pep
 // promesse de proxy transparent.
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -125,11 +126,15 @@ func (l *Listener) Handler() http.Handler {
 }
 
 // EvaluateRequest est un flux présenté au PEP.
+//
+// PAS de champ Epoch (retiré — revue de sécurité #90, point 2) : un champ
+// que le demandeur pourrait remplir n'aurait plus AUCUN effet (le
+// validateur consulte EpochSource, jamais la requête) — le garder aurait
+// été un champ malhonnête, qui semble agir sans agir.
 type EvaluateRequest struct {
 	Token      string `json:"token"`                 // CWT/COSE_Sign1, base64
 	Action     string `json:"action"`                // portée demandée (§4.5)
 	Resource   string `json:"resource"`              // portée demandée
-	Epoch      uint64 `json:"epoch"`                 // époque courante (§7.2)
 	ObjectSeal string `json:"object_seal,omitempty"` // sceau §4.4(2), hex (64), si requis
 }
 
@@ -145,9 +150,17 @@ type EvaluateResponse struct {
 }
 
 // ConsumeRequest décrémente un passeport à l'exécution (§4.1-bis).
+//
+// Token (CWT/COSE_Sign1, base64) REMPLACE l'ancien champ JTI nu (revue de
+// sécurité #90, point 3) : un jti seul n'authentifie RIEN — quiconque
+// l'observe ou le devine (16 octets, mais un canal indirect — journal,
+// erreur, timing — peut en fuiter un) pouvait décrémenter, donc épuiser,
+// le passeport de QUELQU'UN D'AUTRE (déni de service coopératif). Le jti
+// est maintenant EXTRAIT du jeton signé après vérification de possession
+// (Validator.VerifyPossession) — jamais déclaré par l'appelant.
 type ConsumeRequest struct {
-	JTI string `json:"jti"` // hex (32)
-	N   uint64 `json:"n"`
+	Token string `json:"token"`
+	N     uint64 `json:"n"`
 }
 
 // ConsumeResponse rend l'état du compteur après décrément — ou la
@@ -164,10 +177,44 @@ type ModeResponse struct {
 	Mode string `json:"mode"`
 }
 
-// ModeChangeRequest demande une bascule de posture (gouvernée, §5.3).
+// ModeChangeRequest demande une bascule de posture (gouvernée, §5.3) : la
+// preuve de quorum est k signatures Ed25519 DISTINCTES (trousseau de
+// contrôleurs épinglé §12) sur QuorumMessage("mode-"+mode, Expiry) — pas
+// une liste de noms déclarés (revue de sécurité #89).
 type ModeChangeRequest struct {
-	Mode    string   `json:"mode"`
-	Signers []string `json:"signers"`
+	Mode       string                `json:"mode"`
+	Expiry     int64                 `json:"expiry"` // secondes Unix, signé (QuorumMessage)
+	Signatures []QuorumSignatureWire `json:"signatures"`
+}
+
+// QuorumSignatureWire est la forme hexadécimale sur le fil d'une
+// QuorumSignature : kid 16 octets, signature Ed25519 64 octets.
+type QuorumSignatureWire struct {
+	KeyID     string `json:"key_id"`
+	Signature string `json:"signature"`
+}
+
+// decodeQuorumProof décode la preuve de quorum sur le fil (hex) vers sa
+// forme binaire. Fail-closed sur tout format illisible : un kid ou une
+// signature mal formés ne « dégradent » jamais en preuve vide acceptée
+// plus loin — ils font échouer le décodage, donc la requête (400), avant
+// même d'atteindre le vérifieur (revue de sécurité #89).
+func decodeQuorumProof(in ModeChangeRequest) (QuorumProof, error) {
+	sigs := make([]QuorumSignature, 0, len(in.Signatures))
+	for _, s := range in.Signatures {
+		kid, err := hex.DecodeString(s.KeyID)
+		if err != nil || len(kid) != 16 {
+			return QuorumProof{}, errors.New("preuve de quorum: key_id illisible (hex 16 octets)")
+		}
+		sig, err := hex.DecodeString(s.Signature)
+		if err != nil || len(sig) != ed25519.SignatureSize {
+			return QuorumProof{}, errors.New("preuve de quorum: signature illisible (hex 64 octets Ed25519)")
+		}
+		var kidArr [16]byte
+		copy(kidArr[:], kid)
+		sigs = append(sigs, QuorumSignature{KeyID: kidArr, Signature: sig})
+	}
+	return QuorumProof{Expiry: time.Unix(in.Expiry, 0), Signatures: sigs}, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -201,7 +248,7 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token base64 illisible"})
 		return
 	}
-	req := Request{Action: in.Action, Resource: in.Resource, Epoch: in.Epoch}
+	req := Request{Action: in.Action, Resource: in.Resource}
 	if in.ObjectSeal != "" {
 		seal, err := hex.DecodeString(in.ObjectSeal)
 		if err != nil || len(seal) != 32 {
@@ -330,14 +377,21 @@ func (l *Listener) handleConsume(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
 		return
 	}
-	jtiBytes, err := hex.DecodeString(in.JTI)
-	if err != nil || len(jtiBytes) != 16 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "jti hex(16) illisible"})
+	wire, err := base64.StdEncoding.DecodeString(in.Token)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token base64 illisible"})
 		return
 	}
-	var jti [16]byte
-	copy(jti[:], jtiBytes)
-	counter, ok := l.ledger.Counter(jti)
+	// Preuve de possession (§4.1-bis, revue de sécurité #90 point 3) : le
+	// jti vient du jeton signé vérifié ici, JAMAIS d'un champ déclaré par
+	// l'appelant — sans quoi n'importe qui reachable sur ce port pourrait
+	// décrémenter le passeport de quelqu'un d'autre.
+	tok, err := l.validator.VerifyPossession(wire)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preuve de possession refusée"})
+		return
+	}
+	counter, ok := l.ledger.Counter(tok.JTI)
 	if !ok {
 		writeJSON(w, http.StatusOK, ConsumeResponse{OK: false, Err: "passeport inconnu"})
 		return
@@ -384,9 +438,10 @@ func (l *Listener) handleMode(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		proof := QuorumProof{Signers: make([][]byte, 0, len(in.Signers))}
-		for _, s := range in.Signers {
-			proof.Signers = append(proof.Signers, []byte(s))
+		proof, err := decodeQuorumProof(in)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
 		}
 		if err := l.mode.SetMode(m, proof); err != nil {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})

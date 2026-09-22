@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.4
+	github.com/miekg/pkcs11 v1.1.2
 	github.com/transparency-dev/formats v0.0.0-20251017110053-404c0d5b696c
 	github.com/transparency-dev/merkle v0.0.2
 	github.com/transparency-dev/tessera v1.0.4

@@ -208,7 +208,6 @@ func TestPlanConformantExecutionIssuesSealedToken(t *testing.T) {
 	d := v.Validate(context.Background(), res.Token, pep.Request{
 		Action:   "http.send",
 		Resource: "https://api.example.com/v1/messages",
-		Epoch:    7,
 	})
 	if !d.Allow {
 		t.Fatalf("T9 refuse le jeton scellé du broker : %q", d.Reason)

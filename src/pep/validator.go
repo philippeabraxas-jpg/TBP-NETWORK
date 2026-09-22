@@ -17,6 +17,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -98,12 +99,41 @@ type Token struct {
 }
 
 // Request est la demande d'accès confrontée au jeton.
+//
+// PAS de champ Epoch ici (retiré — revue de sécurité #90, point 2) :
+// l'époque courante N'EST PLUS une entrée de la requête. Elle était
+// auparavant fournie par le DEMANDEUR (EvaluateRequest.Epoch, recopiée
+// telle quelle) et simplement comparée à tok.Epoch — un jeton sous une
+// autorité révoquée passait donc dès lors que l'appelant répétait
+// l'époque déjà en clair dans le jeton. L'époque vient maintenant
+// exclusivement d'EpochSource (ValidatorOptions.Epochs), consultée à
+// chaque validation — jamais du corps de la requête.
 type Request struct {
 	Action     string
 	Resource   string
 	ObjectSeal *[32]byte // sceau présenté par le demandeur (§4.4(2)), si requis
-	Epoch      uint64    // époque courante de la cellule (§7.2)
 }
+
+// EpochSource rend l'époque courante VÉRIFIÉE de la cellule (§7.2) —
+// jamais celle déclarée par le demandeur (revue #90, point 2). Deux
+// implémentations : FixedEpoch (cellule unique, scale 1 — pas de
+// fencing, rien à révoquer) et l'adaptateur HTTP local vers brokerd
+// (cmd/pepd, scale 3 — même patron que les adaptateurs de supervisord :
+// lecture live à chaque appel, jamais de cache qui fige une demi-vérité).
+type EpochSource interface {
+	CurrentEpoch() (uint64, error)
+}
+
+// FixedEpoch est une EpochSource constante — cellule unique sans fencing
+// de cluster : aucune rotation d'époque n'est possible, donc aucune
+// révocation §7.3 à honorer. Documenté explicitement comme un choix
+// (scale 1 de la roadmap README), jamais un défaut silencieux : voir
+// TBP_BROKER_SOCKET dans cmd/pepd pour l'alternative scale 3.
+type FixedEpoch uint64
+
+// CurrentEpoch implémente EpochSource — jamais d'erreur (une constante ne
+// peut pas être indisponible).
+func (e FixedEpoch) CurrentEpoch() (uint64, error) { return uint64(e), nil }
 
 // Decision est le verdict. Toute décision — allow comme deny — produit une
 // feuille KindDecision (§4.1) ; LeafWritten/LeafErr en rendent compte.
@@ -132,12 +162,16 @@ const (
 	ReasonTTLOutOfRange   = "ttl-out-of-range"
 	ReasonPolicyMismatch  = "policy-mismatch"
 	ReasonEpochMismatch   = "epoch-mismatch"
-	ReasonScopeMismatch   = "scope-mismatch"
-	ReasonSealMismatch    = "seal-mismatch"
-	ReasonQuotaExhausted  = "quota-exhausted"
-	ReasonQuotaUnverified = "quota-unverified"
-	ReasonReplay          = "replay"
-	ReasonLeafWriteFailed = "leaf-write-failed"
+	// ReasonEpochUnavailable : la source d'époque vérifiée (EpochSource)
+	// est en échec — fail-closed, jamais un jeton jugé sur une époque
+	// non confirmée (revue #90, point 2).
+	ReasonEpochUnavailable = "epoch-unavailable"
+	ReasonScopeMismatch    = "scope-mismatch"
+	ReasonSealMismatch     = "seal-mismatch"
+	ReasonQuotaExhausted   = "quota-exhausted"
+	ReasonQuotaUnverified  = "quota-unverified"
+	ReasonReplay           = "replay"
+	ReasonLeafWriteFailed  = "leaf-write-failed"
 )
 
 // LeafSink est la couture vers le registre de la cellule (T7). *registry.CellLog
@@ -185,6 +219,11 @@ type ValidatorOptions struct {
 	// court-circuite la validation avant toute mutation (l'anti-rejeu n'est
 	// pas consommé). Nil ⇒ pas de portillon (défaut historique).
 	Gate FailClosedGate
+	// Epochs rend l'époque courante VÉRIFIÉE (§7.2) — jamais celle du
+	// demandeur (revue #90, point 2). Nil ⇒ FixedEpoch(0) : choix honnête
+	// et sûr pour une cellule unique (scale 1), jamais un défaut qui
+	// retomberait silencieusement sur l'ancien comportement non fiable.
+	Epochs EpochSource
 	// Now est l'horloge NTS de la cellule. Nil ⇒ time.Now (dev).
 	Now func() time.Time
 }
@@ -200,6 +239,7 @@ type Validator struct {
 	antiReplay AntiReplayCache
 	quota      QuotaChecker
 	gate       FailClosedGate
+	epochs     EpochSource
 	now        func() time.Time
 }
 
@@ -225,6 +265,10 @@ func NewValidator(opts ValidatorOptions) (*Validator, error) {
 	if now == nil {
 		now = time.Now
 	}
+	epochs := opts.Epochs
+	if epochs == nil {
+		epochs = FixedEpoch(0)
+	}
 	salt := make([]byte, len(opts.Salt))
 	copy(salt, opts.Salt)
 	return &Validator{
@@ -236,6 +280,7 @@ func NewValidator(opts ValidatorOptions) (*Validator, error) {
 		antiReplay: opts.AntiReplay,
 		quota:      opts.Quota,
 		gate:       opts.Gate,
+		epochs:     epochs,
 		now:        now,
 	}, nil
 }
@@ -271,6 +316,104 @@ func (v *Validator) ValidateAt(ctx context.Context, wire []byte, req Request, no
 	return d
 }
 
+// verifySignedToken couvre les étapes 1 à 5 du schéma (§7) : format,
+// en-têtes, décodage CDDL, résolution de clé et signature Ed25519. C'est
+// la preuve de POSSESSION d'un jeton authentique — jamais une preuve
+// d'AUTORISATION (fraîcheur, politique, époque, portée : étapes 6+,
+// decide() seul). Extrait pour VerifyPossession (§4.1-bis, revue de
+// sécurité #90 point 3 : /v1/passport/consume exige désormais le jeton
+// signé, jamais un jti nu déclaré par l'appelant).
+func (v *Validator) verifySignedToken(wire []byte) (*Token, string) {
+	// 1. format : taille bornée puis structure COSE_Sign1.
+	if len(wire) > MaxTokenWireSize {
+		return nil, ReasonTokenTooLarge
+	}
+	var msg cose.Sign1Message
+	if err := msg.UnmarshalCBOR(wire); err != nil {
+		return nil, ReasonMalformed
+	}
+
+	// 2. en-têtes : unprotected vide (aucun paramètre hors signature),
+	// protected décodable, alg == Ed25519, kid bstr(16).
+	if len(msg.Headers.Unprotected) > 0 {
+		return nil, ReasonBadHeaders
+	}
+	// RawProtected est le bstr encodé : on décode le bstr, puis la carte.
+	var protectedBytes []byte
+	if err := strictDec.Unmarshal(msg.Headers.RawProtected, &protectedBytes); err != nil {
+		return nil, ReasonBadHeaders
+	}
+	var protected map[any]any
+	if len(protectedBytes) == 0 {
+		return nil, ReasonBadHeaders
+	}
+	if err := strictDec.Unmarshal(protectedBytes, &protected); err != nil {
+		return nil, ReasonBadHeaders
+	}
+	if len(protected) > 2 {
+		return nil, ReasonBadHeaders
+	}
+	alg, ok := asInt(protected[int64(1)])
+	if !ok {
+		// fxamacker décode les labels positifs en uint64.
+		alg, ok = asInt(protected[uint64(1)])
+	}
+	if !ok {
+		return nil, ReasonBadHeaders
+	}
+	if alg != int64(cose.AlgorithmEd25519) {
+		return nil, ReasonBadAlg
+	}
+	kidBytes, ok := bytesFromAny(protected[int64(4)])
+	if !ok {
+		kidBytes, ok = bytesFromAny(protected[uint64(4)])
+	}
+	if !ok || len(kidBytes) != 16 {
+		return nil, ReasonBadHeaders
+	}
+	var kid [16]byte
+	copy(kid[:], kidBytes)
+
+	// 3. schéma : décodage strict du payload, canonicité, champs CDDL.
+	tok, reason := decodePayload(msg.Payload)
+	if reason != "" {
+		return nil, reason
+	}
+
+	// 4. clé : kid résolu dans le trousseau épinglé (§12, pas de résolution).
+	pub, ok := v.keyring[kid]
+	if !ok {
+		return tok, ReasonUnknownKID
+	}
+
+	// 5. signature Ed25519 sur le Sig_structure exact (go-cose).
+	verifier, err := cose.NewVerifier(cose.AlgorithmEd25519, pub)
+	if err != nil {
+		return tok, ReasonBadSignature
+	}
+	if err := msg.Verify(nil, verifier); err != nil {
+		return tok, ReasonBadSignature
+	}
+	return tok, ""
+}
+
+// VerifyPossession prouve que l'appelant DÉTIENT un jeton authentique
+// (schéma + signature Ed25519, étapes 1-5 seulement — PAS de fraîcheur, de
+// politique ni d'époque : ce n'est pas une autorisation §7, juste une
+// identité). C'est la couture attendue par /v1/passport/consume (§4.1-bis,
+// revue de sécurité #90 point 3) : décrémenter le compteur d'un jti exige
+// désormais de présenter le jeton signé dont il est extrait — jamais un
+// jti nu, que n'importe qui reachable sur le port de données pourrait
+// observer ou deviner puis rejouer contre le passeport de QUELQU'UN
+// D'AUTRE (déni de service coopératif).
+func (v *Validator) VerifyPossession(wire []byte) (*Token, error) {
+	tok, reason := v.verifySignedToken(wire)
+	if reason != "" {
+		return nil, fmt.Errorf("pep: preuve de possession refusée (%s)", reason)
+	}
+	return tok, nil
+}
+
 // decide exécute la chaîne de validation (schema.md §7). Pure : n'écrit pas.
 func (v *Validator) decide(wire []byte, req Request, now time.Time) Decision {
 	deny := func(reason string, tok *Token, jti [16]byte) Decision {
@@ -289,75 +432,9 @@ func (v *Validator) decide(wire []byte, req Request, now time.Time) Decision {
 		}
 	}
 
-	// 1. format : taille bornée puis structure COSE_Sign1.
-	if len(wire) > MaxTokenWireSize {
-		return deny(ReasonTokenTooLarge, nil, zeroJTI)
-	}
-	var msg cose.Sign1Message
-	if err := msg.UnmarshalCBOR(wire); err != nil {
-		return deny(ReasonMalformed, nil, zeroJTI)
-	}
-
-	// 2. en-têtes : unprotected vide (aucun paramètre hors signature),
-	// protected décodable, alg == Ed25519, kid bstr(16).
-	if len(msg.Headers.Unprotected) > 0 {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	// RawProtected est le bstr encodé : on décode le bstr, puis la carte.
-	var protectedBytes []byte
-	if err := strictDec.Unmarshal(msg.Headers.RawProtected, &protectedBytes); err != nil {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	var protected map[any]any
-	if len(protectedBytes) == 0 {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	if err := strictDec.Unmarshal(protectedBytes, &protected); err != nil {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	if len(protected) > 2 {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	alg, ok := asInt(protected[int64(1)])
-	if !ok {
-		// fxamacker décode les labels positifs en uint64.
-		alg, ok = asInt(protected[uint64(1)])
-	}
-	if !ok {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	if alg != int64(cose.AlgorithmEd25519) {
-		return deny(ReasonBadAlg, nil, zeroJTI)
-	}
-	kidBytes, ok := bytesFromAny(protected[int64(4)])
-	if !ok {
-		kidBytes, ok = bytesFromAny(protected[uint64(4)])
-	}
-	if !ok || len(kidBytes) != 16 {
-		return deny(ReasonBadHeaders, nil, zeroJTI)
-	}
-	var kid [16]byte
-	copy(kid[:], kidBytes)
-
-	// 3. schéma : décodage strict du payload, canonicité, champs CDDL.
-	tok, reason := decodePayload(msg.Payload)
+	tok, reason := v.verifySignedToken(wire)
 	if reason != "" {
-		return deny(reason, nil, zeroJTI)
-	}
-
-	// 4. clé : kid résolu dans le trousseau épinglé (§12, pas de résolution).
-	pub, ok := v.keyring[kid]
-	if !ok {
-		return deny(ReasonUnknownKID, tok, tok.JTI)
-	}
-
-	// 5. signature Ed25519 sur le Sig_structure exact (go-cose).
-	verifier, err := cose.NewVerifier(cose.AlgorithmEd25519, pub)
-	if err != nil {
-		return deny(ReasonBadSignature, tok, tok.JTI)
-	}
-	if err := msg.Verify(nil, verifier); err != nil {
-		return deny(ReasonBadSignature, tok, tok.JTI)
+		return deny(reason, tok, tokJTIOrZero(tok))
 	}
 
 	// 6. fraîcheur : iat ≤ now ≤ exp, TTL borné 30–60 s (§4.1).
@@ -376,8 +453,17 @@ func (v *Validator) decide(wire []byte, req Request, now time.Time) Decision {
 		return deny(ReasonPolicyMismatch, tok, tok.JTI)
 	}
 
-	// 7. époque : révocation = nouvelle époque, les anciens jetons sont morts (§7.3).
-	if tok.Epoch != req.Epoch {
+	// 7. époque : révocation = nouvelle époque, les anciens jetons sont morts
+	// (§7.3). Comparée à l'époque VÉRIFIÉE (v.epochs), jamais à une valeur
+	// fournie par le demandeur (revue #90, point 2 — l'ancien contrôle
+	// comparait deux valeurs de la même requête, pas une vérité de terrain :
+	// un jeton sous une autorité révoquée passait dès lors que l'appelant
+	// répétait l'époque déjà en clair dans le jeton).
+	currentEpoch, err := v.epochs.CurrentEpoch()
+	if err != nil {
+		return deny(ReasonEpochUnavailable, tok, tok.JTI)
+	}
+	if tok.Epoch != currentEpoch {
 		return deny(ReasonEpochMismatch, tok, tok.JTI)
 	}
 
@@ -613,6 +699,15 @@ func decodeQuota(v any) (*Quota, bool) {
 		return nil, false // schema.cddl : 4: uint .gt 0 — fenêtre nulle interdite
 	}
 	return q, true
+}
+
+// tokJTIOrZero rend le jti du jeton décodé, ou 16 octets nuls si le
+// décodage a échoué avant d'atteindre le jti (schema.md §7, étapes 1-2).
+func tokJTIOrZero(tok *Token) [16]byte {
+	if tok == nil {
+		return [16]byte{}
+	}
+	return tok.JTI
 }
 
 // ---------------------------------------------------------------------------
