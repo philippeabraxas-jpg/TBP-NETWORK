@@ -183,10 +183,11 @@ type runFixture struct {
 	opsFile  string
 }
 
-// mintGenesis écrit un manifest (nKeys contrôleurs, key_id 1-basé) et un
-// epoch0 signé par nSigs clés — exactement le format de scripts/genesis
-// (payload JSON à champs fixes, signature Ed25519 du payload seul).
-func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl int) {
+// mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
+// 1-basé) et rend les clés privées correspondantes — la part du format
+// scripts/genesis que le quorum classe W (§7.5) exige TOUJOURS, avec ou
+// sans fencing d'époque (issue #97 : mode mono-cellule).
+func mintManifest(t *testing.T, dir string, nKeys int) []ed25519.PrivateKey {
 	t.Helper()
 	privs := make([]ed25519.PrivateKey, nKeys)
 	pubs := make([]string, nKeys)
@@ -207,6 +208,15 @@ func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl 
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
+	return privs
+}
+
+// mintGenesis écrit un manifest (nKeys contrôleurs, key_id 1-basé) et un
+// epoch0 signé par nSigs clés — exactement le format de scripts/genesis
+// (payload JSON à champs fixes, signature Ed25519 du payload seul).
+func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl int) {
+	t.Helper()
+	privs := mintManifest(t, dir, nKeys)
 	payload := cluster.EpochPayload{
 		N:          0,
 		Authority:  authority,
@@ -542,6 +552,118 @@ func TestBrokerdEndToEnd(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST /v1/supervision/stats: statut %d, attendu 405", resp.StatusCode)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestBrokerdMonoCelluleNoEpochLease : revue de sécurité #97 (confirmée en
+// exécution contre le vrai binaire avant ce correctif : une cellule
+// s'arrêtait de servir au plus tard TTLSeconds après sa genèse, sans
+// aucun renouvellement). Avec UNE seule cellule dans TBP_CLUSTER_MEMBERS,
+// brokerd démarre SANS epoch0.json (absent du répertoire de genèse ici,
+// exprès) et sert indéfiniment — la vue de supervision reflète
+// honnêtement l'absence de bail plutôt que de simuler un epochView vide.
+func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	dir := t.TempDir()
+	genDir := filepath.Join(dir, "genesis")
+	if err := os.MkdirAll(genDir, 0o700); err != nil {
+		t.Fatalf("genesis dir: %v", err)
+	}
+	// SEULEMENT le manifest (requis par le quorum classe W, §7.5) — PAS
+	// d'epoch0.json : le point même de ce test est qu'il n'en faut plus
+	// en mode mono-cellule.
+	mintManifest(t, genDir, 1)
+	if _, err := os.Stat(filepath.Join(genDir, "epoch0.json")); err == nil {
+		t.Fatal("epoch0.json existe alors que ce test doit prouver qu'il n'est pas nécessaire")
+	}
+
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedFile := filepath.Join(dir, "issuer.seed")
+	if err := os.WriteFile(seedFile, []byte(hex.EncodeToString(seed)), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	opPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("operateur: %v", err)
+	}
+	opsFile := filepath.Join(dir, "operators.json")
+	ops, _ := json.Marshal([]string{hex.EncodeToString(opPub)})
+	if err := os.WriteFile(opsFile, ops, 0o600); err != nil {
+		t.Fatalf("operateurs: %v", err)
+	}
+	policy, salt := make([]byte, 32), make([]byte, 16)
+	if _, err := rand.Read(policy); err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	if _, err := rand.Read(salt); err != nil {
+		t.Fatalf("salt: %v", err)
+	}
+
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"result":{"allow":true}}`)
+	}))
+	defer opa.Close()
+
+	env := map[string]string{
+		"TBP_CELL_ID":            "cell-a",
+		"TBP_SALT":               hex.EncodeToString(salt),
+		"TBP_POLICY_ID":          hex.EncodeToString(policy),
+		"TBP_REGISTRY_DIR":       filepath.Join(dir, "registry"),
+		"TBP_OPA_ENDPOINT":       opa.URL,
+		"TBP_TRANSLATOR":         "structured",
+		"TBP_ISSUER_SEED_FILE":   seedFile,
+		"TBP_GENESIS_DIR":        genDir,
+		"TBP_QUORUM_MIN":         "1",
+		"TBP_CLUSTER_MEMBERS":    "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
+		"TBP_OPERATOR_KEYS_FILE": opsFile,
+		"TBP_BROKER_SOCKET":      sock,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, mapGetenv(env)) }()
+	waitSocket(t, sock)
+	hc := unixClient(t, sock)
+
+	// Démarre SANS epoch0.json — c'est déjà la preuve principale : avant
+	// ce correctif, l'absence d'epoch0.json faisait échouer run() avec
+	// « epoch0: … no such file ».
+	res := postAction(t, hc, "agent-1", `{"action":"read","resource":"doc-1","class":0}`)
+	if !res.Allow {
+		t.Fatalf("action refusée en mode mono-cellule: %+v", res)
+	}
+
+	// La vue de supervision est honnête sur l'absence de fencing — pas un
+	// epochView à moitié rempli (not_before/expires_at seraient à la
+	// valeur zéro, lisibles comme « bail déjà expiré »).
+	var raw map[string]any
+	getJSON(t, hc, "http://brokerd/v1/supervision/epoch", &raw)
+	if raw["mode"] != "mono-cellule" {
+		t.Fatalf("vue d'époque = %+v, attendu mode=mono-cellule", raw)
+	}
+	if _, has := raw["not_before"]; has {
+		t.Fatalf("vue d'époque = %+v, ne doit PAS porter not_before (aucun bail à ce sujet)", raw)
+	}
+	if _, has := raw["expires_at"]; has {
+		t.Fatalf("vue d'époque = %+v, ne doit PAS porter expires_at (aucun bail à ce sujet)", raw)
+	}
+
+	// Aucune expiration possible : une seconde action, un peu plus tard,
+	// doit encore passer (contrairement au comportement pré-#97, où une
+	// genèse à TTL 10 s aurait déjà basculé en epoch-unavailable ici).
+	time.Sleep(200 * time.Millisecond)
+	res = postAction(t, hc, "agent-1", `{"action":"read","resource":"doc-2","class":0}`)
+	if !res.Allow || res.Reason == "epoch-unavailable" {
+		t.Fatalf("action refusée après délai en mode mono-cellule: %+v", res)
 	}
 
 	cancel()
