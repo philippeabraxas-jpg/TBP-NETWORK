@@ -281,12 +281,69 @@ yet packaged as their own guides — they're reachable today by deploying
 a subset of what's documented (skip cluster fencing and NAC for scale 1,
 add NAC but keep one cell for scale 2), but that path isn't written down
 yet, and nothing currently stops someone from wiring it correctly on
-their own subject to the same doctrine. Turning that into dedicated
-`deploy/scale-1.md` / `deploy/scale-2.md` guides and selftest phases —
-so a small deployment is a documented, tested path rather than "the
-pilot guide, minus what you figure out to skip" — is the next
-documentation-and-packaging work planned for this repository. Scale full
-requires actual new code (§3's three proofs), not just new guides.
+their own subject to the same doctrine. Scale full requires actual new
+code (§3's three proofs), not just new guides.
+
+### Next planned work
+
+Two work streams, tracked separately because they're different kinds of
+effort:
+
+1. **Per-scale deployment guides, plus admin tooling sized to each
+   scale.** Turning the scales above into `deploy/scale-1.md` /
+   `deploy/scale-2.md` — scale 3 already has its guide sequence, it's
+   `deploy/apercu.md` and the per-role guides it synthesizes — is half
+   of this: a documented, selftest-covered path per scale rather than
+   "the pilot guide, minus what you figure out to skip". The other half
+   is operator-facing tooling, which today is a
+   read-only JSON API (`src/supervision/console.go`: `/v1/arbitration`,
+   `/v1/epoch`, `/v1/indicators`) plus raw files and CLIs (Rego policies
+   edited by hand, `policies/gen_capabilities.sh` /
+   `validate_determinism.go` to validate and strip before deploy; the
+   registry read by `ChainWatcher`'s verified scan, exercised in tests
+   and selftest but with no browsing UI). Three dedicated tools are
+   planned on top of what already exists, each scoped to what a given
+   scale actually needs (a scale-1 operator doesn't need multi-cell
+   arbitration views; a scale-3 one does):
+   - a **supervision dashboard** on top of the existing read-only
+     console — human-facing, still read-only by construction (§7.1 "the
+     supervisor sees everything, touches nothing" carries over
+     unchanged, D81);
+   - a **rule/policy editor** for the OPA Rego bundle — edit, test
+     against the same determinism and capability-stripping gates
+     `validate_determinism.go` already enforces, and diff against what's
+     deployed, before anything reaches production;
+   - an **audit browser** for the registry — search and filter the leaf
+     history (`KindDecision`, `KindTelemetry`, `KindQuorum`, …) with the
+     same third-party-verifiable checkpoint proof `ChainWatcher` already
+     does programmatically, made legible to a human auditor instead of a
+     test assertion.
+2. **Standards alignment — from a proprietary policy model to an
+   interoperable one.** TBP's rule taxonomy (classes F/I/W/OUT, §5.3),
+   its audit trail (hash-only Merkle-logged leaves, §6.2), and its
+   control set (fail-closed, monitor-before-closed, quorum for
+   high-stakes actions) are TBP-specific today — internally consistent
+   and tested, but not mapped to any external framework an auditor or a
+   regulator would already recognize. The work is to identify which
+   existing (and emerging) standards this maps to, and where the gaps
+   are — not to assume any of these apply, or that TBP already satisfies
+   them, without doing that mapping first. Candidates worth evaluating
+   as a starting point: **ISO/IEC 42001** (AI management system
+   standard — the closest fit for an "AI governance" claim), the **NIST
+   AI Risk Management Framework**, the **EU AI Act**'s logging and
+   human-oversight obligations for high-risk systems (§4.1's leaf-per-
+   decision and §4.2's plan-as-contract arbitration are structurally
+   close to what Article 12/14 ask for — unverified, needs a real
+   mapping, not an assumption), **NIST SP 800-207** (Zero Trust
+   Architecture — the spec already positions TBP against Zero Trust in
+   §3.3, a formal control-by-control comparison is the natural next
+   step), and **OSCAL** (NIST's machine-readable control/assessment
+   format — a plausible export target so TBP's own audit trail can feed
+   standard compliance tooling instead of requiring a bespoke reader).
+   This is research and specification work before it's code: the
+   product is a gap analysis and, where a real mapping exists, either
+   adapter code or documented equivalence — not a rewrite of the rule
+   engine.
 
 ## Licensing
 
