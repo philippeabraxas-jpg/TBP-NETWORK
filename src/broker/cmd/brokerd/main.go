@@ -45,7 +45,10 @@
 //	                        par le noyau (SO_PEERCRED), jamais déclaré
 //	                        par le pair
 //	TBP_OPA_INSECURE_TCP_DEV  exempte EXPLICITEMENT du transport Unix
-//	                        authentifié (§92.A3) — dev/lab uniquement
+//	                        authentifié (§92.A3) — dev/lab uniquement ;
+//	                        revue #113 : refusé au démarrage sauf sentinel
+//	                        devmode.DefaultSentinelPath présent (fichier à
+//	                        chemin FIXE, hors de ce fichier d'environnement)
 //	TBP_OPA_REVISION_CHECK_INTERVAL_MS  optionnel — période de vérification
 //	                        périodique que la révision RÉELLEMENT servie
 //	                        par OPA correspond à TBP_POLICY_ID épinglé
@@ -58,7 +61,11 @@
 //	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
 //	jamais les deux, jamais aucun (revue de sécurité #90, point 5) :
 //	TBP_ISSUER_SEED_FILE    seed Ed25519 de l'émetteur, hex 64, fichier
-//	                        0600 — CUSTODY DEV UNIQUEMENT (labo/CI)
+//	                        0600 — CUSTODY DEV UNIQUEMENT (labo/CI) ;
+//	                        revue #113 : jusqu'ici acceptée SANS AUCUN
+//	                        drapeau dev dédié — désormais soumise au même
+//	                        sentinel devmode.DefaultSentinelPath que
+//	                        TBP_OPA_INSECURE_TCP_DEV ci-dessus
 //	TBP_ISSUER_PKCS11_MODULE       chemin du module PKCS#11 (.so) — HSM
 //	                        réel ou SoftHSM2 ; la clé privée ne quitte
 //	                        jamais le module (broker.PKCS11Signer)
@@ -123,6 +130,7 @@ import (
 
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
+	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
@@ -143,7 +151,7 @@ const readHeaderTimeout = 5 * time.Second
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Getenv); err != nil {
+	if err := run(ctx, os.Getenv, os.Stat); err != nil {
 		log.Fatalf("brokerd: %v", err)
 	}
 }
@@ -183,8 +191,10 @@ type config struct {
 }
 
 // loadConfig lit et valide TOUTE la configuration — la moindre pièce
-// manquante ou invalide est une erreur, avant tout effet de bord.
-func loadConfig(getenv func(string) string) (*config, error) {
+// manquante ou invalide est une erreur, avant tout effet de bord. stat
+// n'est consulté QUE si un drapeau « dev » (revue #113) est actif — voir
+// devEscapeHatchFlags ci-dessous.
+func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, error)) (*config, error) {
 	cellID, err := envRequired(getenv, "TBP_CELL_ID")
 	if err != nil {
 		return nil, err
@@ -256,6 +266,9 @@ func loadConfig(getenv func(string) string) (*config, error) {
 	case usingPKCS11 && (pkcs11Module == "" || pkcs11Token == "" || pkcs11KeyLabel == "" || pkcs11PINFile == ""):
 		return nil, errors.New("TBP_ISSUER_PKCS11_MODULE, _TOKEN_LABEL, _KEY_LABEL et _PIN_FILE sont tous requis ensemble")
 	}
+	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile)); err != nil {
+		return nil, err
+	}
 	genesisDir, err := envRequired(getenv, "TBP_GENESIS_DIR")
 	if err != nil {
 		return nil, err
@@ -322,9 +335,26 @@ func loadConfig(getenv func(string) string) (*config, error) {
 	}, nil
 }
 
+// devEscapeHatchFlags rassemble les échappatoires « dev » actives de
+// brokerd pour la revue de sécurité #113 : TBP_OPA_INSECURE_TCP_DEV
+// (comme pepd) ET TBP_ISSUER_SEED_FILE — contrairement aux deux
+// échappatoires OPA (#92), la seed de dev était jusqu'ici acceptée SANS
+// AUCUN drapeau dédié, seule sa présence suffisait à choisir la custody
+// dev plutôt que HSM.
+func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string) []string {
+	var active []string
+	if opaInsecureTCPDev {
+		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
+	}
+	if issuerSeedFile != "" {
+		active = append(active, "TBP_ISSUER_SEED_FILE")
+	}
+	return active
+}
+
 // run assemble la pile et sert jusqu'à l'annulation du contexte.
-func run(ctx context.Context, getenv func(string) string) error {
-	cfg, err := loadConfig(getenv)
+func run(ctx context.Context, getenv func(string) string, stat func(string) (os.FileInfo, error)) error {
+	cfg, err := loadConfig(getenv, stat)
 	if err != nil {
 		return err
 	}

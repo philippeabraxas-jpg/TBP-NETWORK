@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +86,44 @@ func TestDurabilityFromEnvErrorMentionsVariable(t *testing.T) {
 	_, _, err := durabilityFromEnv(envOf(map[string]string{"TBP_DURABILITY": "nope"}))
 	if err == nil || !strings.Contains(err.Error(), "TBP_DURABILITY") {
 		t.Fatalf("erreur doit nommer la variable: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// checkDevEscapeHatches (revue #113) : TBP_OPA_DISABLED_DEV_UNSAFE et
+// TBP_OPA_INSECURE_TCP_DEV exigent le sentinel devmode, indépendant du
+// fichier d'environnement qui les porte.
+// ---------------------------------------------------------------------------
+
+func statAbsent(string) (os.FileInfo, error)  { return nil, os.ErrNotExist }
+func statPresent(string) (os.FileInfo, error) { return nil, nil }
+
+func TestCheckDevEscapeHatchesNoFlagsNoSentinelRequired(t *testing.T) {
+	if err := checkDevEscapeHatches(envOf(nil), statAbsent); err != nil {
+		t.Fatalf("erreur inattendue (aucun drapeau actif): %v", err)
+	}
+}
+
+func TestCheckDevEscapeHatchesOPADisabledRefusedWithoutSentinel(t *testing.T) {
+	err := checkDevEscapeHatches(envOf(map[string]string{"TBP_OPA_DISABLED_DEV_UNSAFE": "1"}), statAbsent)
+	if err == nil || !strings.Contains(err.Error(), "TBP_OPA_DISABLED_DEV_UNSAFE") {
+		t.Fatalf("erreur attendue nommant TBP_OPA_DISABLED_DEV_UNSAFE, obtenu: %v", err)
+	}
+}
+
+func TestCheckDevEscapeHatchesOPAInsecureTCPRefusedWithoutSentinel(t *testing.T) {
+	err := checkDevEscapeHatches(envOf(map[string]string{"TBP_OPA_INSECURE_TCP_DEV": "1"}), statAbsent)
+	if err == nil || !strings.Contains(err.Error(), "TBP_OPA_INSECURE_TCP_DEV") {
+		t.Fatalf("erreur attendue nommant TBP_OPA_INSECURE_TCP_DEV, obtenu: %v", err)
+	}
+}
+
+func TestCheckDevEscapeHatchesBothAllowedWithSentinel(t *testing.T) {
+	env := envOf(map[string]string{
+		"TBP_OPA_DISABLED_DEV_UNSAFE": "1",
+		"TBP_OPA_INSECURE_TCP_DEV":    "1",
+	})
+	if err := checkDevEscapeHatches(env, statPresent); err != nil {
+		t.Fatalf("erreur inattendue (sentinel présent): %v", err)
 	}
 }
