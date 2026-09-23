@@ -1,0 +1,56 @@
+name: selftest
+
+# Revue de sécurité post-#86 : avant ce fichier, AUCUN job CI n'exécutait
+# `go build`/`go test`/`deploy/selftest` — seuls `opa fmt`/`opa check`/
+# `validate_determinism` (lint.yml, determinism.yml) touchaient du code
+# réel. Deux régressions concrètes sont passées inaperçues de la CI pour
+# cette raison :
+#   - `main` cassé entre deux merges (un correctif de #111/#112 avait été
+#     construit contre l'ancienne signature de NewSignatureQuorumVerifier,
+#     avant que #105 ne change cette signature — aucun `go build` en CI
+#     ne l'a vu, découvert seulement en local) ;
+#   - le vérificateur de guides (deploy/selftest/check_steps.py) ne
+#     reconnaissait plus aucune étape depuis la traduction anglaise des
+#     guides (#83) — `selftest.sh` échouait inconditionnellement, jamais
+#     exécuté par la CI.
+# Ce workflow ferme les deux : un `go build`/`go vet`/`go test` réel, ET
+# `deploy/selftest/selftest.sh` (mono/fencing/daemons réels + vérification
+# des guides + non-vacuité du vérificateur lui-même) sur CHAQUE PR.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race (paquets exercés par la revue post-#86)
+        run: go test -race ./src/pep/... ./src/broker/... ./src/devmode/...
+
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          # Épinglé — même raison et même version que lint.yml/determinism.yml.
+          version: 1.20.2
+      - name: SoftHSM2 (témoins PKCS#11 §114 — sautent proprement si absent, ici présent)
+        run: sudo apt-get update && sudo apt-get install -y softhsm2
+      - name: deploy/selftest/selftest.sh (selftest Go réel + guides + non-vacuité du vérificateur)
+        run: bash deploy/selftest/selftest.sh

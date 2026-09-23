@@ -12,7 +12,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: open-policy-agent/setup-opa@v2
         with:
-          version: latest
+          # Épinglé (revue de sécurité post-#86) : "latest" laissait passer
+          # une régression de comportement OPA amont sans qu'aucun contrôle
+          # ne la voie — c'est ainsi que le bug de provenance
+          # (provenance.bundles.<clé>.revision vs provenance.revision,
+          # #86/f649788) est passé inaperçu de la CI, découvert seulement
+          # par lecture manuelle contre le vrai binaire. Cette version est
+          # celle vérifiée empiriquement dans ce dépôt (deploy/selftest,
+          # policies/gen_capabilities.sh) — la faire évoluer est une
+          # décision délibérée, jamais un effet de bord de "latest".
+          version: 1.20.2
       - name: opa fmt --diff
         run: opa fmt --list --diff policies/rego/
       - name: opa check
