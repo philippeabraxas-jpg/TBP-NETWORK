@@ -182,9 +182,18 @@ func runMono(s *suite, cfg config) {
 	}
 
 	// --- Étape : OPA serveur sur le bundle compilé avec capabilities --------
+	// policyID est calculé AVANT le build (hash des sources rego, pas de
+	// l'artefact compilé) : c'est ce qui permet de l'épingler comme
+	// révision du bundle SANS circularité (revue de sécurité #92, A5).
 	regoPath := filepath.Join(cfg.repo, "policies", "rego", "action_example.rego")
+	regoRaw, err := os.ReadFile(regoPath)
+	if err != nil {
+		s.fail(phaseMono, "policyID (hash du bundle rego)", err)
+		return
+	}
+	policyID := sha256.Sum256(regoRaw)
 	bundlePath := filepath.Join(opaDir, "tbp-example.tar.gz")
-	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath) {
+	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath, hex.EncodeToString(policyID[:])) {
 		return
 	}
 	opa, ok := startOPA(s, phaseMono, cfg, monoOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
@@ -202,12 +211,6 @@ func runMono(s *suite, cfg config) {
 		s.fail(phaseMono, "keyring dev", err)
 		return
 	}
-	regoRaw, err := os.ReadFile(regoPath)
-	if err != nil {
-		s.fail(phaseMono, "policyID (hash du bundle rego)", err)
-		return
-	}
-	policyID := sha256.Sum256(regoRaw)
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		s.fail(phaseMono, "sel registre", err)
@@ -237,6 +240,10 @@ func runMono(s *suite, cfg config) {
 		"TBP_REGISTRY_DIR="+regDir,
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
 		"TBP_OPA_ENDPOINT="+opaURL+"/v1/data/tbp/example/action",
+		// OPA reste en TCP loopback ici (selftest local, pas de socket
+		// Unix propre à cette machine partagée) — dev/lab EXPLICITE,
+		// revue de sécurité #92, finding A3.
+		"TBP_OPA_INSECURE_TCP_DEV=1",
 		"TBP_QUORUM_KEYRING_FILE="+quorumKeyringPath,
 		// T38/#71 : explicite même si async-bounded est le défaut — le
 		// selftest éping le modèle de durabilité qu'il exerce.
