@@ -20,7 +20,15 @@
 //	TBP_POLICY_ID      hash de la politique locale, hex 64 (§3)
 //	TBP_REGISTRY_DIR   répertoire du CellLog (la clé note y est créée au
 //	                   premier démarrage, rechargée ensuite)
-//	TBP_LISTEN_ADDR    défaut ":8443" (le PEP_PORT de la règle nftables)
+//	TBP_LISTEN_ADDR    défaut ":8443" (le PEP_PORT de la règle nftables) —
+//	                   plan de DONNÉES uniquement (§5.3, revue #95) :
+//	                   /v1/evaluate, /v1/passport/consume
+//	TBP_ADMIN_SOCKET   optionnel — socket Unix du plan d'ADMINISTRATION
+//	                   (revue de sécurité #95, finding A10) : /v1/mode,
+//	                   /healthz. Défaut /run/tbp/pepd-admin.sock, permissions
+//	                   0660 (même doctrine que le socket brokerd : l'accès
+//	                   au socket EST le contrôle d'accès). JAMAIS sur le
+//	                   canal TCP de l'agent.
 //	TBP_OPA_ENDPOINT   sidecar OPA (T11) consulté après validation — REQUIS
 //	                   (revue de sécurité #92, A2 : l'arbitrage OPA est
 //	                   obligatoire) sauf TBP_OPA_DISABLED_DEV_UNSAFE=1
@@ -122,6 +130,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -428,9 +437,28 @@ func run() error {
 		return err
 	}
 
+	// Plan de données (agent gouverné) : /v1/evaluate, /v1/passport/consume
+	// — TCP, redirigé par nftables (PEP_PORT, config/nftables/pep-redirect.nft).
 	srv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           listener.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	// Plan d'ADMINISTRATION (revue de sécurité #95, finding A10) :
+	// /v1/mode (bascule de posture) et /healthz — socket Unix SÉPARÉ,
+	// jamais sur le canal de l'agent. Doctrine déjà établie pour la
+	// console de supervision (T34c) : l'accès au socket EST le contrôle
+	// d'accès.
+	adminSocket := os.Getenv("TBP_ADMIN_SOCKET")
+	if adminSocket == "" {
+		adminSocket = defaultAdminSocket
+	}
+	adminLis, err := listenUnix(adminSocket)
+	if err != nil {
+		return fmt.Errorf("plan d'administration: %w", err)
+	}
+	adminSrv := &http.Server{
+		Handler:           listener.AdminHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -465,29 +493,67 @@ func run() error {
 		log.Printf("pepd: proxy bloquant (§94) en écoute sur %s → backend %s", proxyAddr, backend)
 	}
 
+	adminErr := make(chan error, 1)
 	proxyErr := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		_ = adminSrv.Shutdown(shutdownCtx)
 		if proxySrv != nil {
 			_ = proxySrv.Shutdown(shutdownCtx)
 		}
+	}()
+	go func() {
+		adminErr <- adminSrv.Serve(adminLis)
 	}()
 	if proxySrv != nil {
 		go func() { proxyErr <- proxySrv.ListenAndServe() }()
 	} else {
 		close(proxyErr)
 	}
-	log.Printf("pepd: cellule %s en écoute sur %s (mode monitor — §5.3)", cellID, listenAddr)
+	log.Printf("pepd: cellule %s en écoute sur %s (mode monitor — §5.3) ; administration sur unix://%s", cellID, listenAddr, adminSocket)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := <-adminErr; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	if err := <-proxyErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// defaultAdminSocket est le chemin par défaut du plan d'administration
+// (revue de sécurité #95) quand TBP_ADMIN_SOCKET n'est pas fourni.
+const defaultAdminSocket = "/run/tbp/pepd-admin.sock"
+
+// listenUnix ouvre le socket Unix du plan d'administration : permissions
+// 0660 (même doctrine que broker.ListenUnix — l'accès au socket EST le
+// contrôle d'accès). Duplication d'assemblage assumée plutôt qu'un
+// package partagé pour ces ~15 lignes (précédent déjà posé par
+// loadOrGenerateCellKey, dupliqué entre pepd et brokerd).
+func listenUnix(path string) (net.Listener, error) {
+	if path == "" {
+		return nil, errors.New("pepd: chemin de socket d'administration vide refusé")
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("pepd: suppression du socket résiduel : %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return nil, fmt.Errorf("pepd: répertoire du socket d'administration : %w", err)
+	}
+	lis, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("pepd: écoute unix %s : %w", path, err)
+	}
+	if err := os.Chmod(path, 0o660); err != nil {
+		_ = lis.Close()
+		return nil, fmt.Errorf("pepd: permissions du socket d'administration : %w", err)
+	}
+	return lis, nil
 }
 
 func envRequired(name string) (string, error) {

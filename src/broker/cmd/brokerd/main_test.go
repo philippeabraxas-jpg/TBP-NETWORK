@@ -178,10 +178,11 @@ func TestLoadConfigFailClosed(t *testing.T) {
 // clés d'opérateurs) —
 
 type runFixture struct {
-	env      map[string]string
-	genDir   string
-	seedFile string
-	opsFile  string
+	env       map[string]string
+	genDir    string
+	seedFile  string
+	opsFile   string
+	adminSock string
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -290,10 +291,12 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	if _, err := rand.Read(salt); err != nil {
 		t.Fatalf("salt: %v", err)
 	}
+	adminSock := filepath.Join(dir, "broker-admin.sock")
 	return &runFixture{
-		genDir:   genDir,
-		seedFile: seedFile,
-		opsFile:  opsFile,
+		genDir:    genDir,
+		seedFile:  seedFile,
+		opsFile:   opsFile,
+		adminSock: adminSock,
 		env: map[string]string{
 			"TBP_CELL_ID":              "cell-a",
 			"TBP_SALT":                 hex.EncodeToString(salt),
@@ -307,6 +310,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 			"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 			"TBP_OPERATOR_KEYS_FILE":   opsFile,
 			"TBP_BROKER_SOCKET":        sock,
+			"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 		},
 	}
 }
@@ -478,7 +482,9 @@ func TestBrokerdEndToEnd(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- run(ctx, mapGetenv(fx.env)) }()
 	waitSocket(t, sock)
+	waitSocket(t, fx.adminSock)
 	hc := unixClient(t, sock)
+	adminHC := unixClient(t, fx.adminSock)
 
 	// 1. Action autorisée de bout en bout : jeton émis, jti posé.
 	res := postAction(t, hc, "agent-1", `{"action":"read","resource":"doc-1","class":0}`)
@@ -509,7 +515,7 @@ func TestBrokerdEndToEnd(t *testing.T) {
 		Denies              uint64 `json:"denies"`
 		TranslationFailures uint64 `json:"translation_failures"`
 	}
-	getJSON(t, hc, "http://brokerd/v1/supervision/stats", &stats)
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/stats", &stats)
 	// Denies = 2 : le refus OPA (compté à l'étape 5) ET le refus de
 	// traduction (compté dans deny()) — tout refus est un deny, quelle
 	// que soit l'étape qui le prononce.
@@ -525,7 +531,7 @@ func TestBrokerdEndToEnd(t *testing.T) {
 		ExpiresAt   time.Time `json:"expires_at"`
 		Quarantined []string  `json:"quarantined"`
 	}
-	getJSON(t, hc, "http://brokerd/v1/supervision/epoch", &epoch)
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/epoch", &epoch)
 	if epoch.Epoch != 0 || epoch.Authority != "cell-a" {
 		t.Fatalf("époque = %+v, attendu epoch 0 autorité cell-a", epoch)
 	}
@@ -540,7 +546,7 @@ func TestBrokerdEndToEnd(t *testing.T) {
 			Hash string `json:"hash"`
 		} `json:"pending"`
 	}
-	getJSON(t, hc, "http://brokerd/v1/supervision/arbitration", &arb)
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/arbitration", &arb)
 	if arb.PolicyID != fx.env["TBP_POLICY_ID"] {
 		t.Fatalf("policy_id = %q, attendu %q", arb.PolicyID, fx.env["TBP_POLICY_ID"])
 	}
@@ -554,13 +560,35 @@ func TestBrokerdEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("requête: %v", err)
 	}
-	resp, err := hc.Do(req)
+	resp, err := adminHC.Do(req)
 	if err != nil {
 		t.Fatalf("POST supervision/stats: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST /v1/supervision/stats: statut %d, attendu 405", resp.StatusCode)
+	}
+
+	// 8. Séparation des plans (revue de sécurité #95) : la porte d'actions
+	// est ABSENTE du socket d'administration, et les lectures de
+	// supervision sont ABSENTES du socket de données — preuve positive de
+	// la scission, pas seulement que les bons appels fonctionnent par
+	// ailleurs.
+	dataResp, err := hc.Get("http://brokerd/v1/supervision/stats")
+	if err != nil {
+		t.Fatalf("GET supervision/stats sur socket de données: %v", err)
+	}
+	dataResp.Body.Close()
+	if dataResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /v1/supervision/stats sur le socket de DONNÉES: statut %d, attendu 404", dataResp.StatusCode)
+	}
+	adminActionsResp, err := adminHC.Post("http://brokerd/v1/actions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST /v1/actions sur socket d'administration: %v", err)
+	}
+	adminActionsResp.Body.Close()
+	if adminActionsResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST /v1/actions sur le socket d'ADMINISTRATION: statut %d, attendu 404", adminActionsResp.StatusCode)
 	}
 
 	cancel()
@@ -579,6 +607,7 @@ func TestBrokerdEndToEnd(t *testing.T) {
 func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "broker.sock")
 	dir := t.TempDir()
+	adminSock := filepath.Join(dir, "broker-admin.sock")
 	genDir := filepath.Join(dir, "genesis")
 	if err := os.MkdirAll(genDir, 0o700); err != nil {
 		t.Fatalf("genesis dir: %v", err)
@@ -641,13 +670,16 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		"TBP_CLUSTER_MEMBERS":      "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
 		"TBP_OPERATOR_KEYS_FILE":   opsFile,
 		"TBP_BROKER_SOCKET":        sock,
+		"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() { runErr <- run(ctx, mapGetenv(env)) }()
 	waitSocket(t, sock)
+	waitSocket(t, adminSock)
 	hc := unixClient(t, sock)
+	adminHC := unixClient(t, adminSock)
 
 	// Démarre SANS epoch0.json — c'est déjà la preuve principale : avant
 	// ce correctif, l'absence d'epoch0.json faisait échouer run() avec
@@ -661,7 +693,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	// epochView à moitié rempli (not_before/expires_at seraient à la
 	// valeur zéro, lisibles comme « bail déjà expiré »).
 	var raw map[string]any
-	getJSON(t, hc, "http://brokerd/v1/supervision/epoch", &raw)
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/epoch", &raw)
 	if raw["mode"] != "mono-cellule" {
 		t.Fatalf("vue d'époque = %+v, attendu mode=mono-cellule", raw)
 	}
