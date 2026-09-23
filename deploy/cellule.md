@@ -6,7 +6,12 @@ A cell runs: the **broker** `brokerd` (T37 — issue #74), the
 **tessera registry** (T7), **OPA** (T11, restricted capabilities
 §12), the **epoch tracker** (§7.2) and the PEP `pepd`. Every decision
 leaves a leaf (§4.1); the leaf salt stays on THIS machine
-(§6.2). Posture at startup: **monitor**, always (§5.3).
+(§6.2). Posture at startup: **monitor**, at the FIRST deployment only
+(§5.3). Security review #93: any RESTART (the cell's registry key
+already exists) starts in **refused** — everything is denied, even an
+otherwise-allowed evaluation — until a quorum explicitly reconfirms a
+posture via `POST /v1/mode`. A restart never silently resumes the
+posture the cell had before.
 
 > The mono phase of `deploy/selftest/` executes steps 1 to 6 of this
 > guide against the real binaries, and the daemons phase executes step 7
@@ -185,15 +190,21 @@ curl -s http://127.0.0.1:8443/v1/mode
 ```
 
 **Observable success criterion**: `/healthz` answers 200;
-`GET /v1/mode` returns `{"mode":"monitor"}` — pepd ALWAYS starts in
-monitor, the closed switch is governed (step 8 and
-[monitor-to-closed.md](monitor-to-closed.md)); on first startup,
-`cell_log.key` (0600) and `cell_log.vkey` are created in
-`TBP_REGISTRY_DIR` (registry key of THE cell — D97 custody).
+`GET /v1/mode` returns `{"mode":"monitor"}` on this FIRST startup, the
+closed switch is governed (step 8 and
+[monitor-to-closed.md](monitor-to-closed.md)); `cell_log.key` (0600)
+and `cell_log.vkey` are created in `TBP_REGISTRY_DIR` (registry key of
+THE cell — D97 custody). Security review #93: kill this process and
+restart it with the SAME environment — `GET /v1/mode` now returns
+`{"mode":"refused"}`, and evaluations are denied even for an
+otherwise-valid token, until a quorum-signed `POST /v1/mode` (same
+shape as step 8) explicitly reconfirms a posture.
 
 **On failure: STOP** — a startup without keyring, without policy ID or
 without salt must fail; if it succeeds, the binary is not the one from
-the repo. Closed mode IS NOT the goal of this step.
+the repo. Closed mode IS NOT the goal of this step. A RESTART that
+silently reports `monitor` (instead of `refused`) is the exact
+regression security review #93 fixes — never work around it.
 
 #### Step 7 — Build and start brokerd (full decision chain, T37)
 

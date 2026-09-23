@@ -385,6 +385,68 @@ func runMono(s *suite, cfg config) {
 		err == nil && er.Allow && er.Forwarded,
 		fmt.Sprintf("allow=%v forwarded=%v", er.Allow, er.Forwarded))
 
+	// --- Étape #93 : redémarrage = refus total jusqu'à reconfirmation ------
+	// Vérification prioritaire suggérée par l'issue elle-même : pepd en
+	// closed (bascule quorée ci-dessus), puis kill + redémarrage — la
+	// posture ne doit JAMAIS repartir en monitor SANS signature (attaque
+	// par rétrogradation, revue de sécurité #93, option la plus stricte
+	// actée par le mainteneur).
+	_ = pepdCmd.Process.Kill()
+	_, _ = pepdCmd.Process.Wait()
+
+	pepdLog2, err := os.Create(filepath.Join(cfg.out, "pepd-restart.log"))
+	if err != nil {
+		s.fail(phaseMono, "pepd redémarrage (§93)", err)
+		return
+	}
+	pepdCmd = exec.Command(pepdBin)
+	pepdCmd.Env = pepdEnv // MÊME registre : cell_log.key existe déjà
+	pepdCmd.Stdout, pepdCmd.Stderr = pepdLog2, pepdLog2
+	if err := pepdCmd.Start(); err != nil {
+		_ = pepdLog2.Close()
+		s.fail(phaseMono, "pepd redémarrage (§93)", err)
+		return
+	}
+	if err := waitHTTP200(pepdURL+"/healthz", 15*time.Second); err != nil {
+		s.fail(phaseMono, "pepd redémarrage (§93, sonde /healthz)", err)
+		return
+	}
+
+	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	if err == nil {
+		_ = json.NewDecoder(resp.Body).Decode(&modeView)
+		_ = resp.Body.Close()
+	}
+	s.add(phaseMono, "témoin #93: redémarrage → posture refused (PAS monitor silencieux)",
+		modeView.Mode == "refused", "mode="+modeView.Mode)
+
+	// Refus TOTAL : même un jeton par ailleurs valide (allow) est bloqué.
+	tokReadRestart, _ := mintOK("read")
+	_, er, err = evaluate(pepdURL, tokReadRestart, "read", "doc-1")
+	s.add(phaseMono, "témoin #93: refused bloque même un allow",
+		err == nil && !er.Forwarded && er.Mode == "refused",
+		fmt.Sprintf("allow=%v forwarded=%v mode=%s", er.Allow, er.Forwarded, er.Mode))
+
+	// Seule sortie : quorum reconfirmant EXPLICITEMENT une posture — ici
+	// monitor, comme tout acte gouverné (aller ou retour).
+	expiry93 := time.Now().Add(1 * time.Minute)
+	signCtrlMonitor := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
+		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", expiry93))
+		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
+	}
+	status93, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{
+		"mode": "monitor", "expiry": expiry93.Unix(),
+		"signatures": []map[string]string{signCtrlMonitor(ctrl1, ctrl1KID), signCtrlMonitor(ctrl2, ctrl2KID)},
+	})
+	s.add(phaseMono, "témoin #93: reconfirmation quorée de monitor après redémarrage → 200",
+		status93 == http.StatusOK, fmt.Sprintf("status=%d", status93))
+	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	if err == nil {
+		_ = json.NewDecoder(resp.Body).Decode(&modeView)
+		_ = resp.Body.Close()
+	}
+	s.add(phaseMono, "témoin #93: posture = monitor après reconfirmation", modeView.Mode == "monitor", "mode="+modeView.Mode)
+
 	// --- Étape : registre — chaque décision laisse une feuille (§4.1) -------
 	// Non-vacuité par DELTA. Une évaluation ALLOW écrit exactement DEUX
 	// feuilles KindDecision : le verdict du validateur ET l'ouverture du
