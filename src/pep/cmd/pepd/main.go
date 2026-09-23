@@ -82,12 +82,26 @@
 //	                   défaut 1000, plancher 4× l'intervalle de checkpoint
 //	                   (sous le plancher : refus de démarrer, coupures
 //	                   parasites garanties).
-//	Measured boot (T31, §6.3 — revue de sécurité #96) — optionnel, absent
-//	par défaut (TPM/HSM réel non tranché, issue #32) :
-//	TBP_MEASURED_BOOT_MANIFEST_FILE  déclencheur : absent ⇒ désactivé.
-//	                   Présent ⇒ les six variables suivantes deviennent
-//	                   requises ensemble. Fichier du dernier manifeste
-//	                   publié (créé au premier démarrage — genèse TOFU).
+//	Measured boot (T31, §6.3 — revue de sécurité #96) — ACTIF PAR DÉFAUT
+//	depuis la revue de sécurité #112 (issue #86) : TPM/HSM réel non
+//	tranché (issue #32), mais l'ABSENCE de toute mesure n'est plus un
+//	défaut silencieux :
+//	TBP_MEASURED_BOOT_MANIFEST_FILE  requis, sauf
+//	                   TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE=1 déclaré
+//	                   EXPLICITEMENT (dev/lab uniquement, jamais en
+//	                   production, revue #112 — même doctrine que
+//	                   TBP_OPA_DISABLED_DEV_UNSAFE). Présent ⇒ les six
+//	                   variables suivantes deviennent requises ensemble.
+//	                   Fichier du dernier manifeste publié (créé au
+//	                   premier démarrage — genèse TOFU). DOIT résider
+//	                   HORS de TBP_REGISTRY_DIR (vérifié au démarrage,
+//	                   issue #111) : sous TBP_REGISTRY_DIR, effacer le
+//	                   registre effacerait aussi ce témoin indépendant de
+//	                   redémarrage avec lui.
+//	TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE  désactive measured boot
+//	                   EXPLICITEMENT (revue #112) — dev/lab uniquement,
+//	                   jamais en production : aucune protection contre un
+//	                   binaire/config/bundle altéré au démarrage.
 //	TBP_MEASURED_BOOT_ROOT_FILE      fichier hex(64) de la racine mesurée —
 //	                   stand-in DEV/TEST UNIQUEMENT (registry.FileRootMeasurer),
 //	                   jamais en gouvernance réelle.
@@ -96,10 +110,16 @@
 //	TBP_MEASURED_BOOT_AI_CONTAINER   chemins des quatre artefacts mesurés
 //	                   (§6.3) — un écart avec le manifeste engagé refuse le
 //	                   démarrage, trace une feuille, alarme (T14).
-//	TBP_MEASURED_BOOT_TRANSITION=1   déclare un changement de composant
-//	                   DÉLIBÉRÉ pour CE démarrage : engage une nouvelle
-//	                   référence au lieu de vérifier contre l'ancienne —
-//	                   jamais automatique, toujours une décision explicite.
+//	TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE  fichier de preuve de quorum
+//	                   (revue #112 — remplace l'ancien drapeau
+//	                   TBP_MEASURED_BOOT_TRANSITION=1, sans quorum) : k
+//	                   signatures Ed25519 distinctes du MÊME trousseau de
+//	                   contrôleurs que POST /v1/mode (TBP_QUORUM_KEYRING_FILE,
+//	                   §89/§105), déclarant un changement de composant
+//	                   DÉLIBÉRÉ pour CE démarrage — engage une nouvelle
+//	                   référence au lieu de vérifier contre l'ancienne.
+//	                   Jamais automatique, jamais sur la seule foi d'un
+//	                   drapeau texte.
 //	TBP_PROXY_ADDR     optionnel (revue de sécurité #94, finding A6) —
 //	                   adresse d'écoute du proxy BLOQUANT : contrairement
 //	                   à TBP_LISTEN_ADDR (API de verdicts, l'appelant doit
@@ -137,6 +157,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -215,11 +236,9 @@ func run() error {
 	if err := os.MkdirAll(regDir, 0o700); err != nil {
 		return fmt.Errorf("registry dir: %w", err)
 	}
-	isRestart := false
-	if _, statErr := os.Stat(filepath.Join(regDir, "cell_log.key")); statErr == nil {
-		isRestart = true
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("pepd: détection redémarrage (§93): %w", statErr)
+	isRestart, err := detectRestart(regDir, os.Getenv("TBP_MEASURED_BOOT_MANIFEST_FILE"))
+	if err != nil {
+		return err
 	}
 	signer, vkey, err := loadOrGenerateCellKey(regDir, cellID)
 	if err != nil {
@@ -245,9 +264,11 @@ func run() error {
 
 	// Measured boot (T31, issue #32) — revue de sécurité #96 : AVANT
 	// d'ouvrir le service de la cellule (point d'intégration documenté,
-	// src/registry/README.md). Désactivé par défaut (TBP_MEASURED_BOOT_*
-	// absents) — voir measured_boot.go.
-	if err := setupMeasuredBoot(ctx, cellID, salt, signer, verifier, cellLog, os.Getenv); err != nil {
+	// src/registry/README.md). Actif PAR DÉFAUT depuis la revue de
+	// sécurité #112 (issue #86) — voir measured_boot.go : l'ancien défaut
+	// « désactivé » laissait passer un binaire/config/bundle altéré au
+	// démarrage sans qu'aucun opérateur n'ait rien décidé explicitement.
+	if err := setupMeasuredBoot(ctx, cellID, salt, signer, verifier, cellLog, quorumKeyring, quorumMin, os.Getenv); err != nil {
 		return err
 	}
 
@@ -617,7 +638,58 @@ func checkDevEscapeHatches(getenv func(string) string, stat func(string) (os.Fil
 	if getenv("TBP_OPA_INSECURE_TCP_DEV") == "1" {
 		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
 	}
+	if getenv("TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE") == "1" {
+		active = append(active, "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE")
+	}
 	return devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, active)
+}
+
+// detectRestart établit isRestart (revue de sécurité #93) : DOIT être
+// appelé AVANT loadOrGenerateCellKey, qui CRÉE cell_log.key au premier
+// démarrage — sa présence à cet instant précis distingue le premier
+// déploiement (absent) d'un redémarrage (déjà présent), le signal que
+// ModeController.StartRefused exige pour refuser tout trafic tant qu'un
+// quorum n'a pas reconfirmé explicitement une posture.
+//
+// Revue de sécurité post-#86 (issue #111) : effacer ou déplacer
+// TBP_REGISTRY_DIR fait disparaître cell_log.key avec lui — un attaquant
+// (ou une erreur d'exploitation) qui contrôle CE répertoire rétrograde
+// ainsi silencieusement un redémarrage en « premier déploiement » (§93
+// contourné), ET détruit au passage la preuve locale que ce contournement
+// a eu lieu. Le manifeste measured boot (measured_boot.go, désormais actif
+// par défaut — revue #112) vit à un chemin INDÉPENDANT
+// (measuredBootManifestFile) : sa seule EXISTENCE, même quand
+// cell_log.key a disparu, est un second témoin de redémarrage que le même
+// effacement du registre ne touche pas — à condition qu'il ne soit pas
+// LUI-MÊME sous regDir, ce qui annulerait entièrement la protection
+// (vérifié ci-dessous).
+func detectRestart(regDir, measuredBootManifestFile string) (bool, error) {
+	isRestart := false
+	if _, statErr := os.Stat(filepath.Join(regDir, "cell_log.key")); statErr == nil {
+		isRestart = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return false, fmt.Errorf("pepd: détection redémarrage (§93): %w", statErr)
+	}
+	if measuredBootManifestFile == "" {
+		return isRestart, nil
+	}
+	absReg, err := filepath.Abs(regDir)
+	if err != nil {
+		return false, fmt.Errorf("pepd: TBP_REGISTRY_DIR: %w", err)
+	}
+	absMB, err := filepath.Abs(measuredBootManifestFile)
+	if err != nil {
+		return false, fmt.Errorf("pepd: TBP_MEASURED_BOOT_MANIFEST_FILE: %w", err)
+	}
+	if rel, err := filepath.Rel(absReg, absMB); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, fmt.Errorf("pepd: TBP_MEASURED_BOOT_MANIFEST_FILE (%s) est SOUS TBP_REGISTRY_DIR (%s) — effacer le registre effacerait aussi le témoin de redémarrage measured boot avec lui, annulant la protection du §111 ; choisissez un chemin hors de TBP_REGISTRY_DIR", measuredBootManifestFile, regDir)
+	}
+	if _, statErr := os.Stat(measuredBootManifestFile); statErr == nil {
+		isRestart = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return false, fmt.Errorf("pepd: détection redémarrage via measured boot (§111): %w", statErr)
+	}
+	return isRestart, nil
 }
 
 func envHex(name string, minBytes int) ([]byte, error) {

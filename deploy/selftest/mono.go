@@ -272,6 +272,12 @@ func runMono(s *suite, cfg config) {
 		// selftest éping le modèle de durabilité qu'il exerce.
 		"TBP_DURABILITY=async-bounded",
 		"TBP_DURABILITY_WINDOW_MS=1000",
+		// Measured boot est désormais actif PAR DÉFAUT (revue #112) ; le
+		// câblage réel (genèse, CheckBoot, transition sous preuve de
+		// quorum) est déjà couvert par measured_boot_test.go en isolation.
+		// Le désactiver ici EXPLICITEMENT est dev/lab uniquement, jamais en
+		// production — même doctrine que TBP_OPA_INSECURE_TCP_DEV ci-dessus.
+		"TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE=1",
 	)
 
 	// --- Étape : démarrage pepd — TOUJOURS monitor au boot (§5.3) -----------
