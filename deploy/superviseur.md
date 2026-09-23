@@ -89,7 +89,9 @@ go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
 #   TBP_SALT=<32-char hex — salt of the MONITOR's chain, generated here>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/supervision
 #   TBP_CELLS_FILE=/etc/tbp/cells.json
-#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock
+#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane (§95):
+#     supervisord reads GET /v1/supervision/* only, never POST /v1/actions —
+#     the DATA-plane socket (broker.sock) doesn't serve these routes at all.
 #   TBP_TICK_MS=5000
 #   TBP_CONSOLE_SOCKET=/run/tbp/supervision.sock
 install -m 0644 src/supervision/tbp-supervisord.service /etc/systemd/system/

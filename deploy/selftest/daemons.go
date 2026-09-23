@@ -222,6 +222,7 @@ func runDaemons(s *suite, cfg config) {
 	masterDir := filepath.Join(base, "registry", daemonsMasterID)
 	monitorDir := filepath.Join(base, "registry", daemonsMonitorID)
 	brokerSock := filepath.Join(base, "broker.sock")
+	brokerAdminSock := filepath.Join(base, "broker-admin.sock")
 	consoleSock := filepath.Join(base, "supervision.sock")
 	for _, d := range []string{binDir, opaDir, genesisDir, manifestDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -490,17 +491,27 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_CLUSTER_MEMBERS="+daemonsCellID+",cell-b",
 		"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
 		"TBP_BROKER_SOCKET="+brokerSock,
+		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
+		// GET /v1/supervision/* n'est plus servi sur le plan de données
+		// (TBP_BROKER_SOCKET) — un test qui les sonderait encore là échouerait
+		// désormais systématiquement (revue #86 : le selftest doit rester
+		// exécutable, pas seulement le code).
+		"TBP_BROKER_ADMIN_SOCKET="+brokerAdminSock,
 	)
 	supervisorEnv := append(os.Environ(),
 		"TBP_MONITOR_CELL_ID="+daemonsMonitorID,
 		"TBP_SALT="+hex.EncodeToString(monitorSalt),
 		"TBP_REGISTRY_DIR="+monitorDir,
 		"TBP_CELLS_FILE="+cellsPath,
-		"TBP_CELL_BROKER_SOCKET="+brokerSock,
+		// Plan ADMIN (§95) : supervisord ne lit que GET /v1/supervision/*,
+		// jamais POST /v1/actions — brokerSock (plan de données) ne sert
+		// pas ces routes.
+		"TBP_CELL_BROKER_SOCKET="+brokerAdminSock,
 		"TBP_TICK_MS=1000",
 		"TBP_CONSOLE_SOCKET="+consoleSock,
 	)
 	brokerHC := unixClient(brokerSock)
+	brokerAdminHC := unixClient(brokerAdminSock)
 	consoleHC := unixClient(consoleSock)
 
 	// --- Témoin : pas de console dont les sources sont mortes à la naissance
@@ -522,14 +533,14 @@ func runDaemons(s *suite, cfg config) {
 		return
 	}
 	defer brokerd.stop()
-	if err := waitUnix200(brokerHC, "http://brokerd/v1/supervision/stats", 15*time.Second); err != nil {
+	if err := waitUnix200(brokerAdminHC, "http://brokerd/v1/supervision/stats", 15*time.Second); err != nil {
 		s.fail(phaseDaemons, "brokerd démarrage (sonde unix /v1/supervision/stats)", err)
 		return
 	}
 	s.add(phaseDaemons, "brokerd démarré (registre rouvert, epoch0 accepté, socket unix)", true, brokerSock)
 
 	// --- Vues de supervision D109 -------------------------------------------
-	status, raw, err := getUnix(brokerHC, "http://brokerd/v1/supervision/epoch")
+	status, raw, err := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/epoch")
 	var epochV daemonEpochView
 	if err == nil {
 		err = json.Unmarshal(raw, &epochV)
@@ -538,7 +549,7 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && epochV.Epoch == 0 && epochV.Authority == daemonsCellID,
 		fmt.Sprintf("status=%d epoch=%d authority=%s", status, epochV.Epoch, epochV.Authority))
 
-	status, raw, err = getUnix(brokerHC, "http://brokerd/v1/supervision/arbitration")
+	status, raw, err = getUnix(brokerAdminHC, "http://brokerd/v1/supervision/arbitration")
 	var arbV daemonArbitrationView
 	if err == nil {
 		err = json.Unmarshal(raw, &arbV)
@@ -547,7 +558,7 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && arbV.PolicyID == hex.EncodeToString(policyID[:]) && len(arbV.Pending) == 0,
 		fmt.Sprintf("status=%d policy_id=%s pending=%d", status, arbV.PolicyID, len(arbV.Pending)))
 
-	status, raw, err = getUnix(brokerHC, "http://brokerd/v1/supervision/stats")
+	status, raw, err = getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
 	var statsV daemonStatsView
 	if err == nil {
 		err = json.Unmarshal(raw, &statsV)
@@ -557,7 +568,7 @@ func runDaemons(s *suite, cfg config) {
 		fmt.Sprintf("status=%d requests=%d allows=%d denies=%d", status, statsV.Requests, statsV.Allows, statsV.Denies))
 
 	// Doctrine GET-only : une méthode autre que GET reçoit 405 DU MUX.
-	status, _, _ = postUnixJSON(brokerHC, "http://brokerd/v1/supervision/stats", map[string]string{"x": "y"})
+	status, _, _ = postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/stats", map[string]string{"x": "y"})
 	s.add(phaseDaemons, "brokerd: doctrine GET-only — POST sur une vue de supervision → 405",
 		status == http.StatusMethodNotAllowed, fmt.Sprintf("status=%d", status))
 
@@ -580,7 +591,7 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && actV.Allow && actV.Token != "",
 		fmt.Sprintf("status=%d allow=%v reason=%s token=%d octets", status, actV.Allow, actV.Reason, len(actV.Token)))
 
-	status, raw, err = getUnix(brokerHC, "http://brokerd/v1/supervision/stats")
+	status, raw, err = getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
 	statsV = daemonStatsView{}
 	if err == nil {
 		_ = json.Unmarshal(raw, &statsV)
@@ -598,7 +609,7 @@ func runDaemons(s *suite, cfg config) {
 	if err == nil {
 		_ = json.Unmarshal(raw, &actV)
 	}
-	status2, raw2, _ := getUnix(brokerHC, "http://brokerd/v1/supervision/stats")
+	status2, raw2, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
 	statsV2 := daemonStatsView{}
 	if status2 == http.StatusOK {
 		_ = json.Unmarshal(raw2, &statsV2)

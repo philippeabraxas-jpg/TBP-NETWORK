@@ -2,17 +2,24 @@ package pep
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// revisionStub sert un faux OPA dont la révision servie (provenance.revision)
-// est modifiable en cours de test — simule un bundle qui change (rotation
-// légitime) ou un imposteur (bundle substitué, #92.A5).
+// revisionStub sert un faux OPA dont la révision servie
+// (provenance.bundles.<clé>.revision, forme réelle d'OPA 1.20.2 pour un
+// bundle non nommé) est modifiable en cours de test — simule un bundle
+// qui change (rotation légitime) ou un imposteur (bundle substitué,
+// #92.A5).
 type revisionStub struct {
 	revision atomic.Value // string
 	srv      *httptest.Server
@@ -31,7 +38,13 @@ func newRevisionStub(t *testing.T, revision string) *revisionStub {
 			fmt.Fprint(w, `{"result":{"allow":false}}`)
 			return
 		}
-		fmt.Fprintf(w, `{"result":{"allow":false},"provenance":{"revision":%q}}`, s.revision.Load().(string))
+		// Forme RÉELLE d'OPA 1.20.2 pour un bundle non nommé (revue #86) :
+		// provenance.bundles.<clé>.revision, pas provenance.revision — un
+		// faux OPA au mauvais format aurait laissé passer un bug qui
+		// casse TOUT démarrage réel (le selftest contre un vrai OPA était
+		// rouge alors que ces tests unitaires, avec l'ancien stub,
+		// passaient tous).
+		fmt.Fprintf(w, `{"result":{"allow":false},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, s.revision.Load().(string))
 	}))
 	t.Cleanup(s.srv.Close)
 	return s
@@ -216,5 +229,140 @@ func TestNewOPARevisionWatcherFailClosed(t *testing.T) {
 		if _, err := NewOPARevisionWatcher(mutate(base)); err == nil {
 			t.Fatalf("case %d: config invalide acceptée", i)
 		}
+	}
+}
+
+// TestExtractProvenanceRevision : preuve NON-VACUE que le décodage gère
+// les DEUX formes vues chez OPA — et refuse fail-closed le reste. Revue
+// #86 : l'ancien code ne lisait QUE provenance.revision, jamais peuplé
+// par OPA 1.20.2 pour un bundle chargé sans nom explicite (la forme
+// utilisée par `opa run bundle.tar.gz`, celle de ce déploiement) — ce qui
+// faisait échouer TOUT démarrage réel malgré des tests unitaires tous
+// verts (le faux OPA des tests avait le même défaut de format).
+func TestExtractProvenanceRevision(t *testing.T) {
+	mustJSON := func(body string) opaProvenanceResponse {
+		var decoded opaProvenanceResponse
+		if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+			t.Fatalf("corps de test illisible: %v", err)
+		}
+		return decoded
+	}
+
+	t.Run("bundle non nommé (OPA 1.20.2 réel)", func(t *testing.T) {
+		rev, err := extractProvenanceRevision(mustJSON(
+			`{"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":"deadbeef"}}}}`))
+		if err != nil || rev != "deadbeef" {
+			t.Fatalf("rev=%q err=%v, veut deadbeef/nil", rev, err)
+		}
+	})
+
+	t.Run("clé de bundle arbitraire — un seul bundle, révision prise quand même", func(t *testing.T) {
+		rev, err := extractProvenanceRevision(mustJSON(
+			`{"provenance":{"bundles":{"n'importe-quoi":{"revision":"cafebabe"}}}}`))
+		if err != nil || rev != "cafebabe" {
+			t.Fatalf("rev=%q err=%v, veut cafebabe/nil", rev, err)
+		}
+	})
+
+	t.Run("forme historique provenance.revision", func(t *testing.T) {
+		rev, err := extractProvenanceRevision(mustJSON(
+			`{"provenance":{"revision":"deadbeef"}}`))
+		if err != nil || rev != "deadbeef" {
+			t.Fatalf("rev=%q err=%v, veut deadbeef/nil", rev, err)
+		}
+	})
+
+	t.Run("provenance absente — invérifiable", func(t *testing.T) {
+		if _, err := extractProvenanceRevision(mustJSON(`{}`)); err == nil {
+			t.Fatal("provenance absente acceptée")
+		}
+	})
+
+	t.Run("ni revision ni bundles — invérifiable", func(t *testing.T) {
+		if _, err := extractProvenanceRevision(mustJSON(`{"provenance":{}}`)); err == nil {
+			t.Fatal("provenance sans révision acceptée")
+		}
+	})
+
+	t.Run("bundles vide — invérifiable", func(t *testing.T) {
+		if _, err := extractProvenanceRevision(mustJSON(`{"provenance":{"bundles":{}}}`)); err == nil {
+			t.Fatal("bundles vide accepté")
+		}
+	})
+
+	t.Run("révision de bundle vide — invérifiable", func(t *testing.T) {
+		if _, err := extractProvenanceRevision(mustJSON(
+			`{"provenance":{"bundles":{"x":{"revision":""}}}}`)); err == nil {
+			t.Fatal("révision vide acceptée")
+		}
+	})
+
+	t.Run("plusieurs bundles — ambigu, jamais un choix arbitraire", func(t *testing.T) {
+		if _, err := extractProvenanceRevision(mustJSON(
+			`{"provenance":{"bundles":{"a":{"revision":"1"},"b":{"revision":"2"}}}}`)); err == nil {
+			t.Fatal("plusieurs bundles acceptés sans ambiguïté détectée")
+		}
+	})
+}
+
+// TestOPARevisionWatcherAgainstRealOPA : la même preuve que le selftest
+// (revue #86) mais en test unitaire rapide — un VRAI binaire OPA, pas un
+// faux serveur qui peut diverger silencieusement du format réel. Ignoré
+// si `opa` est absent du PATH (environnement de build sans OPA installé).
+func TestOPARevisionWatcherAgainstRealOPA(t *testing.T) {
+	opaBin, err := exec.LookPath("opa")
+	if err != nil {
+		t.Skip("binaire opa introuvable dans PATH — voir deploy/selftest pour la preuve d'intégration complète")
+	}
+
+	dir := t.TempDir()
+	regoPath := filepath.Join(dir, "policy.rego")
+	if err := os.WriteFile(regoPath, []byte("package tbp\n\ndefault allow := false\n"), 0o644); err != nil {
+		t.Fatalf("écriture policy.rego: %v", err)
+	}
+	bundlePath := filepath.Join(dir, "bundle.tar.gz")
+	build := exec.Command(opaBin, "build", "--revision", "deadbeef1234", regoPath, "-o", bundlePath)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("opa build: %v — %s", err, out)
+	}
+
+	addr := "127.0.0.1:0"
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("réservation de port: %v", err)
+	}
+	addr = ln.Addr().String()
+	ln.Close()
+
+	run := exec.Command(opaBin, "run", "--server", "--addr", addr, bundlePath)
+	if err := run.Start(); err != nil {
+		t.Fatalf("opa run: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = run.Process.Kill()
+		_ = run.Wait()
+	})
+
+	endpoint := "http://" + addr + "/v1/data/tbp/allow"
+	var w *OPARevisionWatcher
+	for i := 0; i < 50; i++ {
+		w = newTestWatcher(t, endpoint, "deadbeef1234", nil)
+		w.Check(context.Background())
+		if !w.Mismatch() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if w.Mismatch() {
+		t.Fatalf("révision correcte (deadbeef1234) rejetée contre un OPA réel — raison=%q", w.Reason())
+	}
+
+	wrong := newTestWatcher(t, endpoint, "autre-revision", nil)
+	wrong.Check(context.Background())
+	if !wrong.Mismatch() {
+		t.Fatal("révision incorrecte acceptée contre un OPA réel")
+	}
+	if wrong.Reason() != ReasonOPARevisionMismatch {
+		t.Fatalf("raison=%q, veut %q (pas unverifiable — la lecture DOIT réussir, juste être fausse)", wrong.Reason(), ReasonOPARevisionMismatch)
 	}
 }

@@ -6,11 +6,17 @@ package pep
 // qu'OPA exécute RÉELLEMENT ce bundle. La révision épinglée au build
 // (`opa build --revision <TBP_POLICY_ID hex>`, spec §10.3) est comparée à
 // la révision RÉELLEMENT servie, lue via le paramètre standard OPA
-// `provenance=true` (REST API Data : la réponse porte alors un champ
-// provenance.revision qui reflète le .manifest du bundle chargé — voir
-// la doc REST API OPA, endpoint Data). Un écart — ou l'impossibilité de
-// vérifier — bascule fail-closed (§1) : pas de preuve de révision, pas de
-// confiance.
+// `provenance=true`. Vérifié contre OPA 1.20.2 réel (pas seulement le
+// faux OPA des tests) : un bundle chargé sans nom explicite (`opa run
+// bundle.tar.gz`, la forme utilisée ici) rend sa révision sous
+// provenance.bundles.<clé>.revision — PAS sous provenance.revision, qui
+// reste vide dans ce cas (ce dernier champ existe encore côté OPA mais
+// n'est peuplé que par un mode de chargement différent). La clé de la
+// map est le chemin/argument passé à `opa run`, donc pas prévisible par
+// construction : un seul bundle est attendu (déploiement TBP), sa
+// révision est prise quelle que soit la clé. Un écart — ou
+// l'impossibilité de vérifier — bascule fail-closed (§1) : pas de preuve
+// de révision, pas de confiance.
 //
 // Hors du chemin chaud de décision : Eval() (T11, EvalTimeout 5 ms §9.1)
 // n'est PAS touché par ce fichier. C'est un contrôle périodique, en
@@ -60,12 +66,18 @@ const (
 	OPARevisionPriorityHigh byte = 1 // écart ou vérification impossible
 )
 
-// opaProvenanceResponse ne décode QUE le champ nécessaire — le reste de
-// la réponse OPA (result, decision_id…) est ignoré ici, Eval() s'en
-// charge sur le chemin chaud.
+// opaProvenanceResponse ne décode QUE les champs nécessaires — le reste
+// de la réponse OPA (result, decision_id…) est ignoré ici, Eval() s'en
+// charge sur le chemin chaud. Bundles couvre la forme RÉELLE d'OPA 1.20.2
+// pour un bundle chargé sans nom explicite ; Revision reste pour la forme
+// historique (bundle nommé via config, ou versions plus anciennes) — les
+// deux sont lues, jamais supposées mutuellement exclusives.
 type opaProvenanceResponse struct {
 	Provenance *struct {
 		Revision string `json:"revision"`
+		Bundles  map[string]struct {
+			Revision string `json:"revision"`
+		} `json:"bundles"`
 	} `json:"provenance"`
 }
 
@@ -252,10 +264,37 @@ func (w *OPARevisionWatcher) fetchRevision(ctx context.Context) (string, error) 
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOPAResponse)).Decode(&decoded); err != nil {
 		return "", err
 	}
-	if decoded.Provenance == nil || decoded.Provenance.Revision == "" {
-		return "", errors.New("réponse OPA sans provenance.revision (bundle non versionné ? — --revision requis au build, spec §10.3)")
+	return extractProvenanceRevision(decoded)
+}
+
+// extractProvenanceRevision lit la révision depuis l'une des deux formes
+// vues chez OPA : provenance.revision (bundle nommé via config, ou
+// versions historiques) ou provenance.bundles.<clé>.revision (bundle
+// positionnel non nommé — `opa run bundle.tar.gz`, forme utilisée par ce
+// déploiement, vérifiée contre OPA 1.20.2 réel). La clé de la map n'est
+// pas prévisible (c'est l'argument passé à `opa run`) : un seul bundle
+// est attendu, sa révision est prise quelle que soit cette clé. Plusieurs
+// bundles ou aucune des deux formes renseignée ⇒ invérifiable,
+// fail-closed — jamais un choix arbitraire entre plusieurs révisions.
+func extractProvenanceRevision(decoded opaProvenanceResponse) (string, error) {
+	if decoded.Provenance == nil {
+		return "", errors.New("réponse OPA sans champ provenance (bundle non versionné ? — --revision requis au build, spec §10.3)")
 	}
-	return decoded.Provenance.Revision, nil
+	if decoded.Provenance.Revision != "" {
+		return decoded.Provenance.Revision, nil
+	}
+	switch len(decoded.Provenance.Bundles) {
+	case 1:
+		for _, b := range decoded.Provenance.Bundles {
+			if b.Revision == "" {
+				return "", errors.New("réponse OPA avec provenance.bundles mais révision vide (bundle non versionné ? — --revision requis au build, spec §10.3)")
+			}
+			return b.Revision, nil
+		}
+	case 0:
+		return "", errors.New("réponse OPA sans provenance.revision ni provenance.bundles (bundle non versionné ? — --revision requis au build, spec §10.3)")
+	}
+	return "", fmt.Errorf("réponse OPA avec %d bundles sous provenance.bundles — un seul attendu, révision ambiguë", len(decoded.Provenance.Bundles))
 }
 
 // Run vérifie immédiatement puis boucle jusqu'à annulation du contexte —
