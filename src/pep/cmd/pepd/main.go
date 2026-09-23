@@ -6,6 +6,8 @@
 //	AntiReplay (T10) → QuotaLedger (T12) → ClockWatchdog (T13) →
 //	[OPA (T11)] → ModeController (T15, monitor d'abord §5.3) →
 //	Listener HTTP (T15) → feuilles au CellLog (T7, checkpoints Ed25519).
+//	[Proxy bloquant (T15, revue de sécurité #94), optionnel] — reçoit le
+//	vrai trafic et ne transmet au backend QUE sur un verdict appliqué.
 //
 // Configuration par variables d'environnement (toutes requises sauf
 // mention contraire) :
@@ -26,7 +28,33 @@
 //	                   0660 (même doctrine que le socket brokerd : l'accès
 //	                   au socket EST le contrôle d'accès). JAMAIS sur le
 //	                   canal TCP de l'agent.
-//	TBP_OPA_ENDPOINT   optionnel — sidecar OPA (T11) consulté après validation
+//	TBP_OPA_ENDPOINT   sidecar OPA (T11) consulté après validation — REQUIS
+//	                   (revue de sécurité #92, A2 : l'arbitrage OPA est
+//	                   obligatoire) sauf TBP_OPA_DISABLED_DEV_UNSAFE=1
+//	                   déclaré EXPLICITEMENT (dev/lab uniquement, jamais
+//	                   en production)
+//	TBP_OPA_SOCKET     chemin du socket Unix d'OPA — REQUIS avec
+//	                   TBP_OPA_EXPECTED_UID (§92.A3 : transport authentifié
+//	                   par SO_PEERCRED, un OPA en TCP non authentifié est
+//	                   indétectable d'un imposteur) sauf
+//	                   TBP_OPA_INSECURE_TCP_DEV=1 déclaré EXPLICITEMENT
+//	TBP_OPA_EXPECTED_UID  UID attendu du processus OPA, requis avec
+//	                   TBP_OPA_SOCKET — vérifié à CHAQUE connexion par le
+//	                   noyau (SO_PEERCRED), jamais déclaré par le pair
+//	TBP_OPA_INSECURE_TCP_DEV  exempte EXPLICITEMENT du transport Unix
+//	                   authentifié (§92.A3) — dev/lab uniquement, jamais
+//	                   en production : un imposteur sur le port TCP d'OPA
+//	                   devient indétectable
+//	TBP_OPA_REVISION_CHECK_INTERVAL_MS  optionnel — période de vérification
+//	                   périodique que la révision RÉELLEMENT servie par
+//	                   OPA correspond à TBP_POLICY_ID épinglé (§92.A5,
+//	                   spec §10.3). Défaut 10000 (10 s) ; vérifiée aussi
+//	                   UNE FOIS, de façon SYNCHRONE, avant que la cellule
+//	                   ne serve — un écart y refuse le démarrage
+//	TBP_OPA_DISABLED_DEV_UNSAFE  désactive OPA EXPLICITEMENT (§92.A2) —
+//	                   dev/lab uniquement, jamais en production : aucun
+//	                   arbitrage de règles, mutuellement exclusif avec
+//	                   TBP_OPA_ENDPOINT
 //	TBP_QUORUM_MIN     signatures Ed25519 DISTINCTES exigées pour les actes
 //	                   gouvernés (bascule de posture, levée classe W) —
 //	                   défaut 2. Vérifié cryptographiquement contre
@@ -53,10 +81,26 @@
 //	                   défaut 1000, plancher 4× l'intervalle de checkpoint
 //	                   (sous le plancher : refus de démarrer, coupures
 //	                   parasites garanties).
+//	TBP_PROXY_ADDR     optionnel (revue de sécurité #94, finding A6) —
+//	                   adresse d'écoute du proxy BLOQUANT : contrairement
+//	                   à TBP_LISTEN_ADDR (API de verdicts, l'appelant doit
+//	                   interroger PUIS respecter la réponse), ce port REÇOIT
+//	                   le vrai trafic et ne transmet au backend QUE sur un
+//	                   verdict appliqué favorable — le blocage devient
+//	                   structurel. Absent ⇒ proxy désactivé, pepd reste une
+//	                   API de verdicts pure (comportement historique).
+//	TBP_PROXY_BACKEND  requis avec TBP_PROXY_ADDR — URL http(s) absolue du
+//	                   service RÉEL en amont.
 //
-// Doctrine §5.3 : le démon démarre TOUJOURS en mode monitor — jamais
-// closed au premier déploiement, ni au redémarrage. La bascule closed
-// passe par POST /v1/mode, gouvernée par quorum et tracée au registre.
+// Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
+// (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
+// tout REDÉMARRAGE (clé de registre déjà présente), le démon démarre en
+// posture REFUSÉE — refus total de tout trafic, même un allow — jusqu'à
+// ce qu'un quorum reconfirme EXPLICITEMENT une posture (monitor ou
+// closed) via POST /v1/mode. Un process qui revient de crash ne "se
+// réveille" donc plus jamais dans la posture qu'il avait avant, ni en
+// monitor par défaut silencieux : la reconfirmation est elle-même un
+// acte gouverné, tracé au registre comme toute bascule.
 package main
 
 import (
@@ -69,6 +113,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -137,8 +182,21 @@ func run() error {
 
 	// Registre de la cellule (T7) : checkpoints signés Ed25519 ; la clé
 	// note est créée au premier démarrage puis rechargée (§12).
+	//
+	// isRestart (revue de sécurité #93) DOIT être établi AVANT
+	// loadOrGenerateCellKey, qui CRÉE le fichier au premier démarrage —
+	// sa présence à cet instant précis distingue le premier déploiement
+	// (absent) d'un redémarrage (déjà présent), le signal que
+	// ModeController.StartRefused exige pour refuser tout trafic tant
+	// qu'un quorum n'a pas reconfirmé explicitement une posture.
 	if err := os.MkdirAll(regDir, 0o700); err != nil {
 		return fmt.Errorf("registry dir: %w", err)
+	}
+	isRestart := false
+	if _, statErr := os.Stat(filepath.Join(regDir, "cell_log.key")); statErr == nil {
+		isRestart = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("pepd: détection redémarrage (§93): %w", statErr)
 	}
 	signer, vkey, err := loadOrGenerateCellKey(regDir, cellID)
 	if err != nil {
@@ -304,18 +362,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var opaClient *pep.OPAClient
-	if endpoint := os.Getenv("TBP_OPA_ENDPOINT"); endpoint != "" {
-		opaClient, err = pep.NewOPAClient(pep.OPAOptions{
-			Endpoint: endpoint,
-			CellID:   cellID,
-			Salt:     salt,
-			Leaves:   cellLog,
-			OnTrip:   failClosed.OnTrip(),
-		})
-		if err != nil {
-			return err
-		}
+	// Arbitrage OPA (T11) durci — revue de sécurité #92 : obligatoire
+	// (A2), transport authentifié par SO_PEERCRED (A3), révision vérifiée
+	// au démarrage puis périodiquement (A5). Voir opa_setup.go.
+	opa, err := setupOPA(ctx, cellID, salt, policy, cellLog, failClosed.OnTrip(), os.Getenv)
+	if err != nil {
+		return err
+	}
+	opaClient := opa.client
+	if opa.watcher != nil {
+		go opa.watcher.Run(ctx)
 	}
 
 	// Posture (§5.3) : TOUJOURS monitor au démarrage ; bascules gouvernées
@@ -334,9 +390,13 @@ func run() error {
 		Leaves:       cellLog,
 		OnAlarm:      func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
 		VerifyQuorum: quorum,
+		StartRefused: isRestart, // revue de sécurité #93 : jamais au premier déploiement
 	})
 	if err != nil {
 		return err
+	}
+	if isRestart {
+		log.Printf("pepd: redémarrage détecté — posture REFUSÉE (§93) jusqu'à reconfirmation explicite par quorum via POST /v1/mode")
 	}
 	failClosed.SetQuorumVerifier(quorum)
 
@@ -374,22 +434,66 @@ func run() error {
 		Handler:           listener.AdminHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	// Proxy bloquant (revue de sécurité #94) : OPTIONNEL — désactivé sauf
+	// déclaration explicite de TBP_PROXY_ADDR+TBP_PROXY_BACKEND. Sans lui,
+	// pepd reste ce qu'il a toujours été : une API de verdicts (§4.1,
+	// honnêteté d'intégration documentée dans listener.go) — le blocage
+	// reste alors l'affaire de l'appelant (ou d'un hook par type de
+	// ressource, comme l'extension PostgreSQL). Avec lui, pepd REÇOIT le
+	// vrai trafic (c'est lui que nftables redirige) et ne transmet au
+	// backend QUE sur un verdict appliqué favorable — le blocage devient
+	// structurel.
+	var proxySrv *http.Server
+	if proxyAddr := os.Getenv("TBP_PROXY_ADDR"); proxyAddr != "" {
+		backendRaw, err := envRequired("TBP_PROXY_BACKEND")
+		if err != nil {
+			return fmt.Errorf("TBP_PROXY_ADDR requiert TBP_PROXY_BACKEND (§94): %w", err)
+		}
+		backend, err := url.Parse(backendRaw)
+		if err != nil || backend.Scheme == "" || backend.Host == "" {
+			return fmt.Errorf("pepd: TBP_PROXY_BACKEND invalide %q (URL http(s) absolue requise)", backendRaw)
+		}
+		proxy, err := pep.NewBlockingProxy(pep.ProxyOptions{Listener: listener, Backend: backend})
+		if err != nil {
+			return fmt.Errorf("pepd: proxy bloquant (§94): %w", err)
+		}
+		proxySrv = &http.Server{
+			Addr:              proxyAddr,
+			Handler:           proxy,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		log.Printf("pepd: proxy bloquant (§94) en écoute sur %s → backend %s", proxyAddr, backend)
+	}
+
+	adminErr := make(chan error, 1)
+	proxyErr := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 		_ = adminSrv.Shutdown(shutdownCtx)
+		if proxySrv != nil {
+			_ = proxySrv.Shutdown(shutdownCtx)
+		}
 	}()
-	adminErr := make(chan error, 1)
 	go func() {
 		adminErr <- adminSrv.Serve(adminLis)
 	}()
+	if proxySrv != nil {
+		go func() { proxyErr <- proxySrv.ListenAndServe() }()
+	} else {
+		close(proxyErr)
+	}
 	log.Printf("pepd: cellule %s en écoute sur %s (mode monitor — §5.3) ; administration sur unix://%s", cellID, listenAddr, adminSocket)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	if err := <-adminErr; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := <-proxyErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

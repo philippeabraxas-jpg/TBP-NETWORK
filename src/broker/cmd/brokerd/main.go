@@ -34,6 +34,25 @@
 //	                        chaîne — le broker feuille comme toute cellule)
 //	TBP_OPA_ENDPOINT        URL de décision OPA (T11) — requis : le broker
 //	                        n'émet rien sans arbitrage des règles
+//	TBP_OPA_SOCKET          chemin du socket Unix d'OPA — REQUIS avec
+//	                        TBP_OPA_EXPECTED_UID (revue de sécurité #92,
+//	                        A3 : transport authentifié par SO_PEERCRED, un
+//	                        OPA en TCP non authentifié est indétectable
+//	                        d'un imposteur) sauf TBP_OPA_INSECURE_TCP_DEV=1
+//	                        déclaré EXPLICITEMENT (dev/lab uniquement)
+//	TBP_OPA_EXPECTED_UID    UID attendu du processus OPA, requis avec
+//	                        TBP_OPA_SOCKET — vérifié à CHAQUE connexion
+//	                        par le noyau (SO_PEERCRED), jamais déclaré
+//	                        par le pair
+//	TBP_OPA_INSECURE_TCP_DEV  exempte EXPLICITEMENT du transport Unix
+//	                        authentifié (§92.A3) — dev/lab uniquement
+//	TBP_OPA_REVISION_CHECK_INTERVAL_MS  optionnel — période de vérification
+//	                        périodique que la révision RÉELLEMENT servie
+//	                        par OPA correspond à TBP_POLICY_ID épinglé
+//	                        (§92.A5, spec §10.3). Défaut 10000 (10 s) ;
+//	                        vérifiée aussi UNE FOIS, synchrone, avant que
+//	                        le broker ne serve — un écart y refuse le
+//	                        démarrage
 //	TBP_TRANSLATOR          "structured" — seule valeur admise en v1
 //	                        (le traducteur langage naturel est T24/T25)
 //	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
@@ -137,6 +156,13 @@ type config struct {
 	policyID    [32]byte
 	registryDir string
 	opaEndpoint string
+	// Transport OPA durci (revue de sécurité #92, finding A3) : EXACTEMENT
+	// un des deux — opaSocket+opaExpectedUID (Unix + SO_PEERCRED) OU
+	// opaInsecureTCPDev (TCP non authentifié, dev/lab EXPLICITE).
+	opaSocket           string
+	opaExpectedUID      uint32
+	opaInsecureTCPDev   bool
+	opaRevisionInterval time.Duration // 0 ⇒ défaut du watcher (§92.A5)
 	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes.
 	// issuerSeedFile ("" ⇒ HSM) : seed Ed25519 DEV, fichier 0600 — labo/CI
 	// uniquement. Les quatre champs issuerPKCS11* ("" ⇒ dev), tous requis
@@ -180,6 +206,36 @@ func loadConfig(getenv func(string) string) (*config, error) {
 	opaEndpoint, err := envRequired(getenv, "TBP_OPA_ENDPOINT")
 	if err != nil {
 		return nil, err
+	}
+	// Transport OPA durci (revue de sécurité #92, A3) : EXACTEMENT un des
+	// deux mécanismes — jamais les deux, jamais aucun sans déclaration
+	// EXPLICITE du dev/lab non authentifié.
+	opaSocket := getenv("TBP_OPA_SOCKET")
+	opaInsecureTCPDev := getenv("TBP_OPA_INSECURE_TCP_DEV") == "1"
+	var opaExpectedUID uint32
+	switch {
+	case opaSocket != "" && opaInsecureTCPDev:
+		return nil, errors.New("TBP_OPA_SOCKET et TBP_OPA_INSECURE_TCP_DEV sont mutuellement exclusifs (§92.A3)")
+	case opaSocket == "" && !opaInsecureTCPDev:
+		return nil, errors.New("TBP_OPA_SOCKET+TBP_OPA_EXPECTED_UID requis (revue de sécurité #92, A3 : OPA authentifié par SO_PEERCRED) — TBP_OPA_INSECURE_TCP_DEV=1 pour l'exempter EXPLICITEMENT (dev/lab uniquement, jamais en production)")
+	case opaSocket != "":
+		uidStr, uerr := envRequired(getenv, "TBP_OPA_EXPECTED_UID")
+		if uerr != nil {
+			return nil, uerr
+		}
+		uid, perr := strconv.ParseUint(uidStr, 10, 32)
+		if perr != nil {
+			return nil, fmt.Errorf("TBP_OPA_EXPECTED_UID invalide %q: %w", uidStr, perr)
+		}
+		opaExpectedUID = uint32(uid)
+	}
+	opaRevisionInterval := time.Duration(0)
+	if s := getenv("TBP_OPA_REVISION_CHECK_INTERVAL_MS"); s != "" {
+		ms, perr := strconv.Atoi(s)
+		if perr != nil || ms <= 0 {
+			return nil, fmt.Errorf("TBP_OPA_REVISION_CHECK_INTERVAL_MS invalide %q (entier > 0 attendu)", s)
+		}
+		opaRevisionInterval = time.Duration(ms) * time.Millisecond
 	}
 	if tr := getenv("TBP_TRANSLATOR"); tr != "structured" {
 		return nil, fmt.Errorf("TBP_TRANSLATOR=%q refusé — seul \"structured\" est assemblé en v1 (traducteur langage naturel : T24/T25)", tr)
@@ -247,6 +303,10 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		policyID:             policy,
 		registryDir:          registryDir,
 		opaEndpoint:          opaEndpoint,
+		opaSocket:            opaSocket,
+		opaExpectedUID:       opaExpectedUID,
+		opaInsecureTCPDev:    opaInsecureTCPDev,
+		opaRevisionInterval:  opaRevisionInterval,
 		issuerSeedFile:       issuerSeedFile,
 		issuerPKCS11Module:   pkcs11Module,
 		issuerPKCS11Token:    pkcs11Token,
@@ -298,13 +358,47 @@ func run(ctx context.Context, getenv func(string) string) error {
 
 	onTrip := func(reason string) { log.Printf("brokerd: ALARME: %s", reason) }
 
+	// Transport OPA durci (revue de sécurité #92, A3) : Unix + SO_PEERCRED
+	// (nominal) ou TCP non authentifié (dev/lab, EXPLICITEMENT déclaré par
+	// loadConfig — jamais un défaut silencieux).
+	var opaHC *http.Client
+	if cfg.opaSocket != "" {
+		tr, terr := pep.NewOPAUnixTransport(cfg.opaSocket, cfg.opaExpectedUID)
+		if terr != nil {
+			return terr
+		}
+		opaHC = &http.Client{Transport: tr}
+	} else {
+		log.Printf("brokerd: OPA en TCP NON authentifié (TBP_OPA_INSECURE_TCP_DEV=1, revue #92.A3) — DEV/LAB UNIQUEMENT, jamais en production : un imposteur qui occupe ce port est indétectable")
+	}
+
 	// Arbitrage des règles (T11) — requis : pas d'émission sans règles.
 	opaClient, err := pep.NewOPAClient(pep.OPAOptions{
-		Endpoint: cfg.opaEndpoint,
-		CellID:   cfg.cellID,
-		Salt:     cfg.salt,
-		Leaves:   cellLog,
-		OnTrip:   onTrip,
+		Endpoint:   cfg.opaEndpoint,
+		HTTPClient: opaHC,
+		CellID:     cfg.cellID,
+		Salt:       cfg.salt,
+		Leaves:     cellLog,
+		OnTrip:     onTrip,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Watcher de révision OPA (revue de sécurité #92, A5) construit ICI
+	// (aucun effet de bord — Check() n'est appelé, PLUS BAS, qu'une fois
+	// tout le reste de l'assemblage validé : un OPA injoignable ne doit
+	// jamais masquer un défaut de configuration antérieur — genèse,
+	// quorum, custody — dans le message d'erreur rendu).
+	opaRevisionWatcher, err := pep.NewOPARevisionWatcher(pep.OPARevisionWatcherOptions{
+		Endpoint:   cfg.opaEndpoint,
+		Expected:   hex.EncodeToString(cfg.policyID[:]),
+		HTTPClient: opaHC,
+		Interval:   cfg.opaRevisionInterval,
+		CellID:     cfg.cellID,
+		Salt:       cfg.salt,
+		Leaves:     cellLog,
+		OnTrip:     onTrip,
 	})
 	if err != nil {
 		return err
@@ -423,6 +517,15 @@ func run(ctx context.Context, getenv func(string) string) error {
 			}
 		}()
 	}
+
+	// Révision de politique servie par OPA (revue de sécurité #92, A5) :
+	// vérifiée UNE FOIS ici — tout le reste de l'assemblage est déjà
+	// validé à ce point — puis PÉRIODIQUEMENT en arrière-plan.
+	opaRevisionWatcher.Check(ctx)
+	if opaRevisionWatcher.Mismatch() {
+		return fmt.Errorf("brokerd: révision OPA non vérifiée au démarrage (%s) — refus (§92.A5)", opaRevisionWatcher.Reason())
+	}
+	go opaRevisionWatcher.Run(ctx)
 
 	brk, err := broker.NewBroker(broker.BrokerOptions{
 		CellID:     cfg.cellID,

@@ -26,6 +26,7 @@ package pep
 // promesse de proxy transparent.
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
@@ -247,39 +248,30 @@ func methodGuard(w http.ResponseWriter, r *http.Request, method string) bool {
 	return true
 }
 
-// handleEvaluate : la boucle de décision — gate (T14, étape 0 du
-// validateur) → validate (T9) → passeport (T12) → OPA (T11) → posture.
-func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
-	if !methodGuard(w, r, http.MethodPost) {
-		return
-	}
-	var in EvaluateRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
-		return
-	}
-	wire, err := base64.StdEncoding.DecodeString(in.Token)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token base64 illisible"})
-		return
-	}
-	req := Request{Action: in.Action, Resource: in.Resource}
-	if in.ObjectSeal != "" {
-		seal, err := hex.DecodeString(in.ObjectSeal)
-		if err != nil || len(seal) != 32 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sceau hex(32) illisible"})
-			return
-		}
-		var s [32]byte
-		copy(s[:], seal)
-		req.ObjectSeal = &s
-	}
+// evalOutcome est le résultat interne de la chaîne de décision — partagé
+// par l'API JSON (handleEvaluate) ET le proxy bloquant (BlockingProxy,
+// revue de sécurité #94) : les DEUX appliquent EXACTEMENT le même
+// enchaînement gate → validate → dry-run → passeport → OPA → posture.
+// Ne JAMAIS dupliquer cette chaîne ailleurs — une copie plus fine
+// sauterait silencieusement OPA ou le quota et serait une RÉGRESSION par
+// rapport à /v1/evaluate, pas un équivalent.
+type evalOutcome struct {
+	Decision       Decision
+	Forwarded      bool
+	PassportOpened bool
+	Elapsed        time.Duration
+}
 
+// evaluate exécute la chaîne de décision complète — gate (T14, étape 0
+// du validateur) → validate (T9) → dry-run (T36) → passeport (T12) →
+// OPA (T11) → posture (§5.3). Chronomètre et met à jour les compteurs
+// exactement comme avant l'extraction (§9.1).
+func (l *Listener) evaluate(ctx context.Context, wire []byte, req Request) evalOutcome {
 	start := time.Now() // §9.1 : mesure réelle — pas une donnée de décision
 
 	// Gate (T14) puis chaîne T9 : le portillon est l'étape 0 INTERNE du
 	// validateur — un seul chemin de refus, avant toute mutation.
-	d := l.validator.Validate(r.Context(), wire, req)
+	d := l.validator.Validate(ctx, wire, req)
 
 	// Dry-run (T36, §4.4(1), D104) : classes F/I/W SEULEMENT, AVANT
 	// l'ouverture du passeport (revue #62 : un refus dry-run n'ouvre
@@ -289,7 +281,7 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 	var dryInput *DryRunInput
 	if d.Allow && d.Token != nil && d.Token.Class != ClassOut && l.opa != nil {
 		if l.dryRun != nil {
-			in, reason := l.dryRun.Execute(r.Context(), d.JTI, req.Action, req.Resource)
+			in, reason := l.dryRun.Execute(ctx, d.JTI, req.Action, req.Resource)
 			if reason != "" {
 				d.Allow = false
 				d.Reason = reason
@@ -327,7 +319,7 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 
 	// Arbitrage politique (T11) APRÈS validation : OPA a le dernier mot.
 	if d.Allow && l.opa != nil {
-		od := l.opa.Eval(r.Context(), OPAInput{
+		od := l.opa.Eval(ctx, OPAInput{
 			JTI:      d.JTI,
 			Subject:  d.Token.Sub,
 			Action:   req.Action,
@@ -365,14 +357,50 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	return evalOutcome{Decision: d, Forwarded: forwarded, PassportOpened: passportOpened, Elapsed: elapsed}
+}
+
+// handleEvaluate : l'API de verdicts JSON — décode {token, action,
+// resource[, sceau]} AUTO-DÉCLARÉS par l'appelant et rend le verdict en
+// JSON, sans rien transmettre elle-même (voir la note d'honnêteté
+// d'intégration en tête de fichier, et BlockingProxy pour l'alternative
+// qui transmet réellement, revue de sécurité #94).
+func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	if !methodGuard(w, r, http.MethodPost) {
+		return
+	}
+	var in EvaluateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+		return
+	}
+	wire, err := base64.StdEncoding.DecodeString(in.Token)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token base64 illisible"})
+		return
+	}
+	req := Request{Action: in.Action, Resource: in.Resource}
+	if in.ObjectSeal != "" {
+		seal, err := hex.DecodeString(in.ObjectSeal)
+		if err != nil || len(seal) != 32 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sceau hex(32) illisible"})
+			return
+		}
+		var s [32]byte
+		copy(s[:], seal)
+		req.ObjectSeal = &s
+	}
+
+	out := l.evaluate(r.Context(), wire, req)
+
 	writeJSON(w, http.StatusOK, EvaluateResponse{
-		Allow:          d.Allow,
-		Reason:         d.Reason,
+		Allow:          out.Decision.Allow,
+		Reason:         out.Decision.Reason,
 		Mode:           l.mode.Mode().String(),
-		Forwarded:      forwarded,
-		LeafWritten:    d.LeafWritten,
-		PassportOpened: passportOpened,
-		ElapsedUs:      elapsed.Microseconds(),
+		Forwarded:      out.Forwarded,
+		LeafWritten:    out.Decision.LeafWritten,
+		PassportOpened: out.PassportOpened,
+		ElapsedUs:      out.Elapsed.Microseconds(),
 	})
 }
 

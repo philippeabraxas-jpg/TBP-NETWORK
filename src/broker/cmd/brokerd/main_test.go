@@ -49,16 +49,17 @@ func mapGetenv(m map[string]string) func(string) string {
 // être symboliques ici).
 func validConfigEnv() map[string]string {
 	return map[string]string{
-		"TBP_CELL_ID":            "cell-a",
-		"TBP_SALT":               strings.Repeat("01", 16),
-		"TBP_POLICY_ID":          strings.Repeat("02", 32),
-		"TBP_REGISTRY_DIR":       "/srv/tbp/registry",
-		"TBP_OPA_ENDPOINT":       "http://127.0.0.1:8181/v1/data/tbp/allow",
-		"TBP_TRANSLATOR":         "structured",
-		"TBP_ISSUER_SEED_FILE":   "/etc/tbp/issuer.seed",
-		"TBP_GENESIS_DIR":        "/etc/tbp/genesis",
-		"TBP_CLUSTER_MEMBERS":    "cell-a,cell-b",
-		"TBP_OPERATOR_KEYS_FILE": "/etc/tbp/operators.json",
+		"TBP_CELL_ID":              "cell-a",
+		"TBP_SALT":                 strings.Repeat("01", 16),
+		"TBP_POLICY_ID":            strings.Repeat("02", 32),
+		"TBP_REGISTRY_DIR":         "/srv/tbp/registry",
+		"TBP_OPA_ENDPOINT":         "http://127.0.0.1:8181/v1/data/tbp/allow",
+		"TBP_OPA_INSECURE_TCP_DEV": "1", // §92.A3 : dev/lab, exempte du transport Unix+SO_PEERCRED
+		"TBP_TRANSLATOR":           "structured",
+		"TBP_ISSUER_SEED_FILE":     "/etc/tbp/issuer.seed",
+		"TBP_GENESIS_DIR":          "/etc/tbp/genesis",
+		"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
+		"TBP_OPERATOR_KEYS_FILE":   "/etc/tbp/operators.json",
 	}
 }
 
@@ -297,18 +298,19 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		opsFile:   opsFile,
 		adminSock: adminSock,
 		env: map[string]string{
-			"TBP_CELL_ID":             "cell-a",
-			"TBP_SALT":                hex.EncodeToString(salt),
-			"TBP_POLICY_ID":           hex.EncodeToString(policy),
-			"TBP_REGISTRY_DIR":        filepath.Join(dir, "registry"),
-			"TBP_OPA_ENDPOINT":        "http://127.0.0.1:1/opa", // pas de connexion à la construction
-			"TBP_TRANSLATOR":          "structured",
-			"TBP_ISSUER_SEED_FILE":    seedFile,
-			"TBP_GENESIS_DIR":         genDir,
-			"TBP_CLUSTER_MEMBERS":     "cell-a,cell-b",
-			"TBP_OPERATOR_KEYS_FILE":  opsFile,
-			"TBP_BROKER_SOCKET":       sock,
-			"TBP_BROKER_ADMIN_SOCKET": adminSock,
+			"TBP_CELL_ID":              "cell-a",
+			"TBP_SALT":                 hex.EncodeToString(salt),
+			"TBP_POLICY_ID":            hex.EncodeToString(policy),
+			"TBP_REGISTRY_DIR":         filepath.Join(dir, "registry"),
+			"TBP_OPA_ENDPOINT":         "http://127.0.0.1:1/opa", // pas de connexion à la construction
+			"TBP_OPA_INSECURE_TCP_DEV": "1",                      // §92.A3 : dev/lab
+			"TBP_TRANSLATOR":           "structured",
+			"TBP_ISSUER_SEED_FILE":     seedFile,
+			"TBP_GENESIS_DIR":          genDir,
+			"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
+			"TBP_OPERATOR_KEYS_FILE":   opsFile,
+			"TBP_BROKER_SOCKET":        sock,
+			"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 		},
 	}
 }
@@ -462,8 +464,15 @@ func TestBrokerdEndToEnd(t *testing.T) {
 
 	var allow atomic.Bool
 	allow.Store(true)
-	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			// Vérification de révision (§92.A5) : la même valeur que le
+			// TBP_POLICY_ID épinglé — un stub qui ne le respecterait pas
+			// ferait refuser le démarrage à ce watcher.
+			fmt.Fprintf(w, `{"result":{"allow":%t},"provenance":{"revision":%q}}`, allow.Load(), fx.env["TBP_POLICY_ID"])
+			return
+		}
 		fmt.Fprintf(w, `{"result":{"allow":%t}}`, allow.Load())
 	}))
 	defer opa.Close()
@@ -636,26 +645,32 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		t.Fatalf("salt: %v", err)
 	}
 
-	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	policyHex := hex.EncodeToString(policy)
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			fmt.Fprintf(w, `{"result":{"allow":true},"provenance":{"revision":%q}}`, policyHex)
+			return
+		}
 		fmt.Fprint(w, `{"result":{"allow":true}}`)
 	}))
 	defer opa.Close()
 
 	env := map[string]string{
-		"TBP_CELL_ID":             "cell-a",
-		"TBP_SALT":                hex.EncodeToString(salt),
-		"TBP_POLICY_ID":           hex.EncodeToString(policy),
-		"TBP_REGISTRY_DIR":        filepath.Join(dir, "registry"),
-		"TBP_OPA_ENDPOINT":        opa.URL,
-		"TBP_TRANSLATOR":          "structured",
-		"TBP_ISSUER_SEED_FILE":    seedFile,
-		"TBP_GENESIS_DIR":         genDir,
-		"TBP_QUORUM_MIN":          "1",
-		"TBP_CLUSTER_MEMBERS":     "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
-		"TBP_OPERATOR_KEYS_FILE":  opsFile,
-		"TBP_BROKER_SOCKET":       sock,
-		"TBP_BROKER_ADMIN_SOCKET": adminSock,
+		"TBP_CELL_ID":              "cell-a",
+		"TBP_SALT":                 hex.EncodeToString(salt),
+		"TBP_POLICY_ID":            policyHex,
+		"TBP_REGISTRY_DIR":         filepath.Join(dir, "registry"),
+		"TBP_OPA_ENDPOINT":         opa.URL,
+		"TBP_OPA_INSECURE_TCP_DEV": "1",
+		"TBP_TRANSLATOR":           "structured",
+		"TBP_ISSUER_SEED_FILE":     seedFile,
+		"TBP_GENESIS_DIR":          genDir,
+		"TBP_QUORUM_MIN":           "1",
+		"TBP_CLUSTER_MEMBERS":      "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
+		"TBP_OPERATOR_KEYS_FILE":   opsFile,
+		"TBP_BROKER_SOCKET":        sock,
+		"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -701,5 +716,33 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != nil {
 		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestBrokerdStartupOPARevisionMismatchRefuses : revue de sécurité #92,
+// finding A5 — un OPA qui sert une révision différente de TBP_POLICY_ID
+// épinglé (bundle substitué, ou simplement désynchronisé) doit refuser le
+// démarrage, jamais servir en silence sur une politique non prouvée.
+func TestBrokerdStartupOPARevisionMismatchRefuses(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			fmt.Fprint(w, `{"result":{"allow":true},"provenance":{"revision":"revision-imposteur"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"result":{"allow":true}}`)
+	}))
+	defer opa.Close()
+	fx.env["TBP_OPA_ENDPOINT"] = opa.URL
+
+	err := run(context.Background(), mapGetenv(fx.env))
+	if err == nil {
+		t.Fatal("démarrage accepté malgré une révision OPA imposteur — #92.A5 non détecté")
+	}
+	if !strings.Contains(err.Error(), "révision OPA non vérifiée") {
+		t.Fatalf("erreur=%v, veut mention de révision OPA non vérifiée (§92.A5)", err)
 	}
 }
