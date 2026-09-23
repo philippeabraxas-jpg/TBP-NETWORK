@@ -148,6 +148,18 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # "sync" = former synchronous path
 #   TBP_DURABILITY_WINDOW_MS=1000  # opposability window (default 1 s;
 #                                  # floor 4 × checkpoint interval)
+#   TBP_PROXY_ADDR=127.0.0.1:8444  # optional (security review #94,
+#                                  # finding A6): a REAL blocking proxy,
+#                                  # distinct from TBP_LISTEN_ADDR (a
+#                                  # verdicts API only — redirecting raw
+#                                  # traffic to it blocks nothing by
+#                                  # itself). config/nftables/pep-redirect.nft
+#                                  # should target THIS port for actual
+#                                  # enforcement. Absent by default —
+#                                  # pepd stays a verdicts API only
+#   TBP_PROXY_BACKEND=http://127.0.0.1:9000  # required with
+#                                  # TBP_PROXY_ADDR: the real upstream
+#                                  # service the proxy forwards to
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s http://127.0.0.1:8443/healthz

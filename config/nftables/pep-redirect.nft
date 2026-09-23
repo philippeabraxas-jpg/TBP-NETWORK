@@ -2,8 +2,16 @@
 #
 # Squelette de départ pour le PEP local Debian (spec §4.1 : "nftables
 # redirect"). Redirige le trafic sortant d'un poste gouverné vers le PEP
-# local, qui décide (token signé, TTL, portée) avant de laisser passer ou
-# de rejeter — le "mur" (§5.1) applique la même logique côté serveur.
+# local — le "mur" (§5.1) applique la même logique côté serveur.
+#
+# HONNÊTETÉ D'INTÉGRATION (revue de sécurité #94, finding A6) : PEP_PORT
+# ci-dessous cible par défaut l'API de VERDICTS de pepd (TBP_LISTEN_ADDR,
+# /v1/evaluate) — rediriger du trafic brut vers ce port n'accomplit AUCUN
+# blocage à lui seul, l'appelant doit interroger l'API PUIS respecter la
+# réponse. Pour un blocage RÉEL et structurel, rediriger plutôt vers le
+# proxy bloquant optionnel de pepd (TBP_PROXY_ADDR/TBP_PROXY_BACKEND,
+# src/pep/proxy.go) : lui REÇOIT le vrai trafic et ne transmet au backend
+# QUE sur un verdict appliqué favorable.
 #
 # NE PAS déployer tel quel : les ports/adresses ci-dessous sont des
 # exemples à adapter à la topologie réelle du pilote P1 (§13). À tester
