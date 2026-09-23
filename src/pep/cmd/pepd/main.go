@@ -163,6 +163,7 @@ import (
 
 	"golang.org/x/mod/sumdb/note"
 
+	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
@@ -214,6 +215,9 @@ func run() error {
 	}
 	durabilityAsync, durabilityWindow, err := durabilityFromEnv(os.Getenv)
 	if err != nil {
+		return err
+	}
+	if err := checkDevEscapeHatches(os.Getenv, os.Stat); err != nil {
 		return err
 	}
 
@@ -616,6 +620,28 @@ func durabilityFromEnv(getenv func(string) string) (async bool, window time.Dura
 		window = time.Duration(ms) * time.Millisecond
 	}
 	return async, window, nil
+}
+
+// checkDevEscapeHatches ferme la revue de sécurité #113 : TBP_OPA_DISABLED_DEV_UNSAFE
+// et TBP_OPA_INSECURE_TCP_DEV (tous deux réévalués plus loin par setupOPA)
+// ne dépendaient QUE d'une variable du MÊME fichier d'environnement que
+// celui qu'ils contournent — quiconque peut écrire ce fichier pouvait donc,
+// seul, désarmer silencieusement OPA. devmode.RequireDeclared exige un
+// second signal INDÉPENDANT (sentinel de fichier à chemin fixe, jamais lu
+// depuis l'environnement) et trace une ALARME haute priorité si les deux
+// sont réunis — jamais un simple log discret.
+func checkDevEscapeHatches(getenv func(string) string, stat func(string) (os.FileInfo, error)) error {
+	var active []string
+	if getenv("TBP_OPA_DISABLED_DEV_UNSAFE") == "1" {
+		active = append(active, "TBP_OPA_DISABLED_DEV_UNSAFE")
+	}
+	if getenv("TBP_OPA_INSECURE_TCP_DEV") == "1" {
+		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
+	}
+	if getenv("TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE") == "1" {
+		active = append(active, "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE")
+	}
+	return devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, active)
 }
 
 // detectRestart établit isRestart (revue de sécurité #93) : DOIT être

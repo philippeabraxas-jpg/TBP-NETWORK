@@ -42,6 +42,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 )
 
 // check est un contrôle unitaire — non-vacuole par construction : chaque
@@ -114,6 +116,20 @@ func main() {
 	}
 	if err := os.MkdirAll(cfg.out, 0o755); err != nil {
 		log.Fatalf("out: %v", err)
+	}
+
+	// Sentinel devmode (revue de sécurité #113) : mono et daemons lancent
+	// les vrais binaires pepd/brokerd avec des échappatoires « dev »
+	// explicitement déclarées (TBP_OPA_INSECURE_TCP_DEV, TBP_ISSUER_SEED_FILE)
+	// — comme tout déploiement dev/lab réel, ce selftest doit déclarer le
+	// sentinel devmode.DefaultSentinelPath pour que ces binaires acceptent
+	// de démarrer avec elles. Chemin FIXE, câblé dans le binaire : rien ici
+	// ne peut le déplacer via TBP_*.env, exactement la protection visée.
+	if err := os.MkdirAll(filepath.Dir(devmode.DefaultSentinelPath), 0o755); err != nil {
+		log.Fatalf("sentinel devmode (%s): %v — le selftest exerce des échappatoires dev réelles (revue #113) et a besoin d'écrire ce chemin ; lancer en root ou pré-créer %s, accessible en écriture", devmode.DefaultSentinelPath, err, filepath.Dir(devmode.DefaultSentinelPath))
+	}
+	if err := os.WriteFile(devmode.DefaultSentinelPath, []byte("selftest (deploy/selftest) — revue de sécurité #113\n"), 0o644); err != nil {
+		log.Fatalf("sentinel devmode (%s): %v", devmode.DefaultSentinelPath, err)
 	}
 
 	s := &suite{}

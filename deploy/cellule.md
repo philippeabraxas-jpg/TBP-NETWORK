@@ -214,7 +214,14 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # OPA now REQUIRED, authenticated by
 #                                  # SO_PEERCRED — mandatory unless
 #                                  # TBP_OPA_INSECURE_TCP_DEV=1 (dev/lab
-#                                  # only, never in production)
+#                                  # only, never in production — security
+#                                  # review #113: also refused at startup
+#                                  # unless /etc/tbp/DEV_ENVIRONMENT
+#                                  # exists, a FIXED path hard-coded in
+#                                  # the binary, never read from this
+#                                  # file — same guard on
+#                                  # TBP_OPA_DISABLED_DEV_UNSAFE=1 above,
+#                                  # deploy/cellule.md step 4's doc header)
 #   TBP_OPA_EXPECTED_UID=$(id -u tbp-opa)     # UID the kernel must report
 #                                  # for the OPA process at EVERY connection
 #   TBP_QUORUM_MIN=2               # k distinct Ed25519 signatures (security
@@ -328,11 +335,19 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   TBP_OPA_SOCKET=/run/tbp/opa.sock  # security review #92, A3: REQUIRED
 #                                      # (authenticated by SO_PEERCRED)
 #                                      # unless TBP_OPA_INSECURE_TCP_DEV=1
-#                                      # (dev/lab only)
+#                                      # (dev/lab only — security review
+#                                      # #113: also refused at startup
+#                                      # without /etc/tbp/DEV_ENVIRONMENT,
+#                                      # see the issuer custody block below)
 #   TBP_OPA_EXPECTED_UID=$(id -u tbp-opa)  # UID the kernel must report
 #                                      # for OPA at every connection
 #   TBP_TRANSLATOR=structured
-#   # --- custody DEV (lab/CI only) ---
+#   # --- custody DEV (lab/CI only) — security review #113: unlike the
+#   # two OPA dev flags above, this one used to be accepted with NO
+#   # dedicated flag at all; refused at startup now unless
+#   # /etc/tbp/DEV_ENVIRONMENT exists (fixed path, hard-coded in the
+#   # binary — NEVER read from this file, so leaking/misconfiguring it
+#   # alone can no longer silently declare a dev environment) ---
 #   TBP_ISSUER_SEED_FILE=/etc/tbp/issuer.seed
 #   # --- OR custody HSM (production, §12) ---
 #   # TBP_ISSUER_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so

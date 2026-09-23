@@ -44,6 +44,14 @@ func mapGetenv(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+// statPresent/statAbsent simulent le sentinel devmode (revue #113) sans
+// toucher au disque réel — TBP_OPA_INSECURE_TCP_DEV et TBP_ISSUER_SEED_FILE
+// sont des échappatoires « dev » dans presque toute fixture de ce fichier,
+// donc statPresent (sentinel déclaré) est le défaut de test ici ; seul
+// TestLoadConfigDevEscapeHatchesRequireSentinel exerce statAbsent.
+func statPresent(string) (os.FileInfo, error) { return nil, nil }
+func statAbsent(string) (os.FileInfo, error)  { return nil, os.ErrNotExist }
+
 // validConfigEnv rend une configuration d'environnement complète et
 // cohérente (loadConfig ne touche à aucun fichier — les chemins peuvent
 // être symboliques ici).
@@ -64,7 +72,7 @@ func validConfigEnv() map[string]string {
 }
 
 func TestLoadConfigOK(t *testing.T) {
-	cfg, err := loadConfig(mapGetenv(validConfigEnv()))
+	cfg, err := loadConfig(mapGetenv(validConfigEnv()), statPresent)
 	if err != nil {
 		t.Fatalf("config valide refusée: %v", err)
 	}
@@ -84,7 +92,7 @@ func TestLoadConfigOK(t *testing.T) {
 	env["TBP_QUORUM_MIN"] = "3"
 	env["TBP_BROKER_SOCKET"] = "/tmp/x.sock"
 	env["TBP_ENVELOPE_ENDPOINT"] = "http://127.0.0.1:8181/v1/data/tbp/envelope"
-	cfg, err = loadConfig(mapGetenv(env))
+	cfg, err = loadConfig(mapGetenv(env), statPresent)
 	if err != nil {
 		t.Fatalf("config explicite refusée: %v", err)
 	}
@@ -102,7 +110,7 @@ func TestLoadConfigPKCS11(t *testing.T) {
 	env["TBP_ISSUER_PKCS11_TOKEN_LABEL"] = "cell-a"
 	env["TBP_ISSUER_PKCS11_KEY_LABEL"] = "issuer-key-1"
 	env["TBP_ISSUER_PKCS11_PIN_FILE"] = "/etc/tbp/issuer.pin"
-	cfg, err := loadConfig(mapGetenv(env))
+	cfg, err := loadConfig(mapGetenv(env), statPresent)
 	if err != nil {
 		t.Fatalf("config PKCS#11 valide refusée: %v", err)
 	}
@@ -163,7 +171,7 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			env := validConfigEnv()
 			tc.mutate(env)
-			cfg, err := loadConfig(mapGetenv(env))
+			cfg, err := loadConfig(mapGetenv(env), statPresent)
 			if err == nil {
 				t.Fatalf("config invalide acceptée: %+v", cfg)
 			}
@@ -171,6 +179,47 @@ func TestLoadConfigFailClosed(t *testing.T) {
 				t.Fatalf("erreur %q ne contient pas %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestLoadConfigDevEscapeHatchesRequireSentinel : revue de sécurité #113 —
+// TBP_OPA_INSECURE_TCP_DEV et TBP_ISSUER_SEED_FILE, tous deux actifs dans
+// validConfigEnv(), sont refusés au démarrage sans le sentinel devmode
+// (indépendant du fichier d'environnement qui les porte), et acceptés
+// quand il est déclaré.
+func TestLoadConfigDevEscapeHatchesRequireSentinel(t *testing.T) {
+	env := validConfigEnv()
+	_, err := loadConfig(mapGetenv(env), statAbsent)
+	if err == nil {
+		t.Fatal("config avec drapeaux dev actifs acceptée sans sentinel devmode")
+	}
+	if !strings.Contains(err.Error(), "TBP_OPA_INSECURE_TCP_DEV") || !strings.Contains(err.Error(), "TBP_ISSUER_SEED_FILE") {
+		t.Fatalf("erreur doit nommer les deux drapeaux actifs: %v", err)
+	}
+	if _, err := loadConfig(mapGetenv(env), statPresent); err != nil {
+		t.Fatalf("config avec drapeaux dev actifs ET sentinel présent refusée: %v", err)
+	}
+}
+
+// TestLoadConfigPKCS11NoDevFlagsNoSentinelRequired : la custody HSM
+// (#90 point 5) n'active AUCUN drapeau dev — le sentinel ne doit même pas
+// être consulté (stat qui échoue toujours le prouve).
+func TestLoadConfigPKCS11NoDevFlagsNoSentinelRequired(t *testing.T) {
+	env := validConfigEnv()
+	delete(env, "TBP_ISSUER_SEED_FILE")
+	delete(env, "TBP_OPA_INSECURE_TCP_DEV")
+	env["TBP_ISSUER_PKCS11_MODULE"] = "/usr/lib/softhsm/libsofthsm2.so"
+	env["TBP_ISSUER_PKCS11_TOKEN_LABEL"] = "cell-a"
+	env["TBP_ISSUER_PKCS11_KEY_LABEL"] = "issuer-key-1"
+	env["TBP_ISSUER_PKCS11_PIN_FILE"] = "/etc/tbp/issuer.pin"
+	env["TBP_OPA_SOCKET"] = "/run/tbp/opa.sock"
+	env["TBP_OPA_EXPECTED_UID"] = "1000"
+	failingStat := func(string) (os.FileInfo, error) {
+		t.Fatal("stat appelé alors qu'aucun drapeau dev n'est actif")
+		return nil, nil
+	}
+	if _, err := loadConfig(mapGetenv(env), failingStat); err != nil {
+		t.Fatalf("config HSM sans drapeau dev refusée: %v", err)
 	}
 }
 
@@ -372,7 +421,7 @@ func TestBrokerdStartupFailClosed(t *testing.T) {
 			sock := filepath.Join(t.TempDir(), "broker.sock")
 			fx := newRunFixture(t, sock)
 			tc.mutate(t, fx)
-			err := run(context.Background(), mapGetenv(fx.env))
+			err := run(context.Background(), mapGetenv(fx.env), statPresent)
 			if err == nil {
 				t.Fatal("assemblage fautif accepté — le démon sert")
 			}
@@ -482,7 +531,7 @@ func TestBrokerdEndToEnd(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
-	go func() { runErr <- run(ctx, mapGetenv(fx.env)) }()
+	go func() { runErr <- run(ctx, mapGetenv(fx.env), statPresent) }()
 	waitSocket(t, sock)
 	waitSocket(t, fx.adminSock)
 	hc := unixClient(t, sock)
@@ -679,7 +728,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
-	go func() { runErr <- run(ctx, mapGetenv(env)) }()
+	go func() { runErr <- run(ctx, mapGetenv(env), statPresent) }()
 	waitSocket(t, sock)
 	waitSocket(t, adminSock)
 	hc := unixClient(t, sock)
@@ -744,7 +793,7 @@ func TestBrokerdStartupOPARevisionMismatchRefuses(t *testing.T) {
 	defer opa.Close()
 	fx.env["TBP_OPA_ENDPOINT"] = opa.URL
 
-	err := run(context.Background(), mapGetenv(fx.env))
+	err := run(context.Background(), mapGetenv(fx.env), statPresent)
 	if err == nil {
 		t.Fatal("démarrage accepté malgré une révision OPA imposteur — #92.A5 non détecté")
 	}
