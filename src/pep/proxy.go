@@ -46,6 +46,13 @@ package pep
 //     Authorization mais X-TBP-Token (dédié), et ServeHTTP retire
 //     TOUJOURS cet en-tête avant de transmettre — jamais vu du backend,
 //     et Authorization reste entièrement disponible pour le backend.
+//   - #110 : evaluate() ouvre un passeport de quota (§4.1-bis) mais rien
+//     sur ce chemin ne le décomptait jamais — le seul point de décompte
+//     était /v1/passport/consume, un appel VOLONTAIRE que l'appelant (ou
+//     un backend complice) pouvait simplement ne jamais faire. Le proxy,
+//     qui transmet lui-même le trafic réel, décompte désormais un
+//     quantum PAR REQUÊTE avant de transmettre — jamais laissé à la
+//     discrétion de qui que ce soit côté appelant.
 //
 // Honnêteté d'intégration (même doctrine que le commentaire de
 // listener.go) : defaultDeriveRequest est une HEURISTIQUE GÉNÉRIQUE
@@ -212,6 +219,21 @@ func (p *BlockingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !out.Forwarded {
 		http.Error(w, fmt.Sprintf("refusé par la politique (%s)", out.Decision.Reason), http.StatusForbidden)
 		return
+	}
+	// #110 : le proxy transmet le VRAI trafic — c'est donc LUI, jamais un
+	// appel volontaire de l'appelant, qui doit décompter le passeport
+	// ouvert par evaluate() (§4.1-bis). Un quantum générique PAR REQUÊTE,
+	// AVANT transmission, jamais après (un backend déjà atteint ne doit
+	// jamais être compté « peut-être »). Fail-closed : un passeport frais
+	// ne peut échouer ici que sur un vecteur déjà épuisé (volume_max=0
+	// ou consommé par ailleurs) — le backend n'est alors jamais atteint.
+	if out.PassportOpened {
+		if counter, ok := p.listener.ledger.Counter(out.Decision.JTI); ok {
+			if err := counter.Consume(1); err != nil {
+				http.Error(w, fmt.Sprintf("quota épuisé (%s)", consumeErrReason(err)), http.StatusForbidden)
+				return
+			}
+		}
 	}
 	p.rp.ServeHTTP(w, r)
 }

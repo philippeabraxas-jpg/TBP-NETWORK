@@ -11,35 +11,35 @@ import unittest
 
 from check_steps import check_file
 
-VALID_GUIDE = """# Guide de test
+VALID_GUIDE = """# Test guide
 
-#### Étape 1 — faire la chose
+#### Step 1 — do the thing
 
-**Prérequis vérifiable** : `go version` répond.
+**Verifiable prerequisite**: `go version` responds.
 
-**Commande** :
-
-```bash
-go build ./...  # config/ est à adapter, jamais copié tel quel
-```
-
-**Critère de succès observable** : le binaire existe.
-
-**En cas d'échec : STOP** — ne pas continuer, corriger la cause.
-
-#### Étape 2 — vérifier la chose
-
-**Prérequis vérifiable** : l'étape 1 a réussi.
-
-**Commande** :
+**Command**:
 
 ```bash
-./chose --verify
+go build ./...  # config/ is to adapt, never copied as-is
 ```
 
-**Critère de succès observable** : sortie « ok ».
+**Observable success criterion**: the binary exists.
 
-**En cas d'échec : STOP** — registre inspecté, cause corrigée.
+**On failure: STOP** — do not continue, fix the cause.
+
+#### Step 2 — verify the thing
+
+**Verifiable prerequisite**: step 1 succeeded.
+
+**Command**:
+
+```bash
+./thing --verify
+```
+
+**Observable success criterion**: output « ok ».
+
+**On failure: STOP** — registry inspected, cause fixed.
 """
 
 
@@ -57,39 +57,39 @@ class CheckStepsTest(unittest.TestCase):
         self.assertEqual(self._run(VALID_GUIDE), [])
 
     def test_mutation_bloc_manquant(self):
-        broken = VALID_GUIDE.replace("**En cas d'échec : STOP** — ne pas continuer, corriger la cause.\n", "", 1)
+        broken = VALID_GUIDE.replace("**On failure: STOP** — do not continue, fix the cause.\n", "", 1)
         errors = self._run(broken)
-        self.assertTrue(any("En cas d'échec" in e for e in errors), errors)
+        self.assertTrue(any("On failure" in e for e in errors), errors)
 
     def test_mutation_bloc_hors_ordre(self):
         broken = VALID_GUIDE.replace(
-            "**Prérequis vérifiable** : `go version` répond.\n\n**Commande** :",
-            "**Commande** :\n\n**Prérequis vérifiable** : `go version` répond.",
+            "**Verifiable prerequisite**: `go version` responds.\n\n**Command**:",
+            "**Command**:\n\n**Verifiable prerequisite**: `go version` responds.",
             1,
         )
         errors = self._run(broken)
         self.assertTrue(any("hors ordre" in e for e in errors), errors)
 
     def test_mutation_config_sans_adapter(self):
-        broken = VALID_GUIDE + "\ncopier `config/nftables/router-p1.nft` vers /etc\n"
+        broken = VALID_GUIDE + "\ncopy `config/nftables/router-p1.nft` to /etc\n"
         errors = self._run(broken)
         self.assertTrue(any("D99" in e for e in errors), errors)
 
     def test_mutation_aucune_etape(self):
-        errors = self._run("# Guide\n\nDu texte sans étape exécutable.\n")
+        errors = self._run("# Guide\n\nText without an executable step.\n")
         self.assertTrue(any("D96" in e for e in errors), errors)
 
     def test_config_avec_adapter_passe(self):
-        ok = VALID_GUIDE + "\nadapter `config/sysctl/99-tbp-hardening.conf` au noyau local\n"
+        ok = VALID_GUIDE + "\nadapt `config/sysctl/99-tbp-hardening.conf` to the local kernel\n"
         self.assertEqual(self._run(ok), [])
 
     def test_regression_commentaire_bash_dans_fence(self):
-        # Un commentaire « # … » en tête de ligne DANS une fence n'est pas
-        # un titre Markdown : sans cette correction, le parseur tronquait
-        # l'étape et accusait les blocs suivants d'être manquants.
+        # A bash comment « # … » at the start of a line INSIDE a fence is
+        # not a Markdown heading: without this fix, the parser truncated
+        # the step and accused the following blocks of being missing.
         guide = VALID_GUIDE.replace(
-            "go build ./...  # config/ est à adapter, jamais copié tel quel",
-            "# commentaire bash en tête de ligne\ngo build ./...  # config/ est à adapter",
+            "go build ./...  # config/ is to adapt, never copied as-is",
+            "# bash comment at start of line\ngo build ./...  # config/ is to adapt",
             1,
         )
         self.assertEqual(self._run(guide), [])
