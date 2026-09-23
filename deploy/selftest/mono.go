@@ -149,6 +149,7 @@ func runMono(s *suite, cfg config) {
 	binDir := filepath.Join(cfg.out, "bin")
 	opaDir := filepath.Join(cfg.out, "opa")
 	regDir := filepath.Join(cfg.out, "registry", monoCellID)
+	adminSock := filepath.Join(cfg.out, "pepd-admin.sock")
 	for _, d := range []string{binDir, opaDir, regDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			s.fail(phaseMono, "préparation des répertoires", err)
@@ -239,6 +240,12 @@ func runMono(s *suite, cfg config) {
 		"TBP_POLICY_ID="+hex.EncodeToString(policyID[:]),
 		"TBP_REGISTRY_DIR="+regDir,
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
+		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
+		// /healthz et /v1/mode ne sont plus servis sur le plan de données
+		// (TBP_LISTEN_ADDR) — un test qui les sonderait encore là échouerait
+		// désormais systématiquement (revue #86 : le selftest doit rester
+		// exécutable, pas seulement le code).
+		"TBP_ADMIN_SOCKET="+adminSock,
 		"TBP_OPA_ENDPOINT="+opaURL+"/v1/data/tbp/example/action",
 		// OPA reste en TCP loopback ici (selftest local, pas de socket
 		// Unix propre à cette machine partagée) — dev/lab EXPLICITE,
@@ -266,23 +273,23 @@ func runMono(s *suite, cfg config) {
 		return
 	}
 	defer func() { _ = pepdCmd.Process.Kill(); _, _ = pepdCmd.Process.Wait() }()
-	if err := waitHTTP200(pepdURL+"/healthz", 15*time.Second); err != nil {
-		s.fail(phaseMono, "pepd démarrage (sonde /healthz)", err)
+	adminHC := unixClient(adminSock)
+	if err := waitUnix200(adminHC, "http://pepd-admin/healthz", 15*time.Second); err != nil {
+		s.fail(phaseMono, "pepd démarrage (sonde /healthz, plan d'administration)", err)
 		return
 	}
 	s.add(phaseMono, "pepd démarré (OPA branché, registre réel)", true, pepdURL)
 
 	// Posture au démarrage : monitor, jamais closed (§5.3).
-	resp, err := http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	var modeView struct {
+		Mode string `json:"mode"`
+	}
+	_, raw, err := getUnix(adminHC, "http://pepd-admin/v1/mode")
 	if err != nil {
 		s.fail(phaseMono, "posture initiale = monitor", err)
 		return
 	}
-	var modeView struct {
-		Mode string `json:"mode"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&modeView)
-	_ = resp.Body.Close()
+	_ = json.Unmarshal(raw, &modeView)
 	s.add(phaseMono, "posture initiale = monitor (§5.3)", modeView.Mode == "monitor", "mode="+modeView.Mode)
 
 	// --- Étape : jeton valide (action « read » → allow OPA) -----------------
@@ -350,26 +357,25 @@ func runMono(s *suite, cfg config) {
 		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
 	}
 
-	legacy, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-1"}})
+	legacy, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-1"}})
 	s.add(phaseMono, "témoin #89: attaque historique (signers déclarés, sans signature) → refusée",
 		legacy == http.StatusForbidden, fmt.Sprintf("status=%d", legacy))
 
-	status, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{
+	status, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
 		"mode": "closed", "expiry": expiry.Unix(),
 		"signatures": []map[string]string{signCtrl(ctrl1, ctrl1KID)},
 	})
 	s.add(phaseMono, "bascule closed: 1 signature valide < quorum 2 → 403", status == http.StatusForbidden,
 		fmt.Sprintf("status=%d", status))
-	status, _, _ = postJSON(pepdURL+"/v1/mode", map[string]any{
+	status, _, _ = postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
 		"mode": "closed", "expiry": expiry.Unix(),
 		"signatures": []map[string]string{signCtrl(ctrl1, ctrl1KID), signCtrl(ctrl2, ctrl2KID)},
 	})
 	s.add(phaseMono, "bascule closed: quorum 2/2 signatures valides → 200", status == http.StatusOK,
 		fmt.Sprintf("status=%d", status))
-	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	_, raw, err = getUnix(adminHC, "http://pepd-admin/v1/mode")
 	if err == nil {
-		_ = json.NewDecoder(resp.Body).Decode(&modeView)
-		_ = resp.Body.Close()
+		_ = json.Unmarshal(raw, &modeView)
 	}
 	s.add(phaseMono, "posture effective = closed après quorum", modeView.Mode == "closed", "mode="+modeView.Mode)
 
@@ -407,15 +413,14 @@ func runMono(s *suite, cfg config) {
 		s.fail(phaseMono, "pepd redémarrage (§93)", err)
 		return
 	}
-	if err := waitHTTP200(pepdURL+"/healthz", 15*time.Second); err != nil {
+	if err := waitUnix200(adminHC, "http://pepd-admin/healthz", 15*time.Second); err != nil {
 		s.fail(phaseMono, "pepd redémarrage (§93, sonde /healthz)", err)
 		return
 	}
 
-	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	_, raw, err = getUnix(adminHC, "http://pepd-admin/v1/mode")
 	if err == nil {
-		_ = json.NewDecoder(resp.Body).Decode(&modeView)
-		_ = resp.Body.Close()
+		_ = json.Unmarshal(raw, &modeView)
 	}
 	s.add(phaseMono, "témoin #93: redémarrage → posture refused (PAS monitor silencieux)",
 		modeView.Mode == "refused", "mode="+modeView.Mode)
@@ -434,16 +439,15 @@ func runMono(s *suite, cfg config) {
 		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", expiry93))
 		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
 	}
-	status93, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{
+	status93, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
 		"mode": "monitor", "expiry": expiry93.Unix(),
 		"signatures": []map[string]string{signCtrlMonitor(ctrl1, ctrl1KID), signCtrlMonitor(ctrl2, ctrl2KID)},
 	})
 	s.add(phaseMono, "témoin #93: reconfirmation quorée de monitor après redémarrage → 200",
 		status93 == http.StatusOK, fmt.Sprintf("status=%d", status93))
-	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	_, raw, err = getUnix(adminHC, "http://pepd-admin/v1/mode")
 	if err == nil {
-		_ = json.NewDecoder(resp.Body).Decode(&modeView)
-		_ = resp.Body.Close()
+		_ = json.Unmarshal(raw, &modeView)
 	}
 	s.add(phaseMono, "témoin #93: posture = monitor après reconfirmation", modeView.Mode == "monitor", "mode="+modeView.Mode)
 

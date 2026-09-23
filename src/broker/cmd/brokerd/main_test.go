@@ -469,8 +469,10 @@ func TestBrokerdEndToEnd(t *testing.T) {
 		if r.URL.Query().Get("provenance") == "true" {
 			// Vérification de révision (§92.A5) : la même valeur que le
 			// TBP_POLICY_ID épinglé — un stub qui ne le respecterait pas
-			// ferait refuser le démarrage à ce watcher.
-			fmt.Fprintf(w, `{"result":{"allow":%t},"provenance":{"revision":%q}}`, allow.Load(), fx.env["TBP_POLICY_ID"])
+			// ferait refuser le démarrage à ce watcher. Forme RÉELLE
+			// d'OPA 1.20.2 pour un bundle non nommé (revue #86) :
+			// provenance.bundles.<clé>.revision, pas provenance.revision.
+			fmt.Fprintf(w, `{"result":{"allow":%t},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, allow.Load(), fx.env["TBP_POLICY_ID"])
 			return
 		}
 		fmt.Fprintf(w, `{"result":{"allow":%t}}`, allow.Load())
@@ -649,7 +651,9 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("provenance") == "true" {
-			fmt.Fprintf(w, `{"result":{"allow":true},"provenance":{"revision":%q}}`, policyHex)
+			// Forme RÉELLE d'OPA 1.20.2 pour un bundle non nommé
+			// (revue #86) : provenance.bundles.<clé>.revision.
+			fmt.Fprintf(w, `{"result":{"allow":true},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, policyHex)
 			return
 		}
 		fmt.Fprint(w, `{"result":{"allow":true}}`)
@@ -730,7 +734,9 @@ func TestBrokerdStartupOPARevisionMismatchRefuses(t *testing.T) {
 	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("provenance") == "true" {
-			fmt.Fprint(w, `{"result":{"allow":true},"provenance":{"revision":"revision-imposteur"}}`)
+			// Forme RÉELLE d'OPA 1.20.2 pour un bundle non nommé
+			// (revue #86) : provenance.bundles.<clé>.revision.
+			fmt.Fprint(w, `{"result":{"allow":true},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":"revision-imposteur"}}}}`)
 			return
 		}
 		fmt.Fprint(w, `{"result":{"allow":true}}`)

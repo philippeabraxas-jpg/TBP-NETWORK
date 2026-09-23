@@ -89,7 +89,9 @@ go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
 #   TBP_SALT=<hex 32 car. — sel de la chaîne DU MONITEUR, généré ici>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/supervision
 #   TBP_CELLS_FILE=/etc/tbp/cells.json
-#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock
+#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker-admin.sock  # plan ADMIN (§95) :
+#     supervisord ne lit que GET /v1/supervision/*, jamais POST /v1/actions —
+#     le socket du plan de DONNÉES (broker.sock) ne sert pas ces routes.
 #   TBP_TICK_MS=5000
 #   TBP_CONSOLE_SOCKET=/run/tbp/supervision.sock
 install -m 0644 src/supervision/tbp-supervisord.service /etc/systemd/system/

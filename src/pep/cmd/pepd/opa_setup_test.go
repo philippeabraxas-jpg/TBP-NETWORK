@@ -173,12 +173,20 @@ func TestOpaHTTPClientSocketRealDial(t *testing.T) {
 // A5 : révision vérifiée au démarrage — écart refuse le démarrage.
 // ---------------------------------------------------------------------------
 
+// newOPAStub imite la forme RÉELLE d'OPA 1.20.2 pour un bundle chargé
+// sans nom explicite (`opa run bundle.tar.gz`, la forme utilisée par ce
+// déploiement) : la révision est sous provenance.bundles.<clé>.revision,
+// PAS sous provenance.revision (vérifié contre le binaire OPA réel — un
+// faux OPA au format différent aurait laissé passer un bug qui casse
+// TOUT démarrage réel, revue #86). La clé elle-même n'est pas prévisible
+// côté production (c'est l'argument passé à `opa run`) — ce stub en
+// choisit une arbitraire pour le prouver.
 func newOPAStub(t *testing.T, revision string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("provenance") == "true" {
-			fmt.Fprintf(w, `{"result":{"allow":false},"provenance":{"revision":%q}}`, revision)
+			fmt.Fprintf(w, `{"result":{"allow":false},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, revision)
 			return
 		}
 		fmt.Fprint(w, `{"result":{"allow":false}}`)
