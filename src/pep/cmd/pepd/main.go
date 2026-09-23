@@ -2,10 +2,11 @@
 // que suppose la redirection nftables (config/nftables/pep-redirect.nft,
 // PEP_PORT=8443). Il assemble la pile complète de la cellule :
 //
-//	FailClosed (T14, point unique) → Validator (T9, gate étape 0) →
-//	AntiReplay (T10) → QuotaLedger (T12) → ClockWatchdog (T13) →
-//	[OPA (T11)] → ModeController (T15, monitor d'abord §5.3) →
-//	Listener HTTP (T15) → feuilles au CellLog (T7, checkpoints Ed25519).
+//	CellLog (T7, checkpoints Ed25519) → [Measured boot (T31, §6.3), avant
+//	le service — issue #96] → FailClosed (T14, point unique) →
+//	Validator (T9, gate étape 0) → AntiReplay (T10) → QuotaLedger (T12) →
+//	ClockWatchdog (T13) → [OPA (T11)] → ModeController (T15, monitor
+//	d'abord §5.3) → Listener HTTP (T15) → feuilles au CellLog.
 //
 // Configuration par variables d'environnement (toutes requises sauf
 // mention contraire) :
@@ -45,6 +46,24 @@
 //	                   défaut 1000, plancher 4× l'intervalle de checkpoint
 //	                   (sous le plancher : refus de démarrer, coupures
 //	                   parasites garanties).
+//	Measured boot (T31, §6.3 — revue de sécurité #96) — optionnel, absent
+//	par défaut (TPM/HSM réel non tranché, issue #32) :
+//	TBP_MEASURED_BOOT_MANIFEST_FILE  déclencheur : absent ⇒ désactivé.
+//	                   Présent ⇒ les six variables suivantes deviennent
+//	                   requises ensemble. Fichier du dernier manifeste
+//	                   publié (créé au premier démarrage — genèse TOFU).
+//	TBP_MEASURED_BOOT_ROOT_FILE      fichier hex(64) de la racine mesurée —
+//	                   stand-in DEV/TEST UNIQUEMENT (registry.FileRootMeasurer),
+//	                   jamais en gouvernance réelle.
+//	TBP_MEASURED_BOOT_EXPECTED_ROOT  racine de référence, hex 64 caractères.
+//	TBP_MEASURED_BOOT_POLICY_BUNDLE, _OPA_CONFIG, _BROKER_BINARY,
+//	TBP_MEASURED_BOOT_AI_CONTAINER   chemins des quatre artefacts mesurés
+//	                   (§6.3) — un écart avec le manifeste engagé refuse le
+//	                   démarrage, trace une feuille, alarme (T14).
+//	TBP_MEASURED_BOOT_TRANSITION=1   déclare un changement de composant
+//	                   DÉLIBÉRÉ pour CE démarrage : engage une nouvelle
+//	                   référence au lieu de vérifier contre l'ancienne —
+//	                   jamais automatique, toujours une décision explicite.
 //
 // Doctrine §5.3 : le démon démarre TOUJOURS en mode monitor — jamais
 // closed au premier déploiement, ni au redémarrage. La bascule closed
@@ -152,6 +171,14 @@ func run() error {
 			log.Printf("pepd: fermeture du registre: %v", err)
 		}
 	}()
+
+	// Measured boot (T31, issue #32) — revue de sécurité #96 : AVANT
+	// d'ouvrir le service de la cellule (point d'intégration documenté,
+	// src/registry/README.md). Désactivé par défaut (TBP_MEASURED_BOOT_*
+	// absents) — voir measured_boot.go.
+	if err := setupMeasuredBoot(ctx, cellID, salt, signer, verifier, cellLog, os.Getenv); err != nil {
+		return err
+	}
 
 	// Puits de feuilles du chemin de DÉCISION (T38, issue #71) : async
 	// borné par défaut — verdict à l'acceptation de la feuille, fenêtre

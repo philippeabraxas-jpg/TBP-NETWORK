@@ -190,7 +190,12 @@ real-hardware split as SoftHSM in T3):
   reference = refused as well: fail-closed covers configuration too (§1).
 
 Integration point: cell startup in `src/pep/cmd/pepd`, **before** the cell
-opens its service.
+opens its service — wired (security review #96): see
+`src/pep/cmd/pepd/measured_boot.go`. Disabled by default
+(`TBP_MEASURED_BOOT_MANIFEST_FILE` unset); once configured, the first boot
+writes genesis (trust-on-first-use, dev-stub root measurement) and every
+later boot calls `CheckBoot` — a deliberate component change must be
+declared (`TBP_MEASURED_BOOT_TRANSITION=1`) to re-baseline, never silent.
 
 ## Required policy (backpressure)
 
@@ -215,8 +220,5 @@ opens its service.
 - **Manifest distribution** beyond T6 anchoring and the published
   `SignedManifest` artifacts (how auditors fetch them is a deployment
   concern, not a format concern).
-- **Wiring into the cell binary** (`pepd`): calling `Genesis`,
-  `Transition`, and `CheckBoot` from the cell lifecycle is a separate
-  integration task.
 - Quota sizing against a real P1 pilot leaf rate — see `tests/p1_friction/`
   once it has throughput numbers.
