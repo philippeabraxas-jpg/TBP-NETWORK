@@ -190,6 +190,35 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # TBP_POLICY_ID; checked once, SYNCHRONOUSLY,
 #                                  # before pepd serves at all — a mismatch
 #                                  # there refuses to start
+#   TBP_MEASURED_BOOT_MANIFEST_FILE=/var/lib/tbp/cell-a-measured-boot.json
+#                                  # security review #112: measured boot is
+#                                  # now REQUIRED by default — path MUST be
+#                                  # outside TBP_REGISTRY_DIR (security
+#                                  # review #111: erasing the registry must
+#                                  # never also erase the sole witness that
+#                                  # this is a restart, not a first boot) ;
+#                                  # only TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE=1
+#                                  # (dev/lab only, never in production) may
+#                                  # stand in for it
+#   TBP_MEASURED_BOOT_ROOT_FILE=/var/lib/tbp/measured-root  # dev-stub root
+#                                  # measurer (registry.FileRootMeasurer) —
+#                                  # a real deployment substitutes a real
+#                                  # TPM/HSM measurer (issue #32)
+#   TBP_MEASURED_BOOT_EXPECTED_ROOT=<64 hex chars>  # root hash expected at
+#                                  # CheckBoot time
+#   TBP_MEASURED_BOOT_POLICY_BUNDLE=/etc/tbp/opa/tbp-example.tar.gz
+#   TBP_MEASURED_BOOT_OPA_CONFIG=/etc/tbp/opa-config.yaml
+#   TBP_MEASURED_BOOT_BROKER_BINARY=/usr/local/bin/brokerd
+#   TBP_MEASURED_BOOT_AI_CONTAINER=<container image digest or path>
+#   TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE=/etc/tbp/measured-boot-transition-proof.json
+#                                  # optional — only present for a DELIBERATE
+#                                  # reference re-engagement (bundle/config
+#                                  # update). security review #112: replaces
+#                                  # the former bare TBP_MEASURED_BOOT_TRANSITION=1
+#                                  # flag — now requires a quorum-of-controllers
+#                                  # proof (same TBP_QUORUM_KEYRING_FILE as
+#                                  # POST /v1/mode, §89/§105), never a plain
+#                                  # environment flag alone
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
