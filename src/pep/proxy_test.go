@@ -1,10 +1,13 @@
 package pep
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +41,7 @@ func newProxyFixture(t *testing.T, f *listenerFixture, backendURL string, opts .
 func bearerReq(t *testing.T, method, target string, tok []byte) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(method, target, nil)
-	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(tok))
+	req.Header.Set(DefaultTokenHeader, "Bearer "+base64.StdEncoding.EncodeToString(tok))
 	return req
 }
 
@@ -169,7 +172,7 @@ func TestBlockingProxyMissingTokenRejected(t *testing.T) {
 
 	p := newProxyFixture(t, f, backend.URL)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/docs/42", nil) // pas d'Authorization
+	req := httptest.NewRequest(http.MethodGet, "/docs/42", nil) // pas de jeton porteur
 	p.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -190,7 +193,7 @@ func TestBlockingProxyBadBase64TokenRejected(t *testing.T) {
 	p := newProxyFixture(t, f, backend.URL)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/docs/42", nil)
-	req.Header.Set("Authorization", "Bearer !!!pas-base64!!!")
+	req.Header.Set(DefaultTokenHeader, "Bearer !!!pas-base64!!!")
 	p.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -263,16 +266,239 @@ func TestDefaultDeriveRequestMapping(t *testing.T) {
 func TestDefaultTokenFromBearer(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	if _, err := defaultTokenFrom(req); err == nil {
-		t.Fatal("en-tête Authorization absent accepté")
+		t.Fatalf("en-tête %s absent accepté", DefaultTokenHeader)
 	}
-	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	req.Header.Set(DefaultTokenHeader, "Basic dXNlcjpwYXNz")
 	if _, err := defaultTokenFrom(req); err == nil {
 		t.Fatal("schéma Basic accepté (Bearer requis)")
 	}
-	req.Header.Set("Authorization", "Bearer abc123")
+	req.Header.Set(DefaultTokenHeader, "Bearer abc123")
 	tok, err := defaultTokenFrom(req)
 	if err != nil || tok != "abc123" {
 		t.Fatalf("tok=%q err=%v, veut abc123/nil", tok, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Revue de sécurité post-#86 : #107 (query string liée à la ressource),
+// #108 (corps scellé), #109 (jeton TBP jamais transmis, Authorization
+// libre pour le backend).
+// ---------------------------------------------------------------------------
+
+// TestDefaultDeriveRequestBindsQueryString : preuve NON-VACUE de #107 —
+// deux requêtes de même chemin mais de query string différente dérivent
+// des ressources DIFFÉRENTES ; une politique à correspondance exacte les
+// distingue donc désormais (avant #107, la query string n'atteignait
+// jamais la décision).
+func TestDefaultDeriveRequestBindsQueryString(t *testing.T) {
+	plain, err := defaultDeriveRequest(httptest.NewRequest(http.MethodGet, "/reports", nil))
+	if err != nil {
+		t.Fatalf("sans query string: %v", err)
+	}
+	if plain.Resource != "/reports" {
+		t.Fatalf("resource=%q, veut /reports", plain.Resource)
+	}
+	tampered, err := defaultDeriveRequest(httptest.NewRequest(http.MethodGet, "/reports?action=delete_all", nil))
+	if err != nil {
+		t.Fatalf("avec query string: %v", err)
+	}
+	if tampered.Resource == plain.Resource {
+		t.Fatal("query string absente de la ressource dérivée — #107 non fermé")
+	}
+	if tampered.Resource != "/reports?action=delete_all" {
+		t.Fatalf("resource=%q, veut /reports?action=delete_all", tampered.Resource)
+	}
+}
+
+// TestDefaultDeriveRequestSealsBody : preuve NON-VACUE de #108 — deux
+// corps différents produisent des ObjectSeal différents ; le MÊME corps
+// produit le MÊME sceau (déterministe, vérifiable par le Validator côté
+// jeton).
+func TestDefaultDeriveRequestSealsBody(t *testing.T) {
+	reqFor := func(body string) Request {
+		r := httptest.NewRequest(http.MethodPost, "/transfer", strings.NewReader(body))
+		got, err := defaultDeriveRequest(r)
+		if err != nil {
+			t.Fatalf("corps %q: %v", body, err)
+		}
+		return got
+	}
+	small := reqFor(`{"amount":50}`)
+	if small.ObjectSeal == nil {
+		t.Fatal("corps non vide sans ObjectSeal — #108 non fermé")
+	}
+	big := reqFor(`{"amount":999999}`)
+	if big.ObjectSeal == nil {
+		t.Fatal("corps non vide sans ObjectSeal")
+	}
+	if *small.ObjectSeal == *big.ObjectSeal {
+		t.Fatal("deux corps différents produisent le MÊME sceau — #108 non fermé")
+	}
+	same := reqFor(`{"amount":50}`)
+	if *same.ObjectSeal != *small.ObjectSeal {
+		t.Fatal("le même corps produit des sceaux différents — non déterministe")
+	}
+
+	empty, err := defaultDeriveRequest(httptest.NewRequest(http.MethodGet, "/x", nil))
+	if err != nil {
+		t.Fatalf("sans corps: %v", err)
+	}
+	if empty.ObjectSeal != nil {
+		t.Fatal("ObjectSeal posé sur une requête sans corps")
+	}
+}
+
+// TestDefaultDeriveRequestForwardsExactBody : le corps lu pour le sceau
+// est intégralement RESTITUÉ — la lecture pour #108 ne doit jamais
+// altérer ce qui sera transmis au backend.
+func TestDefaultDeriveRequestForwardsExactBody(t *testing.T) {
+	const body = `{"amount":50,"to":"acct-9"}`
+	r := httptest.NewRequest(http.MethodPost, "/transfer", strings.NewReader(body))
+	if _, err := defaultDeriveRequest(r); err != nil {
+		t.Fatalf("defaultDeriveRequest: %v", err)
+	}
+	got, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("relecture du corps: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("corps après dérivation=%q, veut %q (identique)", got, body)
+	}
+	if r.ContentLength != int64(len(body)) {
+		t.Fatalf("ContentLength=%d, veut %d", r.ContentLength, len(body))
+	}
+}
+
+// TestDefaultDeriveRequestRejectsOversizedBody : un corps au-delà de
+// maxProxyBodySeal est refusé plutôt que scellé sur un préfixe tronqué
+// (un sceau partiel serait un sceau sur autre chose que ce qui est
+// réellement transmis).
+func TestDefaultDeriveRequestRejectsOversizedBody(t *testing.T) {
+	oversized := strings.Repeat("a", maxProxyBodySeal+1)
+	r := httptest.NewRequest(http.MethodPost, "/transfer", strings.NewReader(oversized))
+	if _, err := defaultDeriveRequest(r); err == nil {
+		t.Fatal("corps surdimensionné accepté")
+	}
+}
+
+// TestBlockingProxyStripsTBPTokenHeader : preuve NON-VACUE directe de
+// #109 — le backend ne voit JAMAIS l'en-tête portant le jeton TBP.
+func TestBlockingProxyStripsTBPTokenHeader(t *testing.T) {
+	f := newListenerFixture(t, false)
+	var seenHeader string
+	var sawHeader bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeader = r.Header.Get(DefaultTokenHeader)
+		sawHeader = r.Header.Get(DefaultTokenHeader) != ""
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, nominalClaims())))
+
+	if sawHeader {
+		t.Fatalf("le backend a vu %s=%q — le jeton TBP a fuité (#109)", DefaultTokenHeader, seenHeader)
+	}
+}
+
+// TestBlockingProxyPreservesBackendAuthorization : preuve NON-VACUE
+// directe de #109 — l'en-tête Authorization, s'il est posé par l'appelant
+// pour SA PROPRE authentification côté backend, arrive intact : le proxy
+// ne l'occupe plus pour le jeton TBP (DefaultTokenHeader ≠ Authorization)
+// et ne le touche pas.
+func TestBlockingProxyPreservesBackendAuthorization(t *testing.T) {
+	f := newListenerFixture(t, false)
+	const backendAuth = "Bearer backend-own-credential"
+	var seenAuth string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	req := bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, nominalClaims()))
+	req.Header.Set("Authorization", backendAuth) // credential du BACKEND, distinct du jeton TBP
+	p.ServeHTTP(rec, req)
+
+	if seenAuth != backendAuth {
+		t.Fatalf("Authorization vu par le backend=%q, veut %q (#109: libre pour le backend)", seenAuth, backendAuth)
+	}
+}
+
+// TestBlockingProxyEndToEndBodySealBlocksTamperedAmount : preuve NON-
+// VACUE de bout en bout de #108, à travers la VRAIE chaîne de décision
+// (pas seulement defaultDeriveRequest en isolation) — un jeton d'écriture
+// émis avec un ObjectSeal épinglé sur UN montant précis laisse passer CE
+// montant exact, et refuse tout autre corps, alors même que action et
+// resource restent identiques (ce que #94.A9 vérifiait déjà) : c'est
+// précisément le scénario de l'issue (« un jeton d'écriture sur /transfer
+// laisse passer n'importe quel montant »).
+func TestBlockingProxyEndToEndBodySealBlocksTamperedAmount(t *testing.T) {
+	f := newListenerFixture(t, false)
+	// closed : le verdict S'APPLIQUE (monitor transmettrait même un deny
+	// — doctrine §5.3, sans rapport avec #108).
+	if err := f.mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
+		t.Fatalf("SetMode(closed): %v", err)
+	}
+	const authorizedBody = `{"amount":50}`
+	seal := sha256.Sum256([]byte(authorizedBody))
+
+	// Deux jetons DISTINCTS (jti différents, pour isoler le sceau de
+	// l'anti-rejeu §T10) mais épinglés sur le MÊME sceau — celui de
+	// authorizedBody.
+	claims1 := nominalClaims()
+	claims1.action, claims1.resource, claims1.objectSeal = "write", "/transfer", seal[:]
+	tok1 := mintToken(t, claims1)
+
+	claims2 := nominalClaims()
+	claims2.action, claims2.resource, claims2.objectSeal = "write", "/transfer", seal[:]
+	j2 := jtiOf(0x99)
+	claims2.jti = j2[:]
+	tok2 := mintToken(t, claims2)
+
+	var hits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != authorizedBody {
+			t.Errorf("backend a reçu un corps différent de celui scellé: %q", body)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	p := newProxyFixture(t, f, backend.URL, func(po *ProxyOptions) { po.DeriveRequest = nil }) // defaultDeriveRequest réel
+
+	// Le montant EXACT couvert par le sceau : autorisé, transmis.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/transfer", strings.NewReader(authorizedBody))
+	req.Header.Set(DefaultTokenHeader, "Bearer "+base64.StdEncoding.EncodeToString(tok1))
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || hits != 1 {
+		t.Fatalf("montant autorisé refusé: status=%d hits=%d body=%s", rec.Code, hits, rec.Body.String())
+	}
+
+	// Un AUTRE jeton, épinglé sur le MÊME sceau, mais un montant
+	// DIFFÉRENT dans le corps réellement envoyé : refusé, backend jamais
+	// atteint — c'est exactement le trou de #108 (« n'importe quel
+	// montant »).
+	tamperedBody := `{"amount":999999}`
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/transfer", strings.NewReader(tamperedBody))
+	req2.Header.Set(DefaultTokenHeader, "Bearer "+base64.StdEncoding.EncodeToString(tok2))
+	p.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("montant altéré (999999 au lieu de 50) accepté: status=%d — #108 non fermé", rec2.Code)
+	}
+	if hits != 1 {
+		t.Fatalf("backend atteint avec un montant altéré (hits=%d) — #108 non fermé", hits)
+	}
+	if rec2.Header().Get("X-TBP-Reason") != ReasonSealMismatch {
+		t.Fatalf("raison=%q, veut %q", rec2.Header().Get("X-TBP-Reason"), ReasonSealMismatch)
 	}
 }
 
