@@ -503,6 +503,104 @@ func TestBlockingProxyEndToEndBodySealBlocksTamperedAmount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Revue de sécurité post-#86 (#110) : un passeport ouvert par le proxy
+// rencontre désormais SON instrument — le proxy consomme lui-même, jamais
+// un appel volontaire externe qui pouvait tout simplement ne jamais venir.
+// ---------------------------------------------------------------------------
+
+// TestBlockingProxyConsumesQuotaOnForward : preuve NON-VACUE directe de
+// #110 — une requête transmise via un jeton porteur d'un vecteur quota
+// décrémente RÉELLEMENT le compteur ouvert, sans qu'aucun appel externe à
+// POST /v1/passport/consume n'ait eu lieu (la consommation restait
+// entièrement volontaire avant ce correctif — ici, rien n'appelle
+// /v1/passport/consume).
+func TestBlockingProxyConsumesQuotaOnForward(t *testing.T) {
+	f := newListenerFixture(t, true) // withLedger=true
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	claims := quotaClaims(5, 60) // volume_max=5 — largement assez pour 1 quantum
+	tok := mintToken(t, claims)
+
+	p := newProxyFixture(t, f, backend.URL) // fixedDeriveRequest("read.list", "registry/docs/42") — assorti à nominalClaims()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/docs/42", nil)
+	req.Header.Set(DefaultTokenHeader, "Bearer "+base64.StdEncoding.EncodeToString(tok))
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut=%d, veut 200 (requête sous quota)", rec.Code)
+	}
+	var jti [16]byte
+	copy(jti[:], claims.jti)
+	counter, ok := f.ledger.Counter(jti)
+	if !ok {
+		t.Fatal("passeport introuvable — n'a pas été ouvert")
+	}
+	if counter.ConsumedTotal() != 1 {
+		t.Fatalf("consommé=%d, veut 1 — le proxy n'a jamais décrémenté (#110)", counter.ConsumedTotal())
+	}
+	if counter.Remaining() != 4 {
+		t.Fatalf("restant=%d, veut 4 (5−1)", counter.Remaining())
+	}
+}
+
+// TestBlockingProxyDeniesForwardWhenQuotaExhausted : un vecteur à
+// volume_max=0 (quota déjà épuisé dès l'ouverture) refuse la requête —
+// AVANT #110, le proxy n'appelait jamais Consume, donc RIEN ne détectait
+// jamais un tel épuisement sur ce chemin : le backend était atteint quel
+// que soit le budget déclaré par le jeton.
+func TestBlockingProxyDeniesForwardWhenQuotaExhausted(t *testing.T) {
+	f := newListenerFixture(t, true)
+	var hits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	claims := quotaClaims(0, 60) // volume_max=0 : épuisé avant même le premier quantum
+	tok := mintToken(t, claims)
+
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/docs/42", nil)
+	req.Header.Set(DefaultTokenHeader, "Bearer "+base64.StdEncoding.EncodeToString(tok))
+	p.ServeHTTP(rec, req)
+
+	if hits != 0 {
+		t.Fatalf("backend atteint malgré un quota épuisé (hits=%d) — #110 non fermé", hits)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("statut=%d, veut 403 (quota épuisé)", rec.Code)
+	}
+}
+
+// TestBlockingProxyNoPassportNoConsume : témoin de non-régression — un
+// jeton SANS vecteur quota (nominalClaims, classe "inoffensive") n'ouvre
+// aucun passeport ; le proxy ne doit rien tenter de consommer (pas de
+// panique, pas d'erreur inattendue).
+func TestBlockingProxyNoPassportNoConsume(t *testing.T) {
+	f := newListenerFixture(t, true)
+	var hits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, nominalClaims())))
+
+	if rec.Code != http.StatusOK || hits != 1 {
+		t.Fatalf("statut=%d hits=%d, veut 200/1 (jeton sans quota, rien à consommer)", rec.Code, hits)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Fail-closed dès la configuration.
 // ---------------------------------------------------------------------------
 
