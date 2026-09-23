@@ -97,6 +97,14 @@ type ModeOptions struct {
 	// de posture (§5.3). Nil ⇒ toute bascule est refusée (fail-closed) —
 	// remplaçable via SetQuorumVerifier.
 	VerifyQuorum QuorumVerifier
+	// QuorumState avance le plancher de fraîcheur PERSISTANT par condition
+	// (revue de sécurité #105) : une preuve « mode-monitor »/« mode-closed »
+	// dont l'expiry ne dépasse pas le plancher déjà consommé est un rejeu
+	// — refusée même si la signature est valide, y compris après un
+	// redémarrage (c'est précisément ce rejeu-là qui annulait #93). Nil ⇒
+	// toute bascule est refusée (fail-closed, même doctrine que
+	// VerifyQuorum absent) — remplaçable via SetQuorumState.
+	QuorumState QuorumStateStore
 	// StartRefused (revue de sécurité #93), si true, démarre le
 	// contrôleur en ModeRefused au lieu de ModeMonitor : à l'appelant
 	// (pepd/main.go) de le poser à true SEULEMENT quand la clé de
@@ -120,6 +128,7 @@ type ModeController struct {
 	mu       sync.Mutex
 	mode     PEPMode
 	verifier QuorumVerifier
+	state    QuorumStateStore
 }
 
 // NewModeController construit le contrôleur — en mode monitor au premier
@@ -150,6 +159,7 @@ func NewModeController(opts ModeOptions) (*ModeController, error) {
 		now:      now,
 		mode:     ModeMonitor,
 		verifier: opts.VerifyQuorum,
+		state:    opts.QuorumState,
 	}
 	if opts.StartRefused {
 		// Événement de gouvernance à part entière (§93) — tracé et
@@ -168,6 +178,14 @@ func (c *ModeController) SetQuorumVerifier(v QuorumVerifier) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.verifier = v
+}
+
+// SetQuorumState (re)branche le magasin d'état de quorum (antirejeu
+// persistant, §105).
+func (c *ModeController) SetQuorumState(s QuorumStateStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = s
 }
 
 // Mode rapporte la posture courante.
@@ -193,8 +211,19 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 	if c.verifier == nil {
 		return fmt.Errorf("%w (bascule → %s)", ErrQuorumVerifierMissing, m)
 	}
-	if !c.verifier("mode-"+m.String(), proof) {
+	condition := "mode-" + m.String()
+	if !c.verifier(condition, proof) {
 		return fmt.Errorf("%w (bascule → %s)", ErrQuorumRejected, m)
+	}
+	if c.state == nil {
+		return fmt.Errorf("%w (bascule → %s)", ErrQuorumStateMissing, m)
+	}
+	ok, err := c.state.Consume(condition, proof.Expiry.Unix())
+	if err != nil {
+		return fmt.Errorf("pep: état de quorum (bascule → %s): %w", m, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w (bascule → %s)", ErrQuorumReplayed, m)
 	}
 	c.mode = m
 	c.writeLeafLocked(m)

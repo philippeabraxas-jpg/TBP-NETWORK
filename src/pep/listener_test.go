@@ -44,7 +44,7 @@ func newListenerFixture(t *testing.T, withLedger bool) *listenerFixture {
 	}
 	mc, err := NewModeController(ModeOptions{
 		CellID: opaTestCellID, Salt: testSalt, Leaves: sink,
-		VerifyQuorum: acceptQuorum, Now: now,
+		VerifyQuorum: acceptQuorum, QuorumState: acceptQuorumState{}, Now: now,
 	})
 	if err != nil {
 		t.Fatalf("NewModeController: %v", err)

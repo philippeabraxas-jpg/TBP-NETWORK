@@ -228,6 +228,15 @@ var frictionKID = [16]byte{0xF1, 0x27, 0x00, 0x29, 0xA5, 0x5C, 0x3D, 0x8E, 0x71,
 // newPEPStack assemble le PEP réel sur le puits de feuilles fourni.
 // cellLog nil ⇒ bras « décision » (puits in-memory) ; non nil ⇒ bras
 // « durabilité » (registre tessera réel — les feuilles y sont opposables).
+// acceptQuorumState est un double de pep.QuorumStateStore pour ce
+// harnais de mesure : la posture n'y est jamais basculée (SetMode n'est
+// pas exercé par les bras de mesure), donc l'antirejeu persistant (#105)
+// n'est pas ce que ce fichier teste — toujours ok=true pour ne pas
+// introduire un blocage étranger à la mesure de latence.
+type acceptQuorumState struct{}
+
+func (acceptQuorumState) Consume(string, int64) (bool, error) { return true, nil }
+
 func newPEPStack(cfg Config, plans int, leaves interface {
 	Append(context.Context, registry.Leaf) (uint64, error)
 }, cellLogClose func(context.Context) error) (*pepStack, error) {
@@ -244,6 +253,7 @@ func newPEPStack(cfg Config, plans int, leaves interface {
 		// Quorum vérificateur par comptage, comme pepd en P1 (crypto de
 		// quorum : phase ultérieure, couture déjà en place).
 		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signatures) >= 1 },
+		QuorumState:  acceptQuorumState{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mode: %w", err)

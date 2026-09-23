@@ -292,12 +292,20 @@ func run() error {
 		log.Printf("pepd: durabilité SYNCHRONE (preuve avant verdict, plancher ~150 ms POSIX — hors §9.1, mode mesure)")
 	}
 
+	// Antirejeu PERSISTANT de la preuve de quorum (revue de sécurité #105) :
+	// même frontière de custody que cell_log.key — le plancher de
+	// fraîcheur par condition doit survivre à un redémarrage, sinon une
+	// ancienne preuve « monitor » capturée une fois reste rejouable après
+	// un simple kill/redémarrage, annulant #93.
+	quorumState := pep.NewFileQuorumStateStore(filepath.Join(regDir, "quorum_state.json"))
+
 	// Point unique fail-closed (T14) — tous les détecteurs y basculent.
 	failClosed, err := pep.NewFailClosed(pep.FailClosedOptions{
-		CellID:  cellID,
-		Salt:    salt,
-		Leaves:  cellLog,
-		OnAlarm: func(name string) { log.Printf("pepd: ALARME fail-closed: %s", name) },
+		CellID:      cellID,
+		Salt:        salt,
+		Leaves:      cellLog,
+		QuorumState: quorumState,
+		OnAlarm:     func(name string) { log.Printf("pepd: ALARME fail-closed: %s", name) },
 	})
 	if err != nil {
 		return err
@@ -407,7 +415,7 @@ func run() error {
 	// d'identités déclarées par l'appelant (revue de sécurité #89 : sous
 	// l'ancien vérifieur, quiconque joignait le port de données pouvait
 	// couper l'application des règles en inventant des noms).
-	quorum, err := pep.NewSignatureQuorumVerifier(quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
+	quorum, err := pep.NewSignatureQuorumVerifier(cellID, quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
 	if err != nil {
 		return fmt.Errorf("quorum: %w", err)
 	}
@@ -417,6 +425,7 @@ func run() error {
 		Leaves:       cellLog,
 		OnAlarm:      func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
 		VerifyQuorum: quorum,
+		QuorumState:  quorumState,
 		StartRefused: isRestart, // revue de sécurité #93 : jamais au premier déploiement
 	})
 	if err != nil {

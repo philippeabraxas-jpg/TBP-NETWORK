@@ -535,6 +535,15 @@ type alwaysNewCache struct{}
 
 func (alwaysNewCache) CheckAndConsume(_ [16]byte, _ time.Time) bool { return true }
 
+// acceptQuorumState est un double de pep.QuorumStateStore pour ce
+// scénario, qui teste le rejeu de JETON (T10, anti-rejeu jti) — pas le
+// rejeu de PREUVE DE QUORUM (#105, couvert par ses propres tests dans
+// src/pep). Toujours ok=true : la seule bascule monitor→closed de S8 est
+// un préalable de mise en scène, jamais elle-même l'objet du scénario.
+type acceptQuorumState struct{}
+
+func (acceptQuorumState) Consume(string, int64) (bool, error) { return true, nil }
+
 func scenarioTokenReplay(ctx context.Context, cfg Config, sink *countingSink, salt []byte) (bool, string, error) {
 	fc, err := pep.NewFailClosed(pep.FailClosedOptions{CellID: cfg.CellID, Salt: salt, Leaves: sink})
 	if err != nil {
@@ -543,6 +552,7 @@ func scenarioTokenReplay(ctx context.Context, cfg Config, sink *countingSink, sa
 	mc, err := pep.NewModeController(pep.ModeOptions{
 		CellID: cfg.CellID, Salt: salt, Leaves: sink,
 		VerifyQuorum: func(_ string, proof pep.QuorumProof) bool { return len(proof.Signatures) >= 1 },
+		QuorumState:  acceptQuorumState{},
 	})
 	if err != nil {
 		return false, "", fmt.Errorf("mode: %w", err)

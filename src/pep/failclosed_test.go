@@ -280,6 +280,7 @@ func TestClearClassWRequiresQuorum(t *testing.T) {
 	fc2.SetQuorumVerifier(func(condition string, proof QuorumProof) bool {
 		return condition == CondAnchorLag && len(proof.Signatures) >= 2
 	})
+	fc2.SetQuorumState(acceptQuorumState{})
 	if err := fc2.Clear(CondAnchorLag, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}, {KeyID: [16]byte{2}}}}); err != nil {
 		t.Fatalf("Clear classe W avec quorum: %v", err)
 	}

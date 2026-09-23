@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -28,8 +29,8 @@ func mustGenKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return pub, priv
 }
 
-func signQuorum(priv ed25519.PrivateKey, kid [16]byte, condition string, expiry time.Time) QuorumSignature {
-	return QuorumSignature{KeyID: kid, Signature: ed25519.Sign(priv, QuorumMessage(condition, expiry))}
+func signQuorum(priv ed25519.PrivateKey, kid [16]byte, condition, cellID string, expiry time.Time) QuorumSignature {
+	return QuorumSignature{KeyID: kid, Signature: ed25519.Sign(priv, QuorumMessage(condition, cellID, expiry))}
 }
 
 // TestSignatureQuorumVerifierRequiresDistinctValidSignatures : k=2, 3
@@ -44,7 +45,7 @@ func TestSignatureQuorumVerifierRequiresDistinctValidSignatures(t *testing.T) {
 
 	now := time.Unix(1_700_000_000, 0)
 	nowFn := func() time.Time { return now }
-	verify, err := NewSignatureQuorumVerifier(keyring, 2, 5*time.Minute, nowFn)
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, nowFn)
 	if err != nil {
 		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
 	}
@@ -53,27 +54,27 @@ func TestSignatureQuorumVerifierRequiresDistinctValidSignatures(t *testing.T) {
 
 	// Une seule signature valide : insuffisant.
 	if verify(condition, QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
-		signQuorum(priv1, kid1, condition, expiry),
+		signQuorum(priv1, kid1, condition, opaTestCellID, expiry),
 	}}) {
 		t.Fatal("k=2 admis avec une seule signature")
 	}
 
 	// Même signataire répété deux fois : toujours une seule identité distincte.
-	sig1 := signQuorum(priv1, kid1, condition, expiry)
+	sig1 := signQuorum(priv1, kid1, condition, opaTestCellID, expiry)
 	if verify(condition, QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{sig1, sig1}}) {
 		t.Fatal("k=2 admis avec le même signataire compté deux fois")
 	}
 
 	// Une valide + une forgée (mauvaise clé prétendant être kid2) : insuffisant.
-	forged := QuorumSignature{KeyID: kid2, Signature: ed25519.Sign(priv1, QuorumMessage(condition, expiry))}
+	forged := QuorumSignature{KeyID: kid2, Signature: ed25519.Sign(priv1, QuorumMessage(condition, opaTestCellID, expiry))}
 	if verify(condition, QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{sig1, forged}}) {
 		t.Fatal("signature forgée (mauvaise clé) admise")
 	}
 
 	// 2 signatures distinctes et valides : quorum atteint.
 	if !verify(condition, QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
-		signQuorum(priv1, kid1, condition, expiry),
-		signQuorum(priv2, kid2, condition, expiry),
+		signQuorum(priv1, kid1, condition, opaTestCellID, expiry),
+		signQuorum(priv2, kid2, condition, opaTestCellID, expiry),
 	}}) {
 		t.Fatal("k=2 refusé avec 2 signatures distinctes et valides")
 	}
@@ -89,21 +90,56 @@ func TestSignatureQuorumVerifierBindsCondition(t *testing.T) {
 	kid1, kid2 := [16]byte{1}, [16]byte{2}
 	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
 	now := time.Unix(1_700_000_000, 0)
-	verify, err := NewSignatureQuorumVerifier(keyring, 2, 5*time.Minute, func() time.Time { return now })
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
 	}
 	expiry := now.Add(1 * time.Minute)
 
 	proof := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
-		signQuorum(priv1, kid1, "mode-monitor", expiry), // signé pour l'AUTRE bascule
-		signQuorum(priv2, kid2, "mode-monitor", expiry),
+		signQuorum(priv1, kid1, "mode-monitor", opaTestCellID, expiry), // signé pour l'AUTRE bascule
+		signQuorum(priv2, kid2, "mode-monitor", opaTestCellID, expiry),
 	}}
 	if verify("mode-closed", proof) {
 		t.Fatal("preuve liée à mode-monitor acceptée pour mode-closed")
 	}
 	if !verify("mode-monitor", proof) {
 		t.Fatal("preuve correctement liée refusée")
+	}
+}
+
+// TestSignatureQuorumVerifierBindsCellID : une preuve signée pour une
+// AUTRE cellule ne vaut rien ici — même trousseau, même signatures,
+// même condition (revue de sécurité #105 : sans cette liaison, une
+// preuve « monitor » capturée sur une cellule restait valide sur
+// N'IMPORTE QUELLE autre cellule du même trousseau).
+func TestSignatureQuorumVerifierBindsCellID(t *testing.T) {
+	pub1, priv1 := mustGenKey(t)
+	pub2, priv2 := mustGenKey(t)
+	kid1, kid2 := [16]byte{1}, [16]byte{2}
+	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+	verifyA, err := NewSignatureQuorumVerifier("cell-a", keyring, 2, 5*time.Minute, nowFn)
+	if err != nil {
+		t.Fatalf("NewSignatureQuorumVerifier(cell-a): %v", err)
+	}
+	verifyB, err := NewSignatureQuorumVerifier("cell-b", keyring, 2, 5*time.Minute, nowFn)
+	if err != nil {
+		t.Fatalf("NewSignatureQuorumVerifier(cell-b): %v", err)
+	}
+	expiry := now.Add(1 * time.Minute)
+	condition := "mode-monitor"
+
+	proofForA := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
+		signQuorum(priv1, kid1, condition, "cell-a", expiry),
+		signQuorum(priv2, kid2, condition, "cell-a", expiry),
+	}}
+	if !verifyA(condition, proofForA) {
+		t.Fatal("preuve correctement liée à cell-a refusée par le vérifieur de cell-a")
+	}
+	if verifyB(condition, proofForA) {
+		t.Fatal("preuve signée pour cell-a acceptée par le vérifieur de cell-b — rejeu inter-cellule (#105)")
 	}
 }
 
@@ -116,7 +152,7 @@ func TestSignatureQuorumVerifierFreshness(t *testing.T) {
 	kid1, kid2 := [16]byte{1}, [16]byte{2}
 	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
 	now := time.Unix(1_700_000_000, 0)
-	verify, err := NewSignatureQuorumVerifier(keyring, 2, 5*time.Minute, func() time.Time { return now })
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
 	}
@@ -124,8 +160,8 @@ func TestSignatureQuorumVerifierFreshness(t *testing.T) {
 
 	sign := func(expiry time.Time) QuorumProof {
 		return QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
-			signQuorum(priv1, kid1, condition, expiry),
-			signQuorum(priv2, kid2, condition, expiry),
+			signQuorum(priv1, kid1, condition, opaTestCellID, expiry),
+			signQuorum(priv2, kid2, condition, opaTestCellID, expiry),
 		}}
 	}
 
@@ -143,21 +179,24 @@ func TestSignatureQuorumVerifierFreshness(t *testing.T) {
 	}
 }
 
-// TestNewSignatureQuorumVerifierFailClosedConfig : trousseau vide ou k
-// incohérent refusent DÈS la construction (§1).
+// TestNewSignatureQuorumVerifierFailClosedConfig : cellID vide, trousseau
+// vide ou k incohérent refusent DÈS la construction (§1).
 func TestNewSignatureQuorumVerifierFailClosedConfig(t *testing.T) {
 	pub, _ := mustGenKey(t)
-	if _, err := NewSignatureQuorumVerifier(nil, 1, 0, nil); err == nil {
+	if _, err := NewSignatureQuorumVerifier("", map[[16]byte]ed25519.PublicKey{{1}: pub}, 1, 0, nil); err == nil {
+		t.Fatal("cellID vide accepté")
+	}
+	if _, err := NewSignatureQuorumVerifier(opaTestCellID, nil, 1, 0, nil); err == nil {
 		t.Fatal("trousseau vide accepté")
 	}
 	keyring := map[[16]byte]ed25519.PublicKey{{1}: pub}
-	if _, err := NewSignatureQuorumVerifier(keyring, 0, 0, nil); err == nil {
+	if _, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 0, 0, nil); err == nil {
 		t.Fatal("k=0 accepté")
 	}
-	if _, err := NewSignatureQuorumVerifier(keyring, 2, 0, nil); err == nil {
+	if _, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 0, nil); err == nil {
 		t.Fatal("k > nombre de contrôleurs accepté")
 	}
-	if _, err := NewSignatureQuorumVerifier(keyring, 1, 0, nil); err != nil {
+	if _, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 1, 0, nil); err != nil {
 		t.Fatalf("config nominale refusée: %v", err)
 	}
 }
@@ -180,13 +219,14 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	pub2, priv2 := mustGenKey(t)
 	kid1, kid2 := [16]byte{0xaa}, [16]byte{0xbb}
 	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
-	verify, err := NewSignatureQuorumVerifier(keyring, 2, 5*time.Minute, now)
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, now)
 	if err != nil {
 		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
 	}
+	state := NewFileQuorumStateStore(filepath.Join(t.TempDir(), "quorum_state.json"))
 
 	mc, err := NewModeController(ModeOptions{
-		CellID: opaTestCellID, Salt: testSalt, Leaves: sink, VerifyQuorum: verify, Now: now,
+		CellID: opaTestCellID, Salt: testSalt, Leaves: sink, VerifyQuorum: verify, QuorumState: state, Now: now,
 	})
 	if err != nil {
 		t.Fatalf("NewModeController: %v", err)
@@ -243,7 +283,7 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	// Une seule signature valide (k=2 exigé) : refusé.
 	one, _ := json.Marshal(ModeChangeRequest{
 		Mode: "closed", Expiry: expiry.Unix(),
-		Signatures: []QuorumSignatureWire{wireSig(signQuorum(priv1, kid1, "mode-closed", expiry))},
+		Signatures: []QuorumSignatureWire{wireSig(signQuorum(priv1, kid1, "mode-closed", opaTestCellID, expiry))},
 	})
 	if status, _ := post(one); status != http.StatusForbidden {
 		t.Fatalf("une seule signature (k=2) : status=%d, veut 403", status)
@@ -255,7 +295,7 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	// Même contrôleur compté deux fois (kid1 répété) : toujours k=1 en
 	// réalité, refusé — un simple comptage de longueur s'y laisserait
 	// prendre (revue #89 : compter n'est pas vérifier).
-	dup := signQuorum(priv1, kid1, "mode-closed", expiry)
+	dup := signQuorum(priv1, kid1, "mode-closed", opaTestCellID, expiry)
 	dupBody, _ := json.Marshal(ModeChangeRequest{
 		Mode: "closed", Expiry: expiry.Unix(),
 		Signatures: []QuorumSignatureWire{wireSig(dup), wireSig(dup)},
@@ -271,8 +311,8 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	two, _ := json.Marshal(ModeChangeRequest{
 		Mode: "closed", Expiry: expiry.Unix(),
 		Signatures: []QuorumSignatureWire{
-			wireSig(signQuorum(priv1, kid1, "mode-closed", expiry)),
-			wireSig(signQuorum(priv2, kid2, "mode-closed", expiry)),
+			wireSig(signQuorum(priv1, kid1, "mode-closed", opaTestCellID, expiry)),
+			wireSig(signQuorum(priv2, kid2, "mode-closed", opaTestCellID, expiry)),
 		},
 	})
 	status, data := post(two)
@@ -290,4 +330,140 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 
 func wireSig(s QuorumSignature) QuorumSignatureWire {
 	return QuorumSignatureWire{KeyID: hex.EncodeToString(s.KeyID[:]), Signature: hex.EncodeToString(s.Signature)}
+}
+
+// ---------------------------------------------------------------------------
+// Revue de sécurité #105 : rejeu de la preuve de quorum, MÊME cellule.
+// ---------------------------------------------------------------------------
+
+// TestModeControllerRejectsReplayedProof : preuve NON-VACUE directe — la
+// MÊME preuve (même signatures, même expiry, toujours valide et non
+// expirée) rejouée une seconde fois pour la MÊME bascule est refusée. Sans
+// QuorumStateStore, le crypto seul (#89) l'aurait acceptée deux fois tant
+// qu'elle reste fraîche (jusqu'à 5 min, DefaultQuorumProofTTL).
+func TestModeControllerRejectsReplayedProof(t *testing.T) {
+	pub1, priv1 := mustGenKey(t)
+	pub2, priv2 := mustGenKey(t)
+	kid1, kid2 := [16]byte{1}, [16]byte{2}
+	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, nowFn)
+	if err != nil {
+		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
+	}
+	state := NewFileQuorumStateStore(filepath.Join(t.TempDir(), "quorum_state.json"))
+	mc, err := NewModeController(ModeOptions{
+		CellID: opaTestCellID, Salt: testSalt, Leaves: &stubSink{}, VerifyQuorum: verify, QuorumState: state, Now: nowFn,
+	})
+	if err != nil {
+		t.Fatalf("NewModeController: %v", err)
+	}
+
+	expiry := now.Add(1 * time.Minute)
+	proof := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
+		signQuorum(priv1, kid1, "mode-closed", opaTestCellID, expiry),
+		signQuorum(priv2, kid2, "mode-closed", opaTestCellID, expiry),
+	}}
+
+	if err := mc.SetMode(ModeClosed, proof); err != nil {
+		t.Fatalf("première bascule (preuve fraîche, jamais consommée): %v", err)
+	}
+	if mc.Mode() != ModeClosed {
+		t.Fatal("bascule non appliquée malgré succès")
+	}
+
+	// Retour à monitor pour pouvoir soumettre EXACTEMENT la même preuve
+	// closed une seconde fois (SetMode est un no-op si le mode demandé
+	// est déjà courant — il faut quitter closed d'abord, avec une preuve
+	// DIFFÉRENTE, pour isoler le rejeu de la preuve closed elle-même).
+	backProof := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
+		signQuorum(priv1, kid1, "mode-monitor", opaTestCellID, expiry),
+		signQuorum(priv2, kid2, "mode-monitor", opaTestCellID, expiry),
+	}}
+	if err := mc.SetMode(ModeMonitor, backProof); err != nil {
+		t.Fatalf("retour à monitor: %v", err)
+	}
+
+	// Rejeu de l'EXACTE preuve closed déjà consommée plus haut — toujours
+	// cryptographiquement valide et dans sa fenêtre de fraîcheur (5 min,
+	// l'horloge de test n'a pas avancé) : doit être refusé.
+	if err := mc.SetMode(ModeClosed, proof); err == nil {
+		t.Fatal("preuve de quorum REJOUÉE acceptée (#105)")
+	}
+	if mc.Mode() != ModeMonitor {
+		t.Fatal("mode basculé par une preuve rejouée")
+	}
+}
+
+// TestModeControllerRejectsReplayAfterRestart : le second axe de l'issue
+// #105 — une preuve « monitor » capturée une fois reste rejouable APRÈS
+// un redémarrage de pepd si l'antirejeu n'est qu'en mémoire, ce qui
+// annule le fail-closed du redémarrage (#93). Ce test simule un
+// redémarrage en reconstruisant un ModeController FRAIS (comme au
+// process suivant), adossé au MÊME fichier d'état persistant — la preuve
+// consommée par « l'ancien processus » doit rester refusée par le
+// « nouveau ».
+func TestModeControllerRejectsReplayAfterRestart(t *testing.T) {
+	pub1, priv1 := mustGenKey(t)
+	pub2, priv2 := mustGenKey(t)
+	kid1, kid2 := [16]byte{1}, [16]byte{2}
+	keyring := map[[16]byte]ed25519.PublicKey{kid1: pub1, kid2: pub2}
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+	verify, err := NewSignatureQuorumVerifier(opaTestCellID, keyring, 2, 5*time.Minute, nowFn)
+	if err != nil {
+		t.Fatalf("NewSignatureQuorumVerifier: %v", err)
+	}
+	statePath := filepath.Join(t.TempDir(), "quorum_state.json")
+
+	expiry := now.Add(1 * time.Minute)
+	proof := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
+		signQuorum(priv1, kid1, "mode-monitor", opaTestCellID, expiry),
+		signQuorum(priv2, kid2, "mode-monitor", opaTestCellID, expiry),
+	}}
+
+	// « Ancien processus » : consomme la preuve (mode déjà monitor par
+	// défaut, donc bascule d'abord vers closed avec une AUTRE preuve pour
+	// pouvoir ensuite consommer la preuve monitor ci-dessus en retour).
+	closedProof := QuorumProof{Expiry: expiry, Signatures: []QuorumSignature{
+		signQuorum(priv1, kid1, "mode-closed", opaTestCellID, expiry),
+		signQuorum(priv2, kid2, "mode-closed", opaTestCellID, expiry),
+	}}
+	old, err := NewModeController(ModeOptions{
+		CellID: opaTestCellID, Salt: testSalt, Leaves: &stubSink{}, VerifyQuorum: verify,
+		QuorumState: NewFileQuorumStateStore(statePath), Now: nowFn,
+	})
+	if err != nil {
+		t.Fatalf("NewModeController (ancien processus): %v", err)
+	}
+	if err := old.SetMode(ModeClosed, closedProof); err != nil {
+		t.Fatalf("ancien processus: bascule closed: %v", err)
+	}
+	if err := old.SetMode(ModeMonitor, proof); err != nil {
+		t.Fatalf("ancien processus: consommation de la preuve monitor: %v", err)
+	}
+
+	// « Redémarrage » : nouveau ModeController, même fichier d'état sur
+	// disque (même registre) — StartRefused comme le ferait pepd/main.go
+	// au vu de #93, mais peu importe ici : ce qui compte est que le
+	// magasin d'état ait survécu.
+	restarted, err := NewModeController(ModeOptions{
+		CellID: opaTestCellID, Salt: testSalt, Leaves: &stubSink{}, VerifyQuorum: verify,
+		QuorumState: NewFileQuorumStateStore(statePath), Now: nowFn, StartRefused: true,
+	})
+	if err != nil {
+		t.Fatalf("NewModeController (redémarrage): %v", err)
+	}
+
+	// L'attaque #105 exacte : rejouer la MÊME preuve « monitor » déjà
+	// consommée par l'ancien processus, maintenant que le nouveau
+	// processus démarre en ModeRefused (§93) — le rejeu ne doit PAS
+	// pouvoir en sortir.
+	if err := restarted.SetMode(ModeMonitor, proof); err == nil {
+		t.Fatal("preuve monitor REJOUÉE après redémarrage acceptée — annule #93 (#105)")
+	}
+	if restarted.Mode() != ModeRefused {
+		t.Fatal("mode sorti de refused par une preuve rejouée après redémarrage")
+	}
 }
