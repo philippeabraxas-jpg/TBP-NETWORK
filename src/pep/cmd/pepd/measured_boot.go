@@ -230,7 +230,7 @@ func verifyMeasuredBootTransitionProof(path, cellID string, quorumKeyring map[[1
 		copy(kidArr[:], kid)
 		sigs = append(sigs, pep.QuorumSignature{KeyID: kidArr, Signature: sig})
 	}
-	verify, err := pep.NewSignatureQuorumVerifier(quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
+	verify, err := pep.NewSignatureQuorumVerifier(cellID, quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
 	if err != nil {
 		return fmt.Errorf("quorum: %w", err)
 	}

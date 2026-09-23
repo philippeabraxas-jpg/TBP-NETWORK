@@ -132,7 +132,7 @@ func newMeasuredBootFixture(t *testing.T) *measuredBootFixture {
 // signature (quorum insuffisant).
 func (fx *measuredBootFixture) writeTransitionProof(t *testing.T, nSigs int, wrongKey bool, expiry time.Time) string {
 	t.Helper()
-	msg := pep.QuorumMessage(reasonMeasuredBootTransition, expiry)
+	msg := pep.QuorumMessage(reasonMeasuredBootTransition, fx.cellID, expiry)
 	var sigs []measuredBootTransitionSigWire
 	i := 0
 	for kid, priv := range fx.quorumPrivs {
