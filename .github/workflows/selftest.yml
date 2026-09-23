@@ -52,5 +52,18 @@ jobs:
           version: 1.20.2
       - name: SoftHSM2 (témoins PKCS#11 §114 — sautent proprement si absent, ici présent)
         run: sudo apt-get update && sudo apt-get install -y softhsm2
+      - name: sentinel devmode (revue #113) — le runner CI n'est pas root
+        # deploy/selftest exerce délibérément des échappatoires « dev »
+        # réelles (mono/daemons, TBP_OPA_INSECURE_TCP_DEV, custody dev de
+        # l'émetteur) et doit donc déclarer /etc/tbp/DEV_ENVIRONMENT, le
+        # sentinel hors-fichier-d'environnement de la revue #113 — un
+        # chemin système, écrit en clair par le binaire pepd/brokerd réel.
+        # Un utilisateur non privilégié (le runner GitHub Actions, ou tout
+        # contributeur qui lance selftest.sh localement sans être root) ne
+        # peut pas créer /etc/tbp lui-même : ce déploiement dev/lab réel a
+        # besoin de la MÊME étape de provisionnement privilégié qu'un vrai
+        # déploiement (deploy/cellule.md : `install -d -o tbp-opa …`),
+        # jamais un contournement propre à la CI.
+        run: sudo install -d -m 0777 /etc/tbp
       - name: deploy/selftest/selftest.sh (selftest Go réel + guides + non-vacuité du vérificateur)
         run: bash deploy/selftest/selftest.sh
