@@ -13,12 +13,14 @@
 //	[Enveloppe §4.1-bis, optionnelle] → Issuer (T33, clé de dev — §12) →
 //	Broker → serveur HTTP sur socket Unix (déploiement v1).
 //
-// Le serveur expose AUSSI trois lectures de supervision (GET-only, même
-// socket — l'accès au socket EST le contrôle d'accès, doctrine console
-// T34c) : /v1/supervision/stats, /v1/supervision/epoch,
-// /v1/supervision/arbitration. Ce sont des handlers d'assemblage qui
-// sérialisent ce que les méthodes publiques des briques rendent déjà —
-// zéro modification de bibliothèque (D109). L'exposition réseau
+// Le serveur expose AUSSI trois lectures de supervision (GET-only) :
+// /v1/supervision/stats, /v1/supervision/epoch, /v1/supervision/arbitration.
+// Ce sont des handlers d'assemblage qui sérialisent ce que les méthodes
+// publiques des briques rendent déjà — zéro modification de bibliothèque
+// (D109). Séparées du plan de données depuis la revue de sécurité #95
+// (finding A10) : socket Unix DÉDIÉ (TBP_BROKER_ADMIN_SOCKET), jamais le
+// socket que POST /v1/actions écoute — l'accès au socket EST le contrôle
+// d'accès, doctrine déjà posée pour la console T34c. L'exposition réseau
 // inter-cellules est une autre issue (T35).
 //
 // Configuration par variables d'environnement (toutes requises sauf
@@ -66,7 +68,13 @@
 //	TBP_ENVELOPE_ENDPOINT   optionnel — règle d'enveloppe §4.1-bis ;
 //	                        absent ⇒ toute demande de passeport refusée
 //	                        (envelope-unverified, doctrine existante)
-//	TBP_BROKER_SOCKET       défaut /run/tbp/broker.sock
+//	TBP_BROKER_SOCKET       plan de DONNÉES : POST /v1/actions — défaut
+//	                        /run/tbp/broker.sock
+//	TBP_BROKER_ADMIN_SOCKET plan d'ADMINISTRATION (revue de sécurité #95,
+//	                        finding A10) : GET /v1/supervision/{stats,epoch,
+//	                        arbitration} — défaut /run/tbp/broker-admin.sock.
+//	                        Socket SÉPARÉ du plan de données, jamais
+//	                        multiplexé dessus.
 //
 // Doctrine §1 : le moindre défaut de configuration est FATAL au démarrage
 // — un broker à moitié configuré émettrait des décisions à moitié
@@ -100,9 +108,14 @@ import (
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
-// defaultBrokerSocket est l'écoute par défaut du déploiement v1 (socket
-// Unix de cellule, 0660 — broker.ListenUnix).
+// defaultBrokerSocket est l'écoute par défaut du plan de DONNÉES
+// (POST /v1/actions) du déploiement v1 (socket Unix de cellule, 0660 —
+// broker.ListenUnix).
 const defaultBrokerSocket = "/run/tbp/broker.sock"
+
+// defaultBrokerAdminSocket est l'écoute par défaut du plan
+// d'ADMINISTRATION (revue de sécurité #95) : GET /v1/supervision/*.
+const defaultBrokerAdminSocket = "/run/tbp/broker-admin.sock"
 
 // readHeaderTimeout borne la lecture des en-têtes (même doctrine que le
 // serveur broker — slowloris).
@@ -139,7 +152,8 @@ type config struct {
 	members              []string
 	operatorKeysFile     string
 	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
-	socketPath           string
+	socketPath           string // plan de données : POST /v1/actions
+	adminSocketPath      string // plan d'administration (revue #95) : GET /v1/supervision/*
 }
 
 // loadConfig lit et valide TOUTE la configuration — la moindre pièce
@@ -223,6 +237,10 @@ func loadConfig(getenv func(string) string) (*config, error) {
 	if socketPath == "" {
 		socketPath = defaultBrokerSocket
 	}
+	adminSocketPath := getenv("TBP_BROKER_ADMIN_SOCKET")
+	if adminSocketPath == "" {
+		adminSocketPath = defaultBrokerAdminSocket
+	}
 	return &config{
 		cellID:               cellID,
 		salt:                 salt,
@@ -240,6 +258,7 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		operatorKeysFile:     operatorKeysFile,
 		envelopeEndpoint:     getenv("TBP_ENVELOPE_ENDPOINT"),
 		socketPath:           socketPath,
+		adminSocketPath:      adminSocketPath,
 	}, nil
 }
 
@@ -427,14 +446,20 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return err
 	}
 
-	// Mux d'assemblage (D109) : la porte d'actions du serveur broker +
+	// Mux du plan de DONNÉES (D109) : uniquement la porte d'actions du
+	// serveur broker — l'agent qui atteint ce socket n'a aucune route de
+	// supervision.
+	dataMux := http.NewServeMux()
+	dataMux.Handle("POST /v1/actions", srv.Handler())
+
+	// Mux du plan d'ADMINISTRATION (revue de sécurité #95, finding A10) :
 	// trois lectures de supervision GET-only qui sérialisent l'état public
 	// des briques — aucune bibliothèque modifiée, aucune route mutante
 	// ajoutée (les patterns de méthode Go 1.22 rendent 405 aux autres
-	// méthodes, même doctrine que la console T34c).
-	mux := http.NewServeMux()
-	mux.Handle("POST /v1/actions", srv.Handler())
-	mux.HandleFunc("GET /v1/supervision/stats", func(w http.ResponseWriter, _ *http.Request) {
+	// méthodes, même doctrine que la console T34c). Socket SÉPARÉ du plan
+	// de données (ci-dessous) — l'accès au socket EST le contrôle d'accès.
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /v1/supervision/stats", func(w http.ResponseWriter, _ *http.Request) {
 		st, err := brk.Stats() // lecture locale — l'erreur est structurellement nil (D110)
 		if err != nil {
 			http.Error(w, `{"error":"source indisponible"}`, http.StatusInternalServerError)
@@ -442,7 +467,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 		writeJSON(w, http.StatusOK, newStatsView(st))
 	})
-	mux.HandleFunc("GET /v1/supervision/epoch", func(w http.ResponseWriter, _ *http.Request) {
+	adminMux.HandleFunc("GET /v1/supervision/epoch", func(w http.ResponseWriter, _ *http.Request) {
 		if tracker == nil {
 			// Mode mono-cellule (issue #97) : honnête sur l'absence de
 			// fencing plutôt que de simuler un epochView avec des champs
@@ -458,7 +483,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 		writeJSON(w, http.StatusOK, newEpochView(st))
 	})
-	mux.HandleFunc("GET /v1/supervision/arbitration", func(w http.ResponseWriter, _ *http.Request) {
+	adminMux.HandleFunc("GET /v1/supervision/arbitration", func(w http.ResponseWriter, _ *http.Request) {
 		view, err := newArbitrationView(contracts)
 		if err != nil {
 			http.Error(w, `{"error":"source indisponible"}`, http.StatusInternalServerError)
@@ -474,7 +499,15 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	httpSrv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout}
+	if err := os.MkdirAll(filepath.Dir(cfg.adminSocketPath), 0o750); err != nil {
+		return fmt.Errorf("admin socket dir: %w", err)
+	}
+	adminLis, err := broker.ListenUnix(cfg.adminSocketPath)
+	if err != nil {
+		return fmt.Errorf("plan d'administration: %w", err)
+	}
+	httpSrv := &http.Server{Handler: dataMux, ReadHeaderTimeout: readHeaderTimeout}
+	adminSrv := &http.Server{Handler: adminMux, ReadHeaderTimeout: readHeaderTimeout}
 	go func() {
 		<-ctx.Done()
 		// Même budget d'arrêt que le serveur broker (30 s) : une requête
@@ -483,6 +516,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
+		_ = adminSrv.Shutdown(shutdownCtx)
 	}()
 	epoch, authority := 0, cfg.cellID
 	if tracker != nil {
@@ -492,9 +526,16 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 		epoch, authority = epochSt.Epoch, epochSt.Authority
 	}
-	log.Printf("brokerd: cellule %s en écoute sur unix://%s (époque %d, autorité %s)",
-		cfg.cellID, cfg.socketPath, epoch, authority)
+	adminErr := make(chan error, 1)
+	go func() {
+		adminErr <- adminSrv.Serve(adminLis)
+	}()
+	log.Printf("brokerd: cellule %s en écoute sur unix://%s (époque %d, autorité %s) ; administration sur unix://%s",
+		cfg.cellID, cfg.socketPath, epoch, authority, cfg.adminSocketPath)
 	if err := httpSrv.Serve(lis); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := <-adminErr; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

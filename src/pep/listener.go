@@ -115,11 +115,26 @@ func (l *Listener) Stats() ListenerStats {
 	}
 }
 
-// Handler monte les routes du listener.
+// Handler monte les routes du PLAN DE DONNÉES (revue de sécurité #95) :
+// celles que l'agent gouverné atteint via la redirection nftables
+// (PEP_PORT). AUCUNE route de gouvernance ici — /v1/mode (bascule de
+// posture) et /healthz (observabilité) sont servies par AdminHandler,
+// sur un canal séparé, jamais accessible depuis le plan de données.
 func (l *Listener) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/evaluate", l.handleEvaluate)
 	mux.HandleFunc("/v1/passport/consume", l.handleConsume)
+	return mux
+}
+
+// AdminHandler monte les routes du PLAN D'ADMINISTRATION (revue de
+// sécurité #95, finding A10) : bascule de posture et observabilité,
+// réservées à l'opérateur/superviseur. Doctrine déjà établie pour la
+// console de supervision (T34c) : l'accès au socket EST le contrôle
+// d'accès — ce handler doit être servi sur un transport DIFFÉRENT de
+// celui du plan de données, jamais multiplexé sur le même port TCP.
+func (l *Listener) AdminHandler() http.Handler {
+	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/mode", l.handleMode)
 	mux.HandleFunc("/healthz", l.handleHealthz)
 	return mux

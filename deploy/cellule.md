@@ -130,7 +130,14 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #   TBP_KEYRING_FILE=/etc/tbp/keyring.json
 #   TBP_POLICY_ID=<sha256 of the bundle, step 4>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
-#   TBP_LISTEN_ADDR=127.0.0.1:8443
+#   TBP_LISTEN_ADDR=127.0.0.1:8443  # DATA plane only (security review #95):
+#                                  # /v1/evaluate, /v1/passport/consume
+#   TBP_ADMIN_SOCKET=/run/tbp/pepd-admin.sock  # ADMIN plane (security
+#                                  # review #95, finding A10): /v1/mode,
+#                                  # /healthz. Default shown here; 0660
+#                                  # permissions, same doctrine as the
+#                                  # broker socket below — NEVER on the
+#                                  # agent's TCP channel
 #   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
 #   TBP_QUORUM_MIN=2               # k distinct Ed25519 signatures (security
 #                                  # review #89 — no longer a name count)
@@ -150,16 +157,18 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # floor 4 × checkpoint interval)
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
-curl -s http://127.0.0.1:8443/healthz
-curl -s http://127.0.0.1:8443/v1/mode
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode
 ```
 
 **Observable success criterion**: `/healthz` answers 200;
 `GET /v1/mode` returns `{"mode":"monitor"}` — pepd ALWAYS starts in
 monitor, the closed switch is governed (step 8 and
-[monitor-to-closed.md](monitor-to-closed.md)); on first startup,
-`cell_log.key` (0600) and `cell_log.vkey` are created in
-`TBP_REGISTRY_DIR` (registry key of THE cell — D97 custody).
+[monitor-to-closed.md](monitor-to-closed.md)); both routes answer ONLY
+on the admin Unix socket (security review #95) — a request to
+`http://127.0.0.1:8443/v1/mode` (the agent's data-plane port) gets 404;
+on first startup, `cell_log.key` (0600) and `cell_log.vkey` are created
+in `TBP_REGISTRY_DIR` (registry key of THE cell — D97 custody).
 
 **On failure: STOP** — a startup without keyring, without policy ID or
 without salt must fail; if it succeeds, the binary is not the one from
@@ -209,20 +218,27 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # mono-cellule mode (#97): no epoch
 #                                      # lease minted, epoch0.json not read
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
-#   TBP_BROKER_SOCKET=/run/tbp/broker.sock
+#   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
+#   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
+#                                      # (security review #95, finding
+#                                      # A10): GET /v1/supervision/*.
+#                                      # Separate socket, never
+#                                      # multiplexed on TBP_BROKER_SOCKET
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now tbp-brokerd
-curl -s --unix-socket /run/tbp/broker.sock http://localhost/v1/supervision/epoch
+curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/epoch
 ```
 
 **Observable success criterion**: the binary builds; launched without
 environment, it exits immediately with `brokerd: TBP_CELL_ID requis`
 (fail-closed at startup — this refusal IS the criterion); the service is
-active; the Unix socket answers in GET only:
+active; the ADMIN Unix socket answers in GET only:
 `/v1/supervision/epoch` returns epoch 0 and the cell's authority,
 `/v1/supervision/arbitration` returns the bundle's `policy_id` (step 4)
 and an arbitration queue, `/v1/supervision/stats` the broker's
-counters; a POST on these views gets 405. On first startup,
+counters; a POST on these views gets 405; the same GET on the DATA
+socket (`/run/tbp/broker.sock`) gets 404 — the two planes are on
+separate sockets (security review #95). On first startup,
 `cell_log.key` (0600) and `cell_log.vkey` are created in
 `TBP_REGISTRY_DIR` — the broker's chain is its own (§7.1).
 

@@ -22,12 +22,13 @@ import (
 // ---------------------------------------------------------------------------
 
 type listenerFixture struct {
-	sink   *stubSink
-	fc     *FailClosed
-	mc     *ModeController
-	ledger *QuotaLedger
-	l      *Listener
-	srv    *httptest.Server
+	sink     *stubSink
+	fc       *FailClosed
+	mc       *ModeController
+	ledger   *QuotaLedger
+	l        *Listener
+	srv      *httptest.Server // plan de données : /v1/evaluate, /v1/passport/consume
+	adminSrv *httptest.Server // plan d'administration (revue #95) : /v1/mode, /healthz
 }
 
 func newListenerFixture(t *testing.T, withLedger bool) *listenerFixture {
@@ -83,7 +84,9 @@ func newListenerFixture(t *testing.T, withLedger bool) *listenerFixture {
 	}
 	srv := httptest.NewServer(l.Handler())
 	t.Cleanup(srv.Close)
-	return &listenerFixture{sink: sink, fc: fc, mc: mc, ledger: ledger, l: l, srv: srv}
+	adminSrv := httptest.NewServer(l.AdminHandler())
+	t.Cleanup(adminSrv.Close)
+	return &listenerFixture{sink: sink, fc: fc, mc: mc, ledger: ledger, l: l, srv: srv, adminSrv: adminSrv}
 }
 
 func evalBody(t *testing.T, tok []byte) []byte {
@@ -189,7 +192,7 @@ func TestListenerClosedAppliesVerdict(t *testing.T) {
 
 	// Bascule gouvernée monitor → closed via l'endpoint HTTP.
 	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed"})
-	status, data := postJSON(t, f.srv.URL+"/v1/mode", body)
+	status, data := postJSON(t, f.adminSrv.URL+"/v1/mode", body)
 	if status != http.StatusOK {
 		t.Fatalf("bascule closed: status=%d body=%s", status, data)
 	}
@@ -472,7 +475,7 @@ func TestListenerBadRequests(t *testing.T) {
 func TestListenerModeEndpoint(t *testing.T) {
 	f := newListenerFixture(t, false)
 
-	resp, err := http.Get(f.srv.URL + "/v1/mode")
+	resp, err := http.Get(f.adminSrv.URL + "/v1/mode")
 	if err != nil {
 		t.Fatalf("GET mode: %v", err)
 	}
@@ -488,7 +491,7 @@ func TestListenerModeEndpoint(t *testing.T) {
 	// POST avec preuve rejetée par le vérifieur ⇒ 403, toujours monitor.
 	f.mc.SetQuorumVerifier(rejectQuorum)
 	body, _ := json.Marshal(ModeChangeRequest{Mode: "closed"})
-	status, _ := postJSON(t, f.srv.URL+"/v1/mode", body)
+	status, _ := postJSON(t, f.adminSrv.URL+"/v1/mode", body)
 	if status != http.StatusForbidden {
 		t.Fatalf("bascule sans quorum: status=%d, veut 403", status)
 	}
@@ -498,7 +501,7 @@ func TestListenerModeEndpoint(t *testing.T) {
 
 	// POST mode inconnu ⇒ 400.
 	body, _ = json.Marshal(ModeChangeRequest{Mode: "ouvert"})
-	if status, _ := postJSON(t, f.srv.URL+"/v1/mode", body); status != http.StatusBadRequest {
+	if status, _ := postJSON(t, f.adminSrv.URL+"/v1/mode", body); status != http.StatusBadRequest {
 		t.Fatalf("mode inconnu: status=%d, veut 400", status)
 	}
 }
@@ -517,7 +520,7 @@ func TestListenerHealthzAndLatencyStats(t *testing.T) {
 		evaluate(t, f, mintToken(t, claims))
 	}
 
-	resp, err := http.Get(f.srv.URL + "/healthz")
+	resp, err := http.Get(f.adminSrv.URL + "/healthz")
 	if err != nil {
 		t.Fatalf("GET healthz: %v", err)
 	}
@@ -538,6 +541,45 @@ func TestListenerHealthzAndLatencyStats(t *testing.T) {
 	}
 	if hz.Stats.MaxElapsedUs < 0 || hz.Stats.TotalElapsedUs < hz.Stats.MaxElapsedUs {
 		t.Fatalf("latence: %+v (§9.1 : mesurée dès le prototype)", hz.Stats)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Séparation plan de données / plan d'administration (revue de sécurité
+// #95, finding A10) : preuve POSITIVE de la scission — pas seulement que
+// les bons appels fonctionnent, mais que les MAUVAIS échouent.
+// ---------------------------------------------------------------------------
+
+func TestListenerPlaneSeparation(t *testing.T) {
+	f := newListenerFixture(t, false)
+
+	// /v1/mode et /healthz sont ABSENTES du plan de données.
+	resp, err := http.Get(f.srv.URL + "/v1/mode")
+	if err != nil {
+		t.Fatalf("GET mode sur plan de données: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /v1/mode sur le plan de DONNÉES: statut %d, attendu 404", resp.StatusCode)
+	}
+	resp, err = http.Get(f.srv.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET healthz sur plan de données: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /healthz sur le plan de DONNÉES: statut %d, attendu 404", resp.StatusCode)
+	}
+
+	// /v1/evaluate et /v1/passport/consume sont ABSENTES du plan
+	// d'administration.
+	status, _ := postJSON(t, f.adminSrv.URL+"/v1/evaluate", evalBody(t, mintToken(t, nominalClaims())))
+	if status != http.StatusNotFound {
+		t.Fatalf("POST /v1/evaluate sur le plan d'ADMINISTRATION: statut %d, attendu 404", status)
+	}
+	status, _ = postJSON(t, f.adminSrv.URL+"/v1/passport/consume", []byte(`{}`))
+	if status != http.StatusNotFound {
+		t.Fatalf("POST /v1/passport/consume sur le plan d'ADMINISTRATION: statut %d, attendu 404", status)
 	}
 }
 

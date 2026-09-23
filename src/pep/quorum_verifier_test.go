@@ -209,7 +209,7 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewListener: %v", err)
 	}
-	srv := httptest.NewServer(l.Handler())
+	srv := httptest.NewServer(l.AdminHandler())
 	defer srv.Close()
 
 	post := func(body []byte) (int, []byte) {
