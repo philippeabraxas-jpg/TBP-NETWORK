@@ -58,9 +58,15 @@
 //	TBP_PROXY_BACKEND  requis avec TBP_PROXY_ADDR — URL http(s) absolue du
 //	                   service RÉEL en amont.
 //
-// Doctrine §5.3 : le démon démarre TOUJOURS en mode monitor — jamais
-// closed au premier déploiement, ni au redémarrage. La bascule closed
-// passe par POST /v1/mode, gouvernée par quorum et tracée au registre.
+// Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
+// (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
+// tout REDÉMARRAGE (clé de registre déjà présente), le démon démarre en
+// posture REFUSÉE — refus total de tout trafic, même un allow — jusqu'à
+// ce qu'un quorum reconfirme EXPLICITEMENT une posture (monitor ou
+// closed) via POST /v1/mode. Un process qui revient de crash ne "se
+// réveille" donc plus jamais dans la posture qu'il avait avant, ni en
+// monitor par défaut silencieux : la reconfirmation est elle-même un
+// acte gouverné, tracé au registre comme toute bascule.
 package main
 
 import (
@@ -141,8 +147,21 @@ func run() error {
 
 	// Registre de la cellule (T7) : checkpoints signés Ed25519 ; la clé
 	// note est créée au premier démarrage puis rechargée (§12).
+	//
+	// isRestart (revue de sécurité #93) DOIT être établi AVANT
+	// loadOrGenerateCellKey, qui CRÉE le fichier au premier démarrage —
+	// sa présence à cet instant précis distingue le premier déploiement
+	// (absent) d'un redémarrage (déjà présent), le signal que
+	// ModeController.StartRefused exige pour refuser tout trafic tant
+	// qu'un quorum n'a pas reconfirmé explicitement une posture.
 	if err := os.MkdirAll(regDir, 0o700); err != nil {
 		return fmt.Errorf("registry dir: %w", err)
+	}
+	isRestart := false
+	if _, statErr := os.Stat(filepath.Join(regDir, "cell_log.key")); statErr == nil {
+		isRestart = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("pepd: détection redémarrage (§93): %w", statErr)
 	}
 	signer, vkey, err := loadOrGenerateCellKey(regDir, cellID)
 	if err != nil {
@@ -338,9 +357,13 @@ func run() error {
 		Leaves:       cellLog,
 		OnAlarm:      func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
 		VerifyQuorum: quorum,
+		StartRefused: isRestart, // revue de sécurité #93 : jamais au premier déploiement
 	})
 	if err != nil {
 		return err
+	}
+	if isRestart {
+		log.Printf("pepd: redémarrage détecté — posture REFUSÉE (§93) jusqu'à reconfirmation explicite par quorum via POST /v1/mode")
 	}
 	failClosed.SetQuorumVerifier(quorum)
 
