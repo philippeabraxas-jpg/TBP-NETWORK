@@ -18,7 +18,33 @@
 //	TBP_REGISTRY_DIR   répertoire du CellLog (la clé note y est créée au
 //	                   premier démarrage, rechargée ensuite)
 //	TBP_LISTEN_ADDR    défaut ":8443" (le PEP_PORT de la règle nftables)
-//	TBP_OPA_ENDPOINT   optionnel — sidecar OPA (T11) consulté après validation
+//	TBP_OPA_ENDPOINT   sidecar OPA (T11) consulté après validation — REQUIS
+//	                   (revue de sécurité #92, A2 : l'arbitrage OPA est
+//	                   obligatoire) sauf TBP_OPA_DISABLED_DEV_UNSAFE=1
+//	                   déclaré EXPLICITEMENT (dev/lab uniquement, jamais
+//	                   en production)
+//	TBP_OPA_SOCKET     chemin du socket Unix d'OPA — REQUIS avec
+//	                   TBP_OPA_EXPECTED_UID (§92.A3 : transport authentifié
+//	                   par SO_PEERCRED, un OPA en TCP non authentifié est
+//	                   indétectable d'un imposteur) sauf
+//	                   TBP_OPA_INSECURE_TCP_DEV=1 déclaré EXPLICITEMENT
+//	TBP_OPA_EXPECTED_UID  UID attendu du processus OPA, requis avec
+//	                   TBP_OPA_SOCKET — vérifié à CHAQUE connexion par le
+//	                   noyau (SO_PEERCRED), jamais déclaré par le pair
+//	TBP_OPA_INSECURE_TCP_DEV  exempte EXPLICITEMENT du transport Unix
+//	                   authentifié (§92.A3) — dev/lab uniquement, jamais
+//	                   en production : un imposteur sur le port TCP d'OPA
+//	                   devient indétectable
+//	TBP_OPA_REVISION_CHECK_INTERVAL_MS  optionnel — période de vérification
+//	                   périodique que la révision RÉELLEMENT servie par
+//	                   OPA correspond à TBP_POLICY_ID épinglé (§92.A5,
+//	                   spec §10.3). Défaut 10000 (10 s) ; vérifiée aussi
+//	                   UNE FOIS, de façon SYNCHRONE, avant que la cellule
+//	                   ne serve — un écart y refuse le démarrage
+//	TBP_OPA_DISABLED_DEV_UNSAFE  désactive OPA EXPLICITEMENT (§92.A2) —
+//	                   dev/lab uniquement, jamais en production : aucun
+//	                   arbitrage de règles, mutuellement exclusif avec
+//	                   TBP_OPA_ENDPOINT
 //	TBP_QUORUM_MIN     signatures Ed25519 DISTINCTES exigées pour les actes
 //	                   gouvernés (bascule de posture, levée classe W) —
 //	                   défaut 2. Vérifié cryptographiquement contre
@@ -295,18 +321,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var opaClient *pep.OPAClient
-	if endpoint := os.Getenv("TBP_OPA_ENDPOINT"); endpoint != "" {
-		opaClient, err = pep.NewOPAClient(pep.OPAOptions{
-			Endpoint: endpoint,
-			CellID:   cellID,
-			Salt:     salt,
-			Leaves:   cellLog,
-			OnTrip:   failClosed.OnTrip(),
-		})
-		if err != nil {
-			return err
-		}
+	// Arbitrage OPA (T11) durci — revue de sécurité #92 : obligatoire
+	// (A2), transport authentifié par SO_PEERCRED (A3), révision vérifiée
+	// au démarrage puis périodiquement (A5). Voir opa_setup.go.
+	opa, err := setupOPA(ctx, cellID, salt, policy, cellLog, failClosed.OnTrip(), os.Getenv)
+	if err != nil {
+		return err
+	}
+	opaClient := opa.client
+	if opa.watcher != nil {
+		go opa.watcher.Run(ctx)
 	}
 
 	// Posture (§5.3) : TOUJOURS monitor au démarrage ; bascules gouvernées
