@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +87,113 @@ func TestDurabilityFromEnvErrorMentionsVariable(t *testing.T) {
 	_, _, err := durabilityFromEnv(envOf(map[string]string{"TBP_DURABILITY": "nope"}))
 	if err == nil || !strings.Contains(err.Error(), "TBP_DURABILITY") {
 		t.Fatalf("erreur doit nommer la variable: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// detectRestart (revue #93 + revue #111) : cell_log.key ET le manifeste
+// measured boot sont deux témoins INDÉPENDANTS de redémarrage — un seul
+// suffit ; celui measured boot doit vivre HORS de regDir.
+// ---------------------------------------------------------------------------
+
+func TestDetectRestartFreshDeploymentNoMeasuredBoot(t *testing.T) {
+	regDir := t.TempDir()
+	isRestart, err := detectRestart(regDir, "")
+	if err != nil {
+		t.Fatalf("erreur inattendue: %v", err)
+	}
+	if isRestart {
+		t.Fatal("isRestart=true, veut false (ni cell_log.key ni measured boot configuré)")
+	}
+}
+
+func TestDetectRestartCellLogKeyPresent(t *testing.T) {
+	regDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(regDir, "cell_log.key"), []byte("k"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	isRestart, err := detectRestart(regDir, "")
+	if err != nil {
+		t.Fatalf("erreur inattendue: %v", err)
+	}
+	if !isRestart {
+		t.Fatal("isRestart=false, veut true (cell_log.key présent)")
+	}
+}
+
+// TestDetectRestartMeasuredBootWitnessSurvivesRegistryWipe : le scénario
+// central de #111 — cell_log.key a disparu (registre effacé/déplacé) mais
+// le manifeste measured boot, à un chemin INDÉPENDANT, existe toujours :
+// il doit à lui seul établir isRestart=true.
+func TestDetectRestartMeasuredBootWitnessSurvivesRegistryWipe(t *testing.T) {
+	regDir := t.TempDir()
+	mbDir := t.TempDir()
+	mbPath := filepath.Join(mbDir, "manifest.json")
+	if err := os.WriteFile(mbPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// regDir est VIDE (pas de cell_log.key) — simule un registre effacé.
+	isRestart, err := detectRestart(regDir, mbPath)
+	if err != nil {
+		t.Fatalf("erreur inattendue: %v", err)
+	}
+	if !isRestart {
+		t.Fatal("isRestart=false, veut true (témoin measured boot indépendant présent malgré registre vidé — §111)")
+	}
+}
+
+func TestDetectRestartMeasuredBootAbsentNoWitness(t *testing.T) {
+	regDir := t.TempDir()
+	mbDir := t.TempDir()
+	mbPath := filepath.Join(mbDir, "manifest.json") // n'existe pas
+	isRestart, err := detectRestart(regDir, mbPath)
+	if err != nil {
+		t.Fatalf("erreur inattendue: %v", err)
+	}
+	if isRestart {
+		t.Fatal("isRestart=true, veut false (ni cell_log.key ni manifeste measured boot n'existent)")
+	}
+}
+
+// TestDetectRestartRefusesMeasuredBootManifestUnderRegDir : un manifeste
+// measured boot configuré SOUS regDir serait effacé par le même
+// effacement du registre qu'il est censé détecter — §111 exige un refus
+// au démarrage plutôt qu'une protection silencieusement annulée.
+func TestDetectRestartRefusesMeasuredBootManifestUnderRegDir(t *testing.T) {
+	regDir := t.TempDir()
+	mbPath := filepath.Join(regDir, "sub", "manifest.json")
+	_, err := detectRestart(regDir, mbPath)
+	if err == nil {
+		t.Fatal("erreur attendue (manifeste measured boot sous regDir), obtenu nil")
+	}
+	if !strings.Contains(err.Error(), "SOUS TBP_REGISTRY_DIR") {
+		t.Fatalf("erreur doit signaler l'imbrication sous regDir: %v", err)
+	}
+}
+
+func TestDetectRestartRefusesMeasuredBootManifestEqualToRegDir(t *testing.T) {
+	regDir := t.TempDir()
+	_, err := detectRestart(regDir, regDir)
+	if err == nil {
+		t.Fatal("erreur attendue (manifeste measured boot == regDir), obtenu nil")
+	}
+}
+
+func TestDetectRestartBothWitnessesPresent(t *testing.T) {
+	regDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(regDir, "cell_log.key"), []byte("k"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	mbDir := t.TempDir()
+	mbPath := filepath.Join(mbDir, "manifest.json")
+	if err := os.WriteFile(mbPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	isRestart, err := detectRestart(regDir, mbPath)
+	if err != nil {
+		t.Fatalf("erreur inattendue: %v", err)
+	}
+	if !isRestart {
+		t.Fatal("isRestart=false, veut true (les deux témoins présents)")
 	}
 }
