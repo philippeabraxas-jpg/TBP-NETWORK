@@ -919,6 +919,22 @@ func loadDevSigner(seedFile string) (*broker.DevSigner, error) {
 // loadPKCS11Signer charge le PIN (fichier 0600, même exigence de custody
 // que la seed de dev) et ouvre le signataire HSM (revue de sécurité #90,
 // point 5) : la clé privée d'émission ne quitte jamais le module.
+//
+// Durcissement du PIN (revue de sécurité #114) : le fichier 0600 protège
+// contre une lecture par un autre utilisateur du système, mais reste un
+// SECRET EN CLAIR sur disque — ni scellé, ni dérivé, ni lu depuis un canal
+// plus restreint que le reste de la configuration. Honnêteté d'intégration
+// (même doctrine que le commentaire d'en-tête de proxy.go) : effacer le
+// tampon `data` ci-dessous après usage réduit la durée de vie de la copie
+// BRUTE lue du fichier, mais ne protège PAS la chaîne Go `pin` elle-même
+// (les chaînes Go sont immuables — impossible de l'effacer une fois créée
+// sans `unsafe`, que ce fichier n'utilise pas). Une déploiement réel
+// devrait préférer, quand le HSM/l'environnement le permet : un chemin
+// d'authentification protégé PKCS#11 (pavé PIN physique, CKF_PROTECTED_
+// AUTHENTICATION_PATH, aucun secret ne transite par ce process), ou à
+// défaut un identifiant de créance géré par le superviseur de service
+// (p. ex. `LoadCredential=` systemd, un tmpfs dédié effacé à l'arrêt)
+// plutôt qu'un fichier persistant sur disque comme ici.
 func loadPKCS11Signer(cfg *config) (*broker.PKCS11Signer, error) {
 	st, err := os.Stat(cfg.issuerPKCS11PINFile)
 	if err != nil {
@@ -932,6 +948,9 @@ func loadPKCS11Signer(cfg *config) (*broker.PKCS11Signer, error) {
 		return nil, fmt.Errorf("PIN PKCS#11: %w", err)
 	}
 	pin := strings.TrimSpace(string(data))
+	for i := range data {
+		data[i] = 0
+	}
 	if pin == "" {
 		return nil, errors.New("PIN PKCS#11: fichier vide")
 	}

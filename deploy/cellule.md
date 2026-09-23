@@ -352,8 +352,24 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   # --- OR custody HSM (production, §12) ---
 #   # TBP_ISSUER_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
 #   # TBP_ISSUER_PKCS11_TOKEN_LABEL=cell-a
-#   # TBP_ISSUER_PKCS11_KEY_LABEL=issuer-key-1
-#   # TBP_ISSUER_PKCS11_PIN_FILE=/etc/tbp/issuer.pin
+#   # TBP_ISSUER_PKCS11_KEY_LABEL=issuer-key-1  # security review #114:
+#   #                                    # the key MUST be provisioned
+#   #                                    # CKA_SENSITIVE=true AND
+#   #                                    # CKA_EXTRACTABLE=false — brokerd
+#   #                                    # now verifies both at load and
+#   #                                    # refuses to start otherwise
+#   # TBP_ISSUER_PKCS11_PIN_FILE=/etc/tbp/issuer.pin  # 0600, same custody
+#   #                                    # bar as TBP_ISSUER_SEED_FILE —
+#   #                                    # security review #114: this is
+#   #                                    # still a plaintext secret ON DISK,
+#   #                                    # not sealed or channel-restricted;
+#   #                                    # prefer a PKCS#11 protected
+#   #                                    # authentication path (physical PIN
+#   #                                    # pad) when the HSM supports one, or
+#   #                                    # a service-managed credential
+#   #                                    # (systemd LoadCredential=, a
+#   #                                    # dedicated tmpfs cleared on stop)
+#   #                                    # over a persistent file like this
 #   TBP_GENESIS_DIR=<GENESIS_HOME>
 #   TBP_QUORUM_MIN=2
 #   TBP_CLUSTER_MEMBERS=cell-a,cell-b  # ONE cell here (e.g. "cell-a") ⇒
