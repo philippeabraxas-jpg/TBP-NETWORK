@@ -47,6 +47,15 @@ package pep
 //     TOUJOURS cet en-tête avant de transmettre — jamais vu du backend,
 //     et Authorization reste entièrement disponible pour le backend.
 //
+// Revue de sécurité post-#86 (issue #110) : un passeport de quota (T12)
+// ouvert par evaluate() ne rencontrait JAMAIS son compteur sur ce chemin
+// — seul un appel VOLONTAIRE du terminator à POST /v1/passport/consume
+// le décrémentait, et ce proxy n'en émettait aucun. ServeHTTP consomme
+// désormais lui-même un quantum PAR REQUÊTE TRANSMISE, avant de
+// transmettre — le proxy EST l'instrument pour tout ce qu'il relaie,
+// jamais un simple aiguillage qui ouvre un compteur sans jamais le
+// toucher.
+//
 // Honnêteté d'intégration (même doctrine que le commentaire de
 // listener.go) : defaultDeriveRequest est une HEURISTIQUE GÉNÉRIQUE
 // (méthode HTTP → classe d'action, chemin+query → ressource, hash du
@@ -212,6 +221,24 @@ func (p *BlockingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !out.Forwarded {
 		http.Error(w, fmt.Sprintf("refusé par la politique (%s)", out.Decision.Reason), http.StatusForbidden)
 		return
+	}
+	// #110 : un passeport ouvert n'a d'instrument que si QUELQU'UN le
+	// décrémente — jusqu'ici, seul un appel VOLONTAIRE du terminator à
+	// POST /v1/passport/consume le faisait. Ce proxy TRANSMET lui-même le
+	// trafic réel : il EST l'instrument pour tout ce qu'il transmet, donc
+	// il consomme lui-même, avant de transmettre — jamais après coup, où
+	// un dépassement ne pourrait plus rien empêcher. Un quantum par
+	// requête transmise (défaut générique substituable — voir l'en-tête
+	// de fichier : un vecteur qui représente un VOLUME d'octets, pas un
+	// nombre de requêtes, appelle une mesure dédiée, hors de portée d'un
+	// proxy générique qui ne connaît pas la sémantique du backend).
+	if out.PassportOpened {
+		if counter, ok := p.listener.ledger.Counter(out.Decision.JTI); ok {
+			if err := counter.Consume(1); err != nil {
+				http.Error(w, fmt.Sprintf("quota dépassé (%s)", consumeErrReason(err)), http.StatusForbidden)
+				return
+			}
+		}
 	}
 	p.rp.ServeHTTP(w, r)
 }
