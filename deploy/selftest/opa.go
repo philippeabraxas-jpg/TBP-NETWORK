@@ -10,7 +10,11 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -145,17 +149,63 @@ func prepareCapabilities(s *suite, phase string, cfg config, opaDir string) (str
 	return strippedPath, true
 }
 
+// generateSigningKeypair produit une paire RSA 2048 en PEM (PKCS1 privée,
+// PKIX publique — le format que `opa build --signing-key`/`opa run
+// --verification-key` acceptent, vérifié contre le binaire opa réel) dans
+// opaDir. Revue de sécurité #106 : la révision épinglée (#92, A5) est une
+// étiquette auto-déclarée au build — quiconque peut écrire le fichier
+// bundle peut y mettre la bonne valeur. Seule une signature vérifiée par
+// OPA lui-même AVANT de servir prouve que le contenu n'a pas été altéré
+// après la signature. La clé PRIVÉE ne quitte jamais la machine qui
+// construit les bundles (même frontière de custody que les clés de
+// contrôleurs §12) — ici, le selftest EST cette machine ; en déploiement
+// réel, voir deploy/cellule.md étape 4.
+func generateSigningKeypair(s *suite, phase string, opaDir string) (privPath, pubPath string, ok bool) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		s.fail(phase, "génération de la paire de signature de bundle (§106)", err)
+		return "", "", false
+	}
+	privPath = filepath.Join(opaDir, "policy-signing.key")
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
+		s.fail(phase, "écriture de la clé privée de signature", err)
+		return "", "", false
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		s.fail(phase, "encodage de la clé publique de vérification", err)
+		return "", "", false
+	}
+	pubPath = filepath.Join(opaDir, "policy-verify.pub")
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	if err := os.WriteFile(pubPath, pubPEM, 0o644); err != nil {
+		s.fail(phase, "écriture de la clé publique de vérification", err)
+		return "", "", false
+	}
+	s.add(phase, "paire de signature de bundle générée (RSA 2048, §106)", true, pubPath)
+	return privPath, pubPath, true
+}
+
 // buildBundle compile le bundle de règles AVEC les capabilities restreintes
 // (OPA ≥ 1.0 : la restriction se fige à la compilation du bundle — voir
-// deploy/cellule.md étape 4) ET avec la révision épinglée (revue de
-// sécurité #92, finding A5 : la révision RÉELLEMENT servie par OPA doit
-// pouvoir être comparée à TBP_POLICY_ID — jamais un bundle non versionné).
-func buildBundle(s *suite, phase string, cfg config, capsPath, regoPath, bundlePath, revision string) bool {
-	if _, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build", "--capabilities", capsPath, "--revision", revision, regoPath, "-o", bundlePath); err != nil {
-		s.fail(phase, "opa build du bundle (capabilities restreintes)", fmt.Errorf("%v — %s", err, errB))
+// deploy/cellule.md étape 4), la révision épinglée (revue de sécurité #92,
+// finding A5) ET une signature (revue de sécurité #106, finding : la
+// révision seule est une étiquette auto-déclarée, pas une preuve). -b
+// (mode bundle) est REQUIS pour que --signing-key prenne effet — vérifié
+// contre le binaire opa réel : opa build refuse silencieusement de signer
+// sans lui, même avec un chemin de répertoire positionnel par ailleurs
+// valide.
+func buildBundle(s *suite, phase string, cfg config, capsPath, regoPath, bundlePath, revision, signingKeyPath string) bool {
+	regoDir := filepath.Dir(regoPath)
+	if _, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build",
+		"--capabilities", capsPath, "--revision", revision,
+		"--signing-key", signingKeyPath, "--signing-alg", "RS256",
+		"-b", regoDir, "-o", bundlePath); err != nil {
+		s.fail(phase, "opa build du bundle (capabilities restreintes, signé §106)", fmt.Errorf("%v — %s", err, errB))
 		return false
 	}
-	s.add(phase, "opa build du bundle avec capabilities restreintes", true, bundlePath)
+	s.add(phase, "opa build du bundle avec capabilities restreintes et signature", true, bundlePath)
 	return true
 }
 
@@ -166,14 +216,20 @@ type opaServer struct {
 	addr string
 }
 
-// startOPA lance OPA en serveur sur le bundle compilé et sonde /health.
-func startOPA(s *suite, phase string, cfg config, addr, bundlePath, logPath string) (*opaServer, bool) {
+// startOPA lance OPA en serveur sur le bundle compilé, signature VÉRIFIÉE
+// (revue de sécurité #106), et sonde /health. --bundle (pas un chemin
+// positionnel nu) est REQUIS pour que la vérification de signature
+// s'active — vérifié contre le binaire opa réel : un chemin positionnel
+// ignore silencieusement --verification-key, ce qui rendrait la
+// signature de buildBundle purement cosmétique.
+func startOPA(s *suite, phase string, cfg config, addr, bundlePath, verificationKeyPath, logPath string) (*opaServer, bool) {
 	opaLog, err := os.Create(logPath)
 	if err != nil {
 		s.fail(phase, "opa run", err)
 		return nil, false
 	}
-	opaCmd := exec.Command(cfg.opaBin, "run", "--server", "--addr", addr, bundlePath)
+	opaCmd := exec.Command(cfg.opaBin, "run", "--server", "--addr", addr,
+		"--bundle", bundlePath, "--verification-key", verificationKeyPath, "--verification-key-id", "default")
 	opaCmd.Stdout, opaCmd.Stderr = opaLog, opaLog
 	if err := opaCmd.Start(); err != nil {
 		_ = opaLog.Close()
@@ -183,11 +239,63 @@ func startOPA(s *suite, phase string, cfg config, addr, bundlePath, logPath stri
 	srv := &opaServer{cmd: opaCmd, logF: opaLog, addr: addr}
 	if err := waitHTTP200("http://"+addr+"/health", 15*time.Second); err != nil {
 		srv.stop()
-		s.fail(phase, "opa run (sonde /health)", err)
+		s.fail(phase, "opa run (sonde /health, signature vérifiée)", err)
 		return nil, false
 	}
-	s.add(phase, "opa run avec capabilities restreintes", true, "http://"+addr)
+	s.add(phase, "opa run avec capabilities restreintes et signature vérifiée (§106)", true, "http://"+addr)
 	return srv, true
+}
+
+// verifyForgedBundleRefused est le témoin NON-VACUE direct de #106 :
+// un bundle produit SANS la clé privée pinglée (même capabilities, même
+// révision — tout ce qu'un attaquant qui n'a qu'un accès en écriture au
+// fichier bundle peut reproduire) doit être refusé par un OPA qui vérifie
+// contre la clé publique de la cellule — jamais juste « une autre erreur
+// », précisément l'absence de démarrage (le port ne s'ouvre jamais).
+// Avant #106, ce même scénario passait : seule la révision (auto-déclarée)
+// était comparée.
+func verifyForgedBundleRefused(s *suite, phase string, cfg config, capsPath, regoPath, revision, realVerificationKeyPath, opaDir string) bool {
+	forgedDir := filepath.Join(opaDir, "forged")
+	if err := os.MkdirAll(forgedDir, 0o700); err != nil {
+		s.fail(phase, "témoin bundle forgé (§106): préparation du répertoire", err)
+		return false
+	}
+	forgedPriv, _, ok := generateSigningKeypair(s, phase, forgedDir)
+	if !ok {
+		return false
+	}
+	forgedBundle := filepath.Join(forgedDir, "bundle.tar.gz")
+	if !buildBundle(s, phase, cfg, capsPath, regoPath, forgedBundle, revision, forgedPriv) {
+		return false
+	}
+	addr := "127.0.0.1:18199"
+	opaLog, err := os.Create(filepath.Join(forgedDir, "opa.log"))
+	if err != nil {
+		s.fail(phase, "témoin bundle forgé (§106): journal", err)
+		return false
+	}
+	defer opaLog.Close()
+	opaCmd := exec.Command(cfg.opaBin, "run", "--server", "--addr", addr,
+		"--bundle", forgedBundle, "--verification-key", realVerificationKeyPath, "--verification-key-id", "default")
+	opaCmd.Stdout, opaCmd.Stderr = opaLog, opaLog
+	if err := opaCmd.Start(); err != nil {
+		s.fail(phase, "témoin bundle forgé (§106): lancement", err)
+		return false
+	}
+	srv := &opaServer{cmd: opaCmd, logF: opaLog, addr: addr}
+	defer srv.stop()
+	// Même capabilities, même révision, MAIS signé par une clé différente
+	// de celle pinglée sur la cellule — la sonde /health ne doit JAMAIS
+	// répondre 200 : le port ne s'ouvre pas du tout (échec de vérification
+	// au chargement, avant même que le serveur HTTP démarre).
+	probeErr := waitHTTP200("http://"+addr+"/health", 3*time.Second)
+	if probeErr == nil {
+		s.fail(phase, "témoin bundle forgé (§106): OPA a servi un bundle signé par une AUTRE clé",
+			fmt.Errorf("/health a répondu 200 — la vérification de signature ne vérifie rien"))
+		return false
+	}
+	s.add(phase, "témoin §106: bundle forgé (autre clé, même révision) refusé par OPA — jamais servi", true, probeErr.Error())
+	return true
 }
 
 // stop tue le serveur OPA et ferme son journal.

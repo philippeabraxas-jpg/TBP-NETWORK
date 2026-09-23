@@ -37,6 +37,15 @@ opa run --server bundle.tar.gz
 `policies/gen_capabilities.sh` and executed for real by the deployment
 selftest, `deploy/selftest/`.)
 
+**Bundle signing (security review #106)**: the snippet above is
+illustrative only — a bundle's `--revision` is a self-declared label,
+never a proof that the content wasn't altered after it was built.
+Production builds MUST also sign the bundle (`opa build --signing-key
+…`) and OPA MUST verify it at load (`opa run --bundle … --verification-key
+…`, NOT a bare positional bundle path — verification only activates in
+`--bundle` mode). See `deploy/cellule.md` step 4/5 for the full command
+and key-custody doctrine.
+
 **OPA circuit-breaker (mentioned §0/§12)**: this is not a native OPA
 mechanism — nothing built into the Rego engine cuts off an evaluation at
 5 ms. It's a property to implement on the caller side (the PEP/broker,
