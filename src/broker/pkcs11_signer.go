@@ -113,6 +113,20 @@ func NewPKCS11Signer(opts PKCS11SignerOptions) (*PKCS11Signer, error) {
 		_ = session.Close()
 		return nil, fmt.Errorf("broker: clé privée %q introuvable dans le jeton %q: %w", opts.KeyLabel, opts.TokenLabel, err)
 	}
+	// Revue de sécurité #114 : rien ne vérifiait jusqu'ici que la clé
+	// résolue est effectivement NON EXTRACTIBLE côté jeton — une clé
+	// logicielle exportable, provisionnée sans les bons attributs,
+	// pouvait passer pour une custody HSM sans que rien ne le détecte.
+	// CKA_SENSITIVE=true (la VALEUR de la clé n'est jamais lisible en
+	// clair) ET CKA_EXTRACTABLE=false (la clé ne peut pas non plus être
+	// enveloppée/exportée par CKM_*_WRAP) sont les deux attributs
+	// PKCS#11 qui, ensemble, garantissent que la clé privée ne quitte
+	// jamais le module — refus fail-closed sinon, avant toute signature.
+	if err := requireNonExtractableKey(privObj, opts.KeyLabel); err != nil {
+		_ = session.Close()
+		return nil, err
+	}
+
 	priv := p11.PrivateKey(privObj)
 	pubObj, err := session.FindObject([]*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
@@ -134,6 +148,47 @@ func NewPKCS11Signer(opts PKCS11SignerOptions) (*PKCS11Signer, error) {
 	}
 
 	return &PKCS11Signer{session: session, priv: priv, pub: pub}, nil
+}
+
+// requireNonExtractableKey refuse fail-closed toute clé qui n'est pas à
+// la fois CKA_SENSITIVE=true et CKA_EXTRACTABLE=false (revue de sécurité
+// #114) : sans ces deux attributs, rien ne distingue une clé HSM réelle
+// d'une clé logicielle exportable présentée comme si elle en venait une.
+// Vérifié EMPIRIQUEMENT contre SoftHSM2 dans ce dépôt
+// (pkcs11_signer_test.go) : les deux attributs sont lisibles sur l'objet
+// clé privée sans connaître leur valeur au préalable — lire
+// CKA_SENSITIVE/CKA_EXTRACTABLE n'exige PAS que la clé soit elle-même
+// extractible, ce sont des méta-attributs de l'objet, pas la valeur de
+// la clé.
+func requireNonExtractableKey(privObj p11.Object, keyLabel string) error {
+	sensitive, err := boolAttribute(privObj, pkcs11.CKA_SENSITIVE)
+	if err != nil {
+		return fmt.Errorf("broker: CKA_SENSITIVE illisible pour la clé %q (revue #114): %w", keyLabel, err)
+	}
+	if !sensitive {
+		return fmt.Errorf("broker: clé privée %q n'est PAS marquée CKA_SENSITIVE (revue #114) — sa valeur pourrait être lue directement du jeton ; ce n'est pas une custody HSM valide, refus fail-closed (§12)", keyLabel)
+	}
+	extractable, err := boolAttribute(privObj, pkcs11.CKA_EXTRACTABLE)
+	if err != nil {
+		return fmt.Errorf("broker: CKA_EXTRACTABLE illisible pour la clé %q (revue #114): %w", keyLabel, err)
+	}
+	if extractable {
+		return fmt.Errorf("broker: clé privée %q est EXTRACTIBLE (CKA_EXTRACTABLE=true, revue #114) — une clé exportable présentée comme custody HSM est refusée, fail-closed (§12)", keyLabel)
+	}
+	return nil
+}
+
+// boolAttribute décode un attribut PKCS#11 CK_BBOOL (un octet, 0x00 =
+// faux, non nul = vrai — CK_TRUE/CK_FALSE, spec §2.1.1).
+func boolAttribute(obj p11.Object, attr uint) (bool, error) {
+	raw, err := obj.Attribute(attr)
+	if err != nil {
+		return false, err
+	}
+	if len(raw) != 1 {
+		return false, fmt.Errorf("valeur CK_BBOOL de %d octet(s), veut 1", len(raw))
+	}
+	return raw[0] != 0x00, nil
 }
 
 // decodeEdwardsPoint décode CKA_EC_POINT — une OCTET STRING ASN.1

@@ -19,6 +19,7 @@ import (
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/miekg/pkcs11"
@@ -31,6 +32,14 @@ const softHSM2ModulePath = "/usr/lib/softhsm/libsofthsm2.so"
 // temporaire, détruit à la fin du test) et y génère une paire de clés
 // Ed25519 sous l'étiquette donnée. Rend (tokenLabel, keyLabel, userPIN).
 func provisionSoftHSM2Key(t *testing.T, keyLabel string) (tokenLabel, pin string) {
+	return provisionSoftHSM2KeyWithAttrs(t, keyLabel, true, false)
+}
+
+// provisionSoftHSM2KeyWithAttrs est provisionSoftHSM2Key avec CKA_SENSITIVE
+// et CKA_EXTRACTABLE explicites — revue de sécurité #114 : exerce les
+// clés MAL provisionnées (extractibles ou non sensibles) que
+// requireNonExtractableKey doit refuser, pas seulement le cas nominal.
+func provisionSoftHSM2KeyWithAttrs(t *testing.T, keyLabel string, sensitive, extractable bool) (tokenLabel, pin string) {
 	t.Helper()
 	if _, err := os.Stat(softHSM2ModulePath); err != nil {
 		t.Skipf("SoftHSM2 absent (%s) — témoin HSM sauté", softHSM2ModulePath)
@@ -55,6 +64,14 @@ func provisionSoftHSM2Key(t *testing.T, keyLabel string) (tokenLabel, pin string
 	if err != nil {
 		t.Fatalf("OpenModule: %v", err)
 	}
+	// SoftHSM2 garde un état C_Initialize GLOBAL AU PROCESSUS (pas par
+	// Module) — sans Destroy() explicite ici, le prochain test de ce
+	// binaire qui pointe SOFTHSM2_CONF vers un AUTRE répertoire temporaire
+	// hérite silencieusement de l'init précédente et échoue à
+	// InitToken (CKR_GENERAL_ERROR), découvert en écrivant les témoins
+	// négatifs de la revue #114 (deux provisionnements dans le même
+	// process de test).
+	t.Cleanup(module.Destroy)
 	slots, err := module.Slots()
 	if err != nil || len(slots) == 0 {
 		t.Fatalf("Slots: %v (n=%d)", err, len(slots))
@@ -123,8 +140,8 @@ func provisionSoftHSM2Key(t *testing.T, keyLabel string) (tokenLabel, pin string
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, CkkEcEdwards),
 			pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 			pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
-			pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
-			pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, false),
+			pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, sensitive),
+			pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, extractable),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, keyLabel),
 			pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
 		},
@@ -185,6 +202,50 @@ func TestPKCS11SignerSignsVerifiableEd25519(t *testing.T) {
 	}
 	if string(sig) != string(sig2) {
 		t.Fatal("deux signatures Ed25519 du même message diffèrent — la primitive n'est pas RFC 8032 pure")
+	}
+}
+
+// TestPKCS11SignerRefusesExtractableKey : preuve d'exécution — revue de
+// sécurité #114. Une clé provisionnée CKA_EXTRACTABLE=true (exportable du
+// jeton, contrairement à la custody HSM promise par §12) est refusée par
+// NewPKCS11Signer AVANT toute signature, jamais silencieusement acceptée.
+func TestPKCS11SignerRefusesExtractableKey(t *testing.T) {
+	keyLabel := "issuer-key-extractable"
+	tokenLabel, pin := provisionSoftHSM2KeyWithAttrs(t, keyLabel, true, true) // CKA_SENSITIVE=true, CKA_EXTRACTABLE=true
+
+	_, err := NewPKCS11Signer(PKCS11SignerOptions{
+		ModulePath: softHSM2ModulePath,
+		TokenLabel: tokenLabel,
+		KeyLabel:   keyLabel,
+		PIN:        pin,
+	})
+	if err == nil {
+		t.Fatal("clé CKA_EXTRACTABLE=true acceptée — #114 non détecté")
+	}
+	if !strings.Contains(err.Error(), "EXTRACTIBLE") {
+		t.Fatalf("erreur=%v, veut mention de clé EXTRACTIBLE (§114)", err)
+	}
+}
+
+// TestPKCS11SignerRefusesNonSensitiveKey : même preuve pour
+// CKA_SENSITIVE=false — une clé dont la VALEUR peut être lue directement
+// du jeton n'est pas non plus une custody HSM valide, même si elle n'est
+// pas marquée extractible par ailleurs.
+func TestPKCS11SignerRefusesNonSensitiveKey(t *testing.T) {
+	keyLabel := "issuer-key-nonsensitive"
+	tokenLabel, pin := provisionSoftHSM2KeyWithAttrs(t, keyLabel, false, false) // CKA_SENSITIVE=false, CKA_EXTRACTABLE=false
+
+	_, err := NewPKCS11Signer(PKCS11SignerOptions{
+		ModulePath: softHSM2ModulePath,
+		TokenLabel: tokenLabel,
+		KeyLabel:   keyLabel,
+		PIN:        pin,
+	})
+	if err == nil {
+		t.Fatal("clé CKA_SENSITIVE=false acceptée — #114 non détecté")
+	}
+	if !strings.Contains(err.Error(), "CKA_SENSITIVE") {
+		t.Fatalf("erreur=%v, veut mention de CKA_SENSITIVE (§114)", err)
 	}
 }
 
