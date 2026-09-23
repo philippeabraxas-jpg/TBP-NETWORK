@@ -506,6 +506,98 @@ func TestBlockingProxyEndToEndBodySealBlocksTamperedAmount(t *testing.T) {
 // Fail-closed dès la configuration.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// #110 : le proxy décompte lui-même le passeport ouvert par evaluate() —
+// jamais laissé à un appel volontaire /v1/passport/consume côté
+// appelant.
+// ---------------------------------------------------------------------------
+
+// TestBlockingProxyConsumesQuotaOnForward : preuve NON-VACUE directe de
+// #110 — un jeton porteur d'un vecteur quota voit son compteur RÉELLEMENT
+// décrémenté par le proxy, pas seulement un passeport "ouvert" jamais
+// touché.
+func TestBlockingProxyConsumesQuotaOnForward(t *testing.T) {
+	f := newListenerFixture(t, true) // withLedger
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	claims := quotaClaims(5, 60)
+	jti := jtiOf(0xA1)
+	claims.jti = jti[:]
+	tok := mintToken(t, claims)
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", tok))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut=%d, veut 200 (allow transmis)", rec.Code)
+	}
+
+	counter, ok := f.ledger.Counter(jti)
+	if !ok {
+		t.Fatal("passeport introuvable après transmission — #110 non fermé")
+	}
+	if counter.ConsumedTotal() != 1 {
+		t.Fatalf("ConsumedTotal=%d, veut 1 (le proxy doit décompter LUI-MÊME, #110)", counter.ConsumedTotal())
+	}
+	if counter.Remaining() != 4 {
+		t.Fatalf("Remaining=%d, veut 4 (5 - 1)", counter.Remaining())
+	}
+}
+
+// TestBlockingProxyDeniesForwardWhenQuotaExhausted : un passeport déjà
+// épuisé (volume_max=0, un vecteur intentionnellement vide) refuse net —
+// le backend n'est JAMAIS atteint sur un quota épuisé, même si la
+// politique elle-même aurait autorisé l'action.
+func TestBlockingProxyDeniesForwardWhenQuotaExhausted(t *testing.T) {
+	f := newListenerFixture(t, true)
+	if err := f.mc.SetMode(ModeClosed, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err != nil {
+		t.Fatalf("SetMode(closed): %v", err)
+	}
+	var hits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	tok := mintToken(t, quotaClaims(0, 60)) // vecteur déjà épuisé
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", tok))
+
+	if hits != 0 {
+		t.Fatalf("hits=%d, veut 0 (quota épuisé ⇒ backend jamais atteint, #110)", hits)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("statut=%d, veut 403", rec.Code)
+	}
+}
+
+// TestBlockingProxyNoPassportNoConsume : un jeton SANS vecteur quota
+// n'ouvre aucun passeport — le proxy ne doit rien tenter dessus (aucune
+// panique, aucun refus parasite lié au quota).
+func TestBlockingProxyNoPassportNoConsume(t *testing.T) {
+	f := newListenerFixture(t, true)
+	var hits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, nominalClaims()))) // pas de quota
+	if hits != 1 {
+		t.Fatalf("hits=%d, veut 1 (sans quota: transmis normalement)", hits)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut=%d, veut 200", rec.Code)
+	}
+}
+
 func TestNewBlockingProxyFailClosed(t *testing.T) {
 	f := newListenerFixture(t, false)
 	backend, _ := url.Parse("http://127.0.0.1:1")
