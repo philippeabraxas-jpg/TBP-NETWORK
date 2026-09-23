@@ -6,7 +6,12 @@ A cell runs: the **broker** `brokerd` (T37 — issue #74), the
 **tessera registry** (T7), **OPA** (T11, restricted capabilities
 §12), the **epoch tracker** (§7.2) and the PEP `pepd`. Every decision
 leaves a leaf (§4.1); the leaf salt stays on THIS machine
-(§6.2). Posture at startup: **monitor**, always (§5.3).
+(§6.2). Posture at startup: **monitor**, at the FIRST deployment only
+(§5.3). Security review #93: any RESTART (the cell's registry key
+already exists) starts in **refused** — everything is denied, even an
+otherwise-allowed evaluation — until a quorum explicitly reconfirms a
+posture via `POST /v1/mode`. A restart never silently resumes the
+posture the cell had before.
 
 > The mono phase of `deploy/selftest/` executes steps 1 to 6 of this
 > guide against the real binaries, and the daemons phase executes step 7
@@ -81,11 +86,19 @@ written (the skeletons in `policies/rego/` are examples to adapt,
 **Command**:
 
 ```bash
+# TBP_POLICY_ID is chosen HERE, BEFORE the build — it becomes the bundle's
+# pinned revision (security review #92, finding A5): the revision OPA
+# actually serves is checked PERIODICALLY against this exact string,
+# never against the built artifact's own hash (which --revision changes,
+# so it cannot be computed AFTER the build without another circular
+# build). Any stable identifier works (a hash of policies/rego/ sources,
+# a version tag) as long as it is regenerated whenever the rules change.
+POLICY_ID=$(sha256sum -- policies/rego/*.rego | sha256sum | cut -d' ' -f1)
 # 'opa run' no longer has a --capabilities flag since OPA 1.0: the
 # restriction is frozen at bundle compile time.
-opa build --capabilities policies/capabilities.json policies/rego/ \
-  -o /etc/tbp/bundle.tar.gz
-sha256sum /etc/tbp/bundle.tar.gz   # this hash = TBP_POLICY_ID (claim −1)
+opa build --capabilities policies/capabilities.json --revision "$POLICY_ID" \
+  policies/rego/ -o /etc/tbp/bundle.tar.gz
+echo "$POLICY_ID"   # this value = TBP_POLICY_ID below (claim −1)
 ```
 
 **Observable success criterion**: the build succeeds; a rule calling
@@ -95,22 +108,29 @@ afterwards).
 **On failure: STOP** — a bundle compiled without capabilities imposes
 nothing at execution; do not work around it with `opa run` on bare .rego files.
 
-#### Step 5 — Run OPA as a local server (bundle only)
+#### Step 5 — Run OPA as a local server (bundle only, Unix socket)
 
 **Verifiable prerequisite**: step 4 green; bundle present.
 
 **Command**:
 
 ```bash
-opa run --server --addr 127.0.0.1:8181 /etc/tbp/bundle.tar.gz &
-curl -s http://127.0.0.1:8181/health
+# Unix socket, NOT TCP loopback (security review #92, finding A3): a TCP
+# port an imposter could occupy and answer allow-to-everything on is
+# indistinguishable from the real OPA to pepd/brokerd. The socket's
+# owning UID is what pepd/brokerd verify via SO_PEERCRED at every
+# connection — run OPA as a DEDICATED user, note its UID (`id -u tbp-opa`).
+install -d -o tbp-opa -g tbp-opa -m 0750 /run/tbp
+opa run --server --addr unix:///run/tbp/opa.sock /etc/tbp/bundle.tar.gz &
+curl -s --unix-socket /run/tbp/opa.sock http://localhost/health
 ```
 
-**Observable success criterion**: `/health` answers 200; OPA listens
-ONLY on loopback (pepd alone calls it — no network exposure).
+**Observable success criterion**: `/health` answers 200 over the socket;
+OPA does NOT listen on any TCP port (`ss -ltnp | grep 8181` finds
+nothing) — no network exposure, no unauthenticated transport.
 
-**On failure: STOP** — read the OPA log; an invalid bundle or an
-already-taken port gets fixed before pepd, never after.
+**On failure: STOP** — read the OPA log; an invalid bundle or a
+residual socket file gets fixed before pepd, never after.
 
 #### Step 6 — Start pepd in monitor mode (§5.3)
 
@@ -128,10 +148,19 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #   TBP_CELL_ID=cell-a
 #   TBP_SALT=<32-char hex — generated locally, never shared>
 #   TBP_KEYRING_FILE=/etc/tbp/keyring.json
-#   TBP_POLICY_ID=<sha256 of the bundle, step 4>
+#   TBP_POLICY_ID=<$POLICY_ID chosen at step 4 — NOT the bundle's own hash>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
 #   TBP_LISTEN_ADDR=127.0.0.1:8443
-#   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
+#   TBP_OPA_ENDPOINT=http://opa/v1/data/tbp/example/action  # host part
+#                                  # is irrelevant over TBP_OPA_SOCKET —
+#                                  # the socket dial ignores it
+#   TBP_OPA_SOCKET=/run/tbp/opa.sock          # security review #92, A3:
+#                                  # OPA now REQUIRED, authenticated by
+#                                  # SO_PEERCRED — mandatory unless
+#                                  # TBP_OPA_INSECURE_TCP_DEV=1 (dev/lab
+#                                  # only, never in production)
+#   TBP_OPA_EXPECTED_UID=$(id -u tbp-opa)     # UID the kernel must report
+#                                  # for the OPA process at EVERY connection
 #   TBP_QUORUM_MIN=2               # k distinct Ed25519 signatures (security
 #                                  # review #89 — no longer a name count)
 #   TBP_QUORUM_KEYRING_FILE=/etc/tbp/quorum-keyring.json  # controller
@@ -148,6 +177,12 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # "sync" = former synchronous path
 #   TBP_DURABILITY_WINDOW_MS=1000  # opposability window (default 1 s;
 #                                  # floor 4 × checkpoint interval)
+#   TBP_OPA_REVISION_CHECK_INTERVAL_MS=10000  # optional (security review
+#                                  # #92, A5) — how often the revision OPA
+#                                  # ACTUALLY serves is checked against
+#                                  # TBP_POLICY_ID; checked once, SYNCHRONOUSLY,
+#                                  # before pepd serves at all — a mismatch
+#                                  # there refuses to start
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s http://127.0.0.1:8443/healthz
@@ -155,15 +190,21 @@ curl -s http://127.0.0.1:8443/v1/mode
 ```
 
 **Observable success criterion**: `/healthz` answers 200;
-`GET /v1/mode` returns `{"mode":"monitor"}` — pepd ALWAYS starts in
-monitor, the closed switch is governed (step 8 and
-[monitor-to-closed.md](monitor-to-closed.md)); on first startup,
-`cell_log.key` (0600) and `cell_log.vkey` are created in
-`TBP_REGISTRY_DIR` (registry key of THE cell — D97 custody).
+`GET /v1/mode` returns `{"mode":"monitor"}` on this FIRST startup, the
+closed switch is governed (step 8 and
+[monitor-to-closed.md](monitor-to-closed.md)); `cell_log.key` (0600)
+and `cell_log.vkey` are created in `TBP_REGISTRY_DIR` (registry key of
+THE cell — D97 custody). Security review #93: kill this process and
+restart it with the SAME environment — `GET /v1/mode` now returns
+`{"mode":"refused"}`, and evaluations are denied even for an
+otherwise-valid token, until a quorum-signed `POST /v1/mode` (same
+shape as step 8) explicitly reconfirms a posture.
 
 **On failure: STOP** — a startup without keyring, without policy ID or
 without salt must fail; if it succeeds, the binary is not the one from
-the repo. Closed mode IS NOT the goal of this step.
+the repo. Closed mode IS NOT the goal of this step. A RESTART that
+silently reports `monitor` (instead of `refused`) is the exact
+regression security review #93 fixes — never work around it.
 
 #### Step 7 — Build and start brokerd (full decision chain, T37)
 
@@ -192,9 +233,16 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 # below — never both, never neither (fail-closed, security review #90.5):
 #   TBP_CELL_ID=cell-a
 #   TBP_SALT=<32-char hex — salt of the BROKER's chain, generated here>
-#   TBP_POLICY_ID=<sha256 of the bundle, step 4>
+#   TBP_POLICY_ID=<$POLICY_ID chosen at step 4 — NOT the bundle's own hash>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/broker
-#   TBP_OPA_ENDPOINT=http://127.0.0.1:8181/v1/data/tbp/example/action
+#   TBP_OPA_ENDPOINT=http://opa/v1/data/tbp/example/action  # host part
+#                                      # irrelevant over TBP_OPA_SOCKET
+#   TBP_OPA_SOCKET=/run/tbp/opa.sock  # security review #92, A3: REQUIRED
+#                                      # (authenticated by SO_PEERCRED)
+#                                      # unless TBP_OPA_INSECURE_TCP_DEV=1
+#                                      # (dev/lab only)
+#   TBP_OPA_EXPECTED_UID=$(id -u tbp-opa)  # UID the kernel must report
+#                                      # for OPA at every connection
 #   TBP_TRANSLATOR=structured
 #   # --- custody DEV (lab/CI only) ---
 #   TBP_ISSUER_SEED_FILE=/etc/tbp/issuer.seed
@@ -210,6 +258,10 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # lease minted, epoch0.json not read
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock
+#   TBP_OPA_REVISION_CHECK_INTERVAL_MS=10000  # optional (security review
+#                                      # #92, A5) — checked once,
+#                                      # SYNCHRONOUSLY, before brokerd
+#                                      # serves; a mismatch refuses to start
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now tbp-brokerd
 curl -s --unix-socket /run/tbp/broker.sock http://localhost/v1/supervision/epoch

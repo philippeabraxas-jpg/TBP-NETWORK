@@ -172,6 +172,100 @@ func TestModeSwitchIdempotentAndBack(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Revue de sécurité #93 : redémarrage (StartRefused) — refus TOTAL, même
+// d'un allow, jusqu'à reconfirmation EXPLICITE par quorum. Le premier
+// déploiement (StartRefused=false, comportement par défaut ci-dessus)
+// n'est PAS affecté.
+// ---------------------------------------------------------------------------
+
+func TestModeStartRefusedBlocksEverythingUntilReconfirmed(t *testing.T) {
+	sink := &stubSink{}
+	alarm := &tripRecorder{}
+	mc, err := NewModeController(ModeOptions{
+		CellID:       opaTestCellID,
+		Salt:         testSalt,
+		Leaves:       sink,
+		OnAlarm:      alarm.trip,
+		VerifyQuorum: acceptQuorum,
+		StartRefused: true,
+		Now:          func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewModeController: %v", err)
+	}
+
+	if mc.Mode() != ModeRefused {
+		t.Fatalf("mode=%v, veut refused (redémarrage, §93)", mc.Mode())
+	}
+	if mc.Mode().String() != "refused" {
+		t.Fatalf("String()=%q, veut %q", mc.Mode().String(), "refused")
+	}
+
+	// Refus TOTAL : même un allow ne passe pas (contrairement à closed,
+	// qui laisse passer un allow).
+	if mc.Allows(Decision{Allow: true, Reason: ReasonOK}) {
+		t.Fatal("refused a laissé passer un allow — refus total attendu (§93)")
+	}
+	if mc.Allows(Decision{Allow: false, Reason: ReasonReplay}) {
+		t.Fatal("refused a laissé passer un deny")
+	}
+
+	// L'entrée en refused elle-même est un événement de gouvernance :
+	// tracé et alarmé, comme toute transition de posture — jamais
+	// silencieux (c'est exactement le défaut que #93 corrige).
+	if sink.count() != 1 {
+		t.Fatalf("feuilles=%d, veut 1 (entrée en refused tracée)", sink.count())
+	}
+	if got := sink.leaves[0].PayloadHash; got != registry.HashPayload(testSalt, modeChangeRecord(ModeRefused)) {
+		t.Fatalf("hash=%x, veut engagement mode-refused", got)
+	}
+	if alarm.count() != 1 || lastReason(alarm) != "mode-refused-restart" {
+		t.Fatalf("alarmes=%v, veut 1 × mode-refused-restart", alarm.reasons)
+	}
+
+	// Seule sortie : quorum reconfirmant EXPLICITEMENT une posture — pas
+	// de vérifieur ⇒ toujours bloqué.
+	mc2, err := NewModeController(ModeOptions{
+		CellID: opaTestCellID, Salt: testSalt, Leaves: &stubSink{},
+		StartRefused: true, Now: func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewModeController: %v", err)
+	}
+	if err := mc2.SetMode(ModeMonitor, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}}}); err == nil {
+		t.Fatal("reconfirmation de monitor acceptée SANS vérifieur de quorum")
+	}
+	if mc2.Mode() != ModeRefused {
+		t.Fatal("mode a quitté refused sans quorum")
+	}
+
+	// Reconfirmer MONITOR (même la posture "par défaut") exige un quorum
+	// valide — ce n'est PAS un no-op comme le redemander en monitor
+	// l'était pour un contrôleur déjà en monitor : refused est un état
+	// DISTINCT.
+	if err := mc.SetMode(ModeMonitor, QuorumProof{Signatures: []QuorumSignature{{KeyID: [16]byte{1}}, {KeyID: [16]byte{2}}}}); err != nil {
+		t.Fatalf("reconfirmation de monitor avec quorum valide: %v", err)
+	}
+	if mc.Mode() != ModeMonitor {
+		t.Fatal("pas passé en monitor après reconfirmation quorée")
+	}
+	if !mc.Allows(Decision{Allow: true, Reason: ReasonOK}) {
+		t.Fatal("monitor reconfirmé bloque encore un allow")
+	}
+}
+
+// TestModeDefaultDeploymentNotRefused : sans StartRefused (premier
+// déploiement, doctrine §5.3 inchangée), le contrôleur démarre en
+// monitor — PAS en refused. Témoin de non-régression du chemin par
+// défaut.
+func TestModeDefaultDeploymentNotRefused(t *testing.T) {
+	mc := newTestModeController(t, &stubSink{}, nil, acceptQuorum)
+	if mc.Mode() != ModeMonitor {
+		t.Fatalf("premier déploiement: mode=%v, veut monitor (§5.3 inchangé)", mc.Mode())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Parsing de mode (API HTTP du listener).
 // ---------------------------------------------------------------------------
 
@@ -187,6 +281,12 @@ func TestParsePEPMode(t *testing.T) {
 	}
 	if _, err := ParsePEPMode(""); err == nil {
 		t.Fatal("mode vide accepté")
+	}
+	// refused n'est JAMAIS une cible atteignable sur le fil (§93) — un
+	// état de démarrage exclusivement, jamais un acte gouverné qu'un
+	// opérateur pourrait demander.
+	if _, err := ParsePEPMode("refused"); err == nil {
+		t.Fatal("« refused » accepté comme cible sur le fil — devrait être exclusivement un état de démarrage (§93)")
 	}
 }
 

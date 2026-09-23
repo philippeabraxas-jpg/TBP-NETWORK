@@ -268,9 +268,18 @@ func runDaemons(s *suite, cfg config) {
 	if !ok {
 		return
 	}
+	// policyID est calculé AVANT le build (hash des sources rego, pas de
+	// l'artefact compilé) : c'est ce qui permet de l'épingler comme
+	// révision du bundle SANS circularité (revue de sécurité #92, A5).
 	regoPath := filepath.Join(cfg.repo, "policies", "rego", "action_example.rego")
+	regoRaw, err := os.ReadFile(regoPath)
+	if err != nil {
+		s.fail(phaseDaemons, "policyID (hash du bundle rego)", err)
+		return
+	}
+	policyID := sha256.Sum256(regoRaw)
 	bundlePath := filepath.Join(opaDir, "tbp-daemons.tar.gz")
-	if !buildBundle(s, phaseDaemons, cfg, capsPath, regoPath, bundlePath) {
+	if !buildBundle(s, phaseDaemons, cfg, capsPath, regoPath, bundlePath, hex.EncodeToString(policyID[:])) {
 		return
 	}
 	opa, ok := startOPA(s, phaseDaemons, cfg, daemonsOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
@@ -280,12 +289,6 @@ func runDaemons(s *suite, cfg config) {
 	defer opa.stop()
 
 	// --- Matériel cryptographique DEV (substitution documentée, §12) -------
-	regoRaw, err := os.ReadFile(regoPath)
-	if err != nil {
-		s.fail(phaseDaemons, "policyID (hash du bundle rego)", err)
-		return
-	}
-	policyID := sha256.Sum256(regoRaw)
 	cellSalt := make([]byte, 16)
 	monitorSalt := make([]byte, 16)
 	masterSalt := make([]byte, 16)
@@ -477,6 +480,9 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_POLICY_ID="+hex.EncodeToString(policyID[:]),
 		"TBP_REGISTRY_DIR="+brokerRegDir,
 		"TBP_OPA_ENDPOINT=http://"+daemonsOPAAddr+"/v1/data/tbp/example/action",
+		// OPA reste en TCP loopback ici (selftest local) — dev/lab
+		// EXPLICITE, revue de sécurité #92, finding A3.
+		"TBP_OPA_INSECURE_TCP_DEV=1",
 		"TBP_TRANSLATOR=structured",
 		"TBP_ISSUER_SEED_FILE="+issuerSeedPath,
 		"TBP_GENESIS_DIR="+genesisDir,

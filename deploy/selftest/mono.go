@@ -36,10 +36,10 @@ import (
 )
 
 const (
-	phaseMono     = "mono"
-	monoOPAAddr   = "127.0.0.1:18181"
-	monoPEPDAddr  = "127.0.0.1:18443"
-	monoCellID    = "cell-a"
+	phaseMono    = "mono"
+	monoOPAAddr  = "127.0.0.1:18181"
+	monoPEPDAddr = "127.0.0.1:18443"
+	monoCellID   = "cell-a"
 	// kid de l'émetteur DEV du selftest : 16 octets (32 car. hex) — le
 	// keyring pepd rejette toute autre longueur (fail-closed au chargement).
 	monoDevKIDHex = "7433352d73656c66746573742d646576" // "t35-selftest-dev"
@@ -182,9 +182,18 @@ func runMono(s *suite, cfg config) {
 	}
 
 	// --- Étape : OPA serveur sur le bundle compilé avec capabilities --------
+	// policyID est calculé AVANT le build (hash des sources rego, pas de
+	// l'artefact compilé) : c'est ce qui permet de l'épingler comme
+	// révision du bundle SANS circularité (revue de sécurité #92, A5).
 	regoPath := filepath.Join(cfg.repo, "policies", "rego", "action_example.rego")
+	regoRaw, err := os.ReadFile(regoPath)
+	if err != nil {
+		s.fail(phaseMono, "policyID (hash du bundle rego)", err)
+		return
+	}
+	policyID := sha256.Sum256(regoRaw)
 	bundlePath := filepath.Join(opaDir, "tbp-example.tar.gz")
-	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath) {
+	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath, hex.EncodeToString(policyID[:])) {
 		return
 	}
 	opa, ok := startOPA(s, phaseMono, cfg, monoOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
@@ -202,12 +211,6 @@ func runMono(s *suite, cfg config) {
 		s.fail(phaseMono, "keyring dev", err)
 		return
 	}
-	regoRaw, err := os.ReadFile(regoPath)
-	if err != nil {
-		s.fail(phaseMono, "policyID (hash du bundle rego)", err)
-		return
-	}
-	policyID := sha256.Sum256(regoRaw)
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		s.fail(phaseMono, "sel registre", err)
@@ -237,6 +240,10 @@ func runMono(s *suite, cfg config) {
 		"TBP_REGISTRY_DIR="+regDir,
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
 		"TBP_OPA_ENDPOINT="+opaURL+"/v1/data/tbp/example/action",
+		// OPA reste en TCP loopback ici (selftest local, pas de socket
+		// Unix propre à cette machine partagée) — dev/lab EXPLICITE,
+		// revue de sécurité #92, finding A3.
+		"TBP_OPA_INSECURE_TCP_DEV=1",
 		"TBP_QUORUM_KEYRING_FILE="+quorumKeyringPath,
 		// T38/#71 : explicite même si async-bounded est le défaut — le
 		// selftest éping le modèle de durabilité qu'il exerce.
@@ -377,6 +384,68 @@ func runMono(s *suite, cfg config) {
 	s.add(phaseMono, "closed: read → allow forwardé",
 		err == nil && er.Allow && er.Forwarded,
 		fmt.Sprintf("allow=%v forwarded=%v", er.Allow, er.Forwarded))
+
+	// --- Étape #93 : redémarrage = refus total jusqu'à reconfirmation ------
+	// Vérification prioritaire suggérée par l'issue elle-même : pepd en
+	// closed (bascule quorée ci-dessus), puis kill + redémarrage — la
+	// posture ne doit JAMAIS repartir en monitor SANS signature (attaque
+	// par rétrogradation, revue de sécurité #93, option la plus stricte
+	// actée par le mainteneur).
+	_ = pepdCmd.Process.Kill()
+	_, _ = pepdCmd.Process.Wait()
+
+	pepdLog2, err := os.Create(filepath.Join(cfg.out, "pepd-restart.log"))
+	if err != nil {
+		s.fail(phaseMono, "pepd redémarrage (§93)", err)
+		return
+	}
+	pepdCmd = exec.Command(pepdBin)
+	pepdCmd.Env = pepdEnv // MÊME registre : cell_log.key existe déjà
+	pepdCmd.Stdout, pepdCmd.Stderr = pepdLog2, pepdLog2
+	if err := pepdCmd.Start(); err != nil {
+		_ = pepdLog2.Close()
+		s.fail(phaseMono, "pepd redémarrage (§93)", err)
+		return
+	}
+	if err := waitHTTP200(pepdURL+"/healthz", 15*time.Second); err != nil {
+		s.fail(phaseMono, "pepd redémarrage (§93, sonde /healthz)", err)
+		return
+	}
+
+	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	if err == nil {
+		_ = json.NewDecoder(resp.Body).Decode(&modeView)
+		_ = resp.Body.Close()
+	}
+	s.add(phaseMono, "témoin #93: redémarrage → posture refused (PAS monitor silencieux)",
+		modeView.Mode == "refused", "mode="+modeView.Mode)
+
+	// Refus TOTAL : même un jeton par ailleurs valide (allow) est bloqué.
+	tokReadRestart, _ := mintOK("read")
+	_, er, err = evaluate(pepdURL, tokReadRestart, "read", "doc-1")
+	s.add(phaseMono, "témoin #93: refused bloque même un allow",
+		err == nil && !er.Forwarded && er.Mode == "refused",
+		fmt.Sprintf("allow=%v forwarded=%v mode=%s", er.Allow, er.Forwarded, er.Mode))
+
+	// Seule sortie : quorum reconfirmant EXPLICITEMENT une posture — ici
+	// monitor, comme tout acte gouverné (aller ou retour).
+	expiry93 := time.Now().Add(1 * time.Minute)
+	signCtrlMonitor := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
+		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", expiry93))
+		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
+	}
+	status93, _, _ := postJSON(pepdURL+"/v1/mode", map[string]any{
+		"mode": "monitor", "expiry": expiry93.Unix(),
+		"signatures": []map[string]string{signCtrlMonitor(ctrl1, ctrl1KID), signCtrlMonitor(ctrl2, ctrl2KID)},
+	})
+	s.add(phaseMono, "témoin #93: reconfirmation quorée de monitor après redémarrage → 200",
+		status93 == http.StatusOK, fmt.Sprintf("status=%d", status93))
+	resp, err = http.Get(pepdURL + "/v1/mode") //nolint:noctx
+	if err == nil {
+		_ = json.NewDecoder(resp.Body).Decode(&modeView)
+		_ = resp.Body.Close()
+	}
+	s.add(phaseMono, "témoin #93: posture = monitor après reconfirmation", modeView.Mode == "monitor", "mode="+modeView.Mode)
 
 	// --- Étape : registre — chaque décision laisse une feuille (§4.1) -------
 	// Non-vacuité par DELTA. Une évaluation ALLOW écrit exactement DEUX

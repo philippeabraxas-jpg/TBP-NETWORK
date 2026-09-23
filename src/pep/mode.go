@@ -13,6 +13,21 @@ package pep
 // Le contrôleur démarre TOUJOURS en monitor : un process qui revient de
 // crash ne « se réveille » jamais en posture bloquante sans décision de
 // gouvernance explicite.
+//
+// Revue de sécurité #93 (attaque par rétrogradation) : ce « toujours
+// monitor » avait un angle mort — rien ne distinguait le PREMIER
+// déploiement d'un redémarrage APRÈS une bascule closed gouvernée par
+// quorum. Un attaquant capable de redémarrer pepd (crash provoqué, OOM,
+// simple kill) rétrogradait ainsi silencieusement la cellule en monitor,
+// sans qu'aucun signataire n'ait rien signé pour annuler la bascule.
+// Décision de doctrine actée pour #93 (option la plus stricte) : au
+// PREMIER démarrage (aucune clé de registre encore créée), la cellule
+// démarre en monitor, inchangé. À tout redémarrage (clé de registre déjà
+// présente), la cellule démarre en ModeRefused — refus total de tout
+// trafic — jusqu'à ce qu'un quorum reconfirme EXPLICITEMENT une posture
+// (monitor ou closed) via POST /v1/mode. Reconfirmer monitor après un
+// redémarrage est donc, comme toute bascule, un acte gouverné et tracé —
+// jamais un défaut silencieux.
 
 import (
 	"context"
@@ -29,18 +44,28 @@ type PEPMode int
 
 const (
 	// ModeMonitor : verdicts journalisés (feuilles §4.1), RIEN bloqué —
-	// le défaut doctrinal (§5.3), au premier déploiement comme au
-	// redémarrage.
+	// le défaut doctrinal (§5.3) au PREMIER déploiement.
 	ModeMonitor PEPMode = iota
 	// ModeClosed : le verdict s'applique — deny ⇒ flux rejeté.
 	ModeClosed
+	// ModeRefused (revue de sécurité #93) : TOUT est refusé — même un
+	// allow ne passe pas. État de démarrage EXCLUSIVEMENT (jamais une
+	// cible de SetMode — ParsePEPMode ne le reconnaît pas sur le fil) :
+	// posée quand la cellule redémarre (clé de registre déjà présente),
+	// jamais au premier déploiement. Seule sortie : quorum reconfirmant
+	// EXPLICITEMENT monitor ou closed via POST /v1/mode.
+	ModeRefused
 )
 
 func (m PEPMode) String() string {
-	if m == ModeClosed {
+	switch m {
+	case ModeClosed:
 		return "closed"
+	case ModeRefused:
+		return "refused"
+	default:
+		return "monitor"
 	}
-	return "monitor"
 }
 
 // ParsePEPMode décode une posture (« monitor » / « closed ») — entrée de
@@ -72,6 +97,13 @@ type ModeOptions struct {
 	// de posture (§5.3). Nil ⇒ toute bascule est refusée (fail-closed) —
 	// remplaçable via SetQuorumVerifier.
 	VerifyQuorum QuorumVerifier
+	// StartRefused (revue de sécurité #93), si true, démarre le
+	// contrôleur en ModeRefused au lieu de ModeMonitor : à l'appelant
+	// (pepd/main.go) de le poser à true SEULEMENT quand la clé de
+	// registre de la cellule EXISTAIT déjà avant cet appel (un
+	// redémarrage, jamais le premier déploiement — voir l'en-tête du
+	// fichier).
+	StartRefused bool
 	// Now est l'horloge NTS de la cellule (§6.2). Nil ⇒ time.Now (dev).
 	Now func() time.Time
 }
@@ -90,10 +122,10 @@ type ModeController struct {
 	verifier QuorumVerifier
 }
 
-// NewModeController construit le contrôleur — TOUJOURS en mode monitor
-// (doctrine §5.3 : jamais closed au premier déploiement, ni au
-// redémarrage). Fail-closed : cellID, sel ≥ 16 o et couture feuilles
-// requis.
+// NewModeController construit le contrôleur — en mode monitor au premier
+// déploiement (doctrine §5.3), en ModeRefused à tout redémarrage (revue
+// de sécurité #93, StartRefused). Fail-closed : cellID, sel ≥ 16 o et
+// couture feuilles requis.
 func NewModeController(opts ModeOptions) (*ModeController, error) {
 	if opts.CellID == "" {
 		return nil, errors.New("pep: cellID requis (§6.2 : feuilles attribuées)")
@@ -110,7 +142,7 @@ func NewModeController(opts ModeOptions) (*ModeController, error) {
 	}
 	salt := make([]byte, len(opts.Salt))
 	copy(salt, opts.Salt)
-	return &ModeController{
+	c := &ModeController{
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
@@ -118,7 +150,17 @@ func NewModeController(opts ModeOptions) (*ModeController, error) {
 		now:      now,
 		mode:     ModeMonitor,
 		verifier: opts.VerifyQuorum,
-	}, nil
+	}
+	if opts.StartRefused {
+		// Événement de gouvernance à part entière (§93) — tracé et
+		// alarmé comme toute transition de posture, jamais silencieux.
+		c.mode = ModeRefused
+		c.writeLeafLocked(ModeRefused)
+		if c.onAlarm != nil {
+			c.onAlarm("mode-refused-restart")
+		}
+	}
+	return c, nil
 }
 
 // SetQuorumVerifier (re)branche la couture de vérification de quorum.
@@ -163,12 +205,18 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 }
 
 // Allows applique la posture au verdict : en monitor, TOUT est forwardé
-// (log seulement, doctrine §5.3) ; en closed, seul un allow passe.
+// (log seulement, doctrine §5.3) ; en closed, seul un allow passe ; en
+// refused (§93), RIEN ne passe — même un allow — tant que le quorum n'a
+// pas reconfirmé explicitement une posture.
 func (c *ModeController) Allows(d Decision) bool {
-	if c.Mode() == ModeMonitor {
+	switch c.Mode() {
+	case ModeMonitor:
 		return true
+	case ModeClosed:
+		return d.Allow
+	default: // ModeRefused
+		return false
 	}
-	return d.Allow
 }
 
 // writeLeafLocked inscrit la feuille de bascule (KindTelemetry : un

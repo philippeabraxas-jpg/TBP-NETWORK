@@ -147,9 +147,11 @@ func prepareCapabilities(s *suite, phase string, cfg config, opaDir string) (str
 
 // buildBundle compile le bundle de règles AVEC les capabilities restreintes
 // (OPA ≥ 1.0 : la restriction se fige à la compilation du bundle — voir
-// deploy/cellule.md étape 4).
-func buildBundle(s *suite, phase string, cfg config, capsPath, regoPath, bundlePath string) bool {
-	if _, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build", "--capabilities", capsPath, regoPath, "-o", bundlePath); err != nil {
+// deploy/cellule.md étape 4) ET avec la révision épinglée (revue de
+// sécurité #92, finding A5 : la révision RÉELLEMENT servie par OPA doit
+// pouvoir être comparée à TBP_POLICY_ID — jamais un bundle non versionné).
+func buildBundle(s *suite, phase string, cfg config, capsPath, regoPath, bundlePath, revision string) bool {
+	if _, errB, err := runCmd(cfg.repo, nil, cfg.opaBin, "build", "--capabilities", capsPath, "--revision", revision, regoPath, "-o", bundlePath); err != nil {
 		s.fail(phase, "opa build du bundle (capabilities restreintes)", fmt.Errorf("%v — %s", err, errB))
 		return false
 	}
