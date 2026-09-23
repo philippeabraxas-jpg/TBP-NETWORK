@@ -280,10 +280,17 @@ func runDaemons(s *suite, cfg config) {
 	}
 	policyID := sha256.Sum256(regoRaw)
 	bundlePath := filepath.Join(opaDir, "tbp-daemons.tar.gz")
-	if !buildBundle(s, phaseDaemons, cfg, capsPath, regoPath, bundlePath, hex.EncodeToString(policyID[:])) {
+	// Signature de bundle (revue de sécurité #106) — témoin de rejeu déjà
+	// exercé une fois par la phase mono ; ici seule la recette réelle
+	// (signer au build, vérifier au run) est exercée.
+	signingKeyPath, verificationKeyPath, ok := generateSigningKeypair(s, phaseDaemons, opaDir)
+	if !ok {
 		return
 	}
-	opa, ok := startOPA(s, phaseDaemons, cfg, daemonsOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
+	if !buildBundle(s, phaseDaemons, cfg, capsPath, regoPath, bundlePath, hex.EncodeToString(policyID[:]), signingKeyPath) {
+		return
+	}
+	opa, ok := startOPA(s, phaseDaemons, cfg, daemonsOPAAddr, bundlePath, verificationKeyPath, filepath.Join(opaDir, "opa.log"))
 	if !ok {
 		return
 	}

@@ -194,10 +194,26 @@ func runMono(s *suite, cfg config) {
 	}
 	policyID := sha256.Sum256(regoRaw)
 	bundlePath := filepath.Join(opaDir, "tbp-example.tar.gz")
-	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath, hex.EncodeToString(policyID[:])) {
+	// Signature de bundle (revue de sécurité #106) : la révision seule
+	// (juste au-dessus) est une étiquette auto-déclarée — seule une
+	// signature vérifiée par OPA au chargement prouve que le contenu n'a
+	// pas été altéré après coup.
+	signingKeyPath, verificationKeyPath, ok := generateSigningKeypair(s, phaseMono, opaDir)
+	if !ok {
 		return
 	}
-	opa, ok := startOPA(s, phaseMono, cfg, monoOPAAddr, bundlePath, filepath.Join(opaDir, "opa.log"))
+	if !buildBundle(s, phaseMono, cfg, strippedPath, regoPath, bundlePath, hex.EncodeToString(policyID[:]), signingKeyPath) {
+		return
+	}
+	// Témoin NON-VACUE de #106 : un bundle produit avec la MÊME révision
+	// et les MÊMES capabilities mais signé par une AUTRE clé (tout ce
+	// qu'un simple accès en écriture au fichier bundle permettrait de
+	// reproduire) doit être refusé par un OPA qui vérifie contre la clé
+	// pinglée de la cellule.
+	if !verifyForgedBundleRefused(s, phaseMono, cfg, strippedPath, regoPath, hex.EncodeToString(policyID[:]), verificationKeyPath, opaDir) {
+		return
+	}
+	opa, ok := startOPA(s, phaseMono, cfg, monoOPAAddr, bundlePath, verificationKeyPath, filepath.Join(opaDir, "opa.log"))
 	if !ok {
 		return
 	}

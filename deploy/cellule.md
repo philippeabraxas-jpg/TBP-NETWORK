@@ -77,15 +77,37 @@ bash policies/gen_capabilities.sh
 generated list", the OPA version has changed: review FORBIDDEN before any
 deployment. Never hand-write capabilities.json.
 
-#### Step 4 — Build the rule bundle WITH the capabilities (OPA ≥ 1.0)
+#### Step 4 — Sign and build the rule bundle WITH the capabilities (OPA ≥ 1.0)
 
 **Verifiable prerequisite**: step 3 green; the pilot's own rules
 written (the skeletons in `policies/rego/` are examples to adapt,
-§14 — never a reference policy to copy).
+§14 — never a reference policy to copy); `openssl` present.
+
+**Why sign the bundle** (security review #106): `TBP_POLICY_ID` alone is
+a self-declared label chosen AT build time — whoever can write
+`/etc/tbp/bundle.tar.gz` can simply put the matching value in it, and
+`OPARevisionWatcher` (security review #92, finding A5) would see nothing
+wrong. Only a cryptographic SIGNATURE, verified by OPA itself BEFORE it
+will even start serving, proves the bundle's content was not altered
+after whoever built it signed it. The PRIVATE signing key never touches
+a cell — same custody boundary as the quorum controllers' keys (§12):
+generate it once, offline or on the machine/CI that builds bundles, keep
+it there; distribute only the PUBLIC verification key to every cell and
+broker, alongside `cell_log.vkey` / `keyring.json` (D97).
 
 **Command**:
 
 ```bash
+# ONCE, on the offline/build machine — NEVER on a cell. Re-run only to
+# rotate the key (then every cell's policy-verify.pub must be updated
+# together, or OPA on the un-updated cells will refuse every future
+# bundle — a deliberate fail-closed, not a bug).
+openssl genrsa -out policy-signing.key 2048
+openssl rsa -in policy-signing.key -pubout -out policy-verify.pub
+# policy-signing.key stays on the build machine (custody like §12
+# controller keys). Copy ONLY policy-verify.pub to /etc/tbp/ on every
+# cell and broker.
+
 # TBP_POLICY_ID is chosen HERE, BEFORE the build — it becomes the bundle's
 # pinned revision (security review #92, finding A5): the revision OPA
 # actually serves is checked PERIODICALLY against this exact string,
@@ -95,22 +117,31 @@ written (the skeletons in `policies/rego/` are examples to adapt,
 # a version tag) as long as it is regenerated whenever the rules change.
 POLICY_ID=$(sha256sum -- policies/rego/*.rego | sha256sum | cut -d' ' -f1)
 # 'opa run' no longer has a --capabilities flag since OPA 1.0: the
-# restriction is frozen at bundle compile time.
+# restriction is frozen at bundle compile time. -b (bundle mode) is
+# REQUIRED for --signing-key to take effect at all — opa build silently
+# refuses to sign without it (checked against the real opa binary).
 opa build --capabilities policies/capabilities.json --revision "$POLICY_ID" \
-  policies/rego/ -o /etc/tbp/bundle.tar.gz
+  --signing-key policy-signing.key --signing-alg RS256 \
+  -b policies/rego/ -o /etc/tbp/bundle.tar.gz
 echo "$POLICY_ID"   # this value = TBP_POLICY_ID below (claim −1)
 ```
 
 **Observable success criterion**: the build succeeds; a rule calling
 `http.send` added as a test breaks the build (remove the test
-afterwards).
+afterwards); `tar tzf /etc/tbp/bundle.tar.gz` lists a `.signatures.json`
+member.
 
 **On failure: STOP** — a bundle compiled without capabilities imposes
-nothing at execution; do not work around it with `opa run` on bare .rego files.
+nothing at execution; do not work around it with `opa run` on bare .rego
+files. A bundle built without `--signing-key` degrades straight back to
+the #106 gap (revision alone, no proof) — OPA will refuse to start it in
+step 5 regardless (`--verification-key` there has no `--skip-verify`
+fallback documented here on purpose).
 
-#### Step 5 — Run OPA as a local server (bundle only, Unix socket)
+#### Step 5 — Run OPA as a local server (bundle only, Unix socket, signature verified)
 
-**Verifiable prerequisite**: step 4 green; bundle present.
+**Verifiable prerequisite**: step 4 green; bundle present;
+`policy-verify.pub` installed at `/etc/tbp/policy-verify.pub`.
 
 **Command**:
 
@@ -120,17 +151,35 @@ nothing at execution; do not work around it with `opa run` on bare .rego files.
 # indistinguishable from the real OPA to pepd/brokerd. The socket's
 # owning UID is what pepd/brokerd verify via SO_PEERCRED at every
 # connection — run OPA as a DEDICATED user, note its UID (`id -u tbp-opa`).
+#
+# --bundle (not a bare positional path) is REQUIRED for signature
+# verification to activate at all (checked against the real opa binary:
+# a positional bundle path silently skips verification even with
+# --verification-key set — this is the one flag substitution that would
+# make step 4's signing entirely cosmetic).
 install -d -o tbp-opa -g tbp-opa -m 0750 /run/tbp
-opa run --server --addr unix:///run/tbp/opa.sock /etc/tbp/bundle.tar.gz &
+opa run --server --addr unix:///run/tbp/opa.sock \
+  --bundle /etc/tbp/bundle.tar.gz \
+  --verification-key /etc/tbp/policy-verify.pub --verification-key-id default &
 curl -s --unix-socket /run/tbp/opa.sock http://localhost/health
 ```
 
 **Observable success criterion**: `/health` answers 200 over the socket;
 OPA does NOT listen on any TCP port (`ss -ltnp | grep 8181` finds
-nothing) — no network exposure, no unauthenticated transport.
+nothing) — no network exposure, no unauthenticated transport. Proof that
+signing is actually enforced, not cosmetic (security review #106): edit
+any byte of a `.rego` file inside a copy of the bundle and repackage it
+— `opa run` on that copy exits immediately with a digest-mismatch error
+and never opens the socket at all; a bundle re-signed with a DIFFERENT
+private key than the one behind `policy-verify.pub` is refused the same
+way.
 
-**On failure: STOP** — read the OPA log; an invalid bundle or a
-residual socket file gets fixed before pepd, never after.
+**On failure: STOP** — read the OPA log; an invalid bundle, a signature
+that does not verify, or a residual socket file gets fixed before pepd,
+never after. Never launch pepd against an OPA that failed this step —
+`TBP_OPA_REVISION_CHECK_INTERVAL_MS` (step 6) catches a LATER bundle
+substitution, it does not retroactively make an already-compromised
+startup safe.
 
 #### Step 6 — Start pepd in monitor mode (§5.3)
 
