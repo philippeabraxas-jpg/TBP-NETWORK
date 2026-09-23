@@ -348,12 +348,14 @@ func runMono(s *suite, cfg config) {
 
 	// --- Étape : bascule gouvernée monitor→closed (§5.3) --------------------
 	// Preuve de quorum RÉELLE (revue de sécurité #89) : k signatures Ed25519
-	// distinctes sur pep.QuorumMessage("mode-closed", expiry) — un ancien
-	// appelant qui se contenterait de déclarer des noms ("signers") est
-	// witnessé séparément juste après (attaque #89 exacte, refusée).
+	// distinctes sur pep.QuorumMessage("mode-closed", cellID, expiry) — un
+	// ancien appelant qui se contenterait de déclarer des noms ("signers")
+	// est witnessé séparément juste après (attaque #89 exacte, refusée).
+	// cellID lié dans le message signé (revue #105) — jamais un champ de
+	// la requête.
 	expiry := time.Now().Add(1 * time.Minute)
 	signCtrl := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
-		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-closed", expiry))
+		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-closed", monoCellID, expiry))
 		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
 	}
 
@@ -436,7 +438,7 @@ func runMono(s *suite, cfg config) {
 	// monitor, comme tout acte gouverné (aller ou retour).
 	expiry93 := time.Now().Add(1 * time.Minute)
 	signCtrlMonitor := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
-		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", expiry93))
+		sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", monoCellID, expiry93))
 		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
 	}
 	status93, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{

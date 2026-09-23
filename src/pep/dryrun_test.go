@@ -384,7 +384,7 @@ func newDryRunFixtureEndpoint(t *testing.T, gate *DryRunGate, opaEndpoint string
 		t.Fatalf("NewFailClosed: %v", err)
 	}
 	mc, err := NewModeController(ModeOptions{
-		CellID: opaTestCellID, Salt: testSalt, Leaves: sink, VerifyQuorum: acceptQuorum, Now: now,
+		CellID: opaTestCellID, Salt: testSalt, Leaves: sink, VerifyQuorum: acceptQuorum, QuorumState: acceptQuorumState{}, Now: now,
 	})
 	if err != nil {
 		t.Fatalf("NewModeController: %v", err)

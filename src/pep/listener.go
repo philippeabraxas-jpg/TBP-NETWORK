@@ -195,8 +195,12 @@ type ModeResponse struct {
 
 // ModeChangeRequest demande une bascule de posture (gouvernée, §5.3) : la
 // preuve de quorum est k signatures Ed25519 DISTINCTES (trousseau de
-// contrôleurs épinglé §12) sur QuorumMessage("mode-"+mode, Expiry) — pas
-// une liste de noms déclarés (revue de sécurité #89).
+// contrôleurs épinglé §12) sur QuorumMessage("mode-"+mode, cellID, Expiry)
+// — pas une liste de noms déclarés (revue de sécurité #89). Le cellID
+// n'est PAS un champ de cette requête : il vient du vérifieur, toujours
+// celui de CETTE cellule (revue #105) — le déclarer sur le fil aurait
+// permis à l'appelant de choisir la cellule pour laquelle sa preuve
+// rejouée redevient valide.
 type ModeChangeRequest struct {
 	Mode       string                `json:"mode"`
 	Expiry     int64                 `json:"expiry"` // secondes Unix, signé (QuorumMessage)

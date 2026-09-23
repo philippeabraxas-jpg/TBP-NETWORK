@@ -55,6 +55,8 @@ var (
 	ErrConditionClassChange  = errors.New("pep: condition déjà enregistrée avec une autre classe")
 	ErrQuorumVerifierMissing = errors.New("pep: levée classe W sans vérifieur de quorum (fail-closed)")
 	ErrQuorumRejected        = errors.New("pep: preuve de quorum rejetée (§5.3)")
+	ErrQuorumStateMissing    = errors.New("pep: levée classe W sans magasin d'état de quorum (fail-closed, §105)")
+	ErrQuorumReplayed        = errors.New("pep: preuve de quorum déjà consommée ou expirée plus tôt (rejeu, §105)")
 )
 
 // Actions tracées dans les feuilles du point fail-closed.
@@ -127,6 +129,14 @@ type FailClosedOptions struct {
 	// VerifyQuorum valide les levées classe W. Nil ⇒ toute levée W est
 	// refusée (fail-closed). Remplaçable via SetQuorumVerifier.
 	VerifyQuorum QuorumVerifier
+	// QuorumState avance le plancher de fraîcheur PERSISTANT par condition
+	// (revue de sécurité #105) : une preuve dont l'expiry ne dépasse pas
+	// le plancher déjà consommé est un rejeu, refusé même si la signature
+	// est valide. Nil ⇒ toute levée W est refusée (fail-closed, même
+	// doctrine que VerifyQuorum absent) — jamais un magasin d'état
+	// optionnel qu'on pourrait oublier de brancher. Remplaçable via
+	// SetQuorumState.
+	QuorumState QuorumStateStore
 	// Now est l'horloge NTS de la cellule (§6.2). Nil ⇒ time.Now (dev).
 	Now func() time.Time
 }
@@ -143,6 +153,7 @@ type FailClosed struct {
 	mu       sync.Mutex
 	conds    map[string]*Condition
 	verifier QuorumVerifier
+	state    QuorumStateStore
 }
 
 // NewFailClosed construit le point unique. Fail-closed : cellID, sel et
@@ -171,6 +182,7 @@ func NewFailClosed(opts FailClosedOptions) (*FailClosed, error) {
 		now:      now,
 		conds:    make(map[string]*Condition),
 		verifier: opts.VerifyQuorum,
+		state:    opts.QuorumState,
 	}, nil
 }
 
@@ -180,6 +192,14 @@ func (f *FailClosed) SetQuorumVerifier(v QuorumVerifier) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.verifier = v
+}
+
+// SetQuorumState (re)branche le magasin d'état de quorum (antirejeu
+// persistant, §105).
+func (f *FailClosed) SetQuorumState(s QuorumStateStore) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state = s
 }
 
 // Register déclare une condition et sa classe §5.3 AVANT usage. Ré-enregistrer
@@ -263,6 +283,16 @@ func (f *FailClosed) Clear(name string, proof QuorumProof) error {
 		}
 		if !f.verifier(name, proof) {
 			return fmt.Errorf("%w (%s)", ErrQuorumRejected, name)
+		}
+		if f.state == nil {
+			return fmt.Errorf("%w (%s)", ErrQuorumStateMissing, name)
+		}
+		ok, err := f.state.Consume(name, proof.Expiry.Unix())
+		if err != nil {
+			return fmt.Errorf("pep: état de quorum (%s): %w", name, err)
+		}
+		if !ok {
+			return fmt.Errorf("%w (%s)", ErrQuorumReplayed, name)
 		}
 	}
 	c.Tripped = false

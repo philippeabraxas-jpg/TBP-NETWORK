@@ -19,6 +19,7 @@ func newTestModeController(t *testing.T, sink *stubSink, alarm *tripRecorder, ve
 		Salt:         testSalt,
 		Leaves:       sink,
 		VerifyQuorum: verifier,
+		QuorumState:  acceptQuorumState{},
 		Now:          func() time.Time { return time.Unix(testIAT+30, 0) },
 	}
 	if alarm != nil {
@@ -33,6 +34,15 @@ func newTestModeController(t *testing.T, sink *stubSink, alarm *tripRecorder, ve
 
 func acceptQuorum(string, QuorumProof) bool { return true }
 func rejectQuorum(string, QuorumProof) bool { return false }
+
+// acceptQuorumState est le double de QuorumStateStore pour les tests qui
+// exercent la plomberie SetMode/Clear (traçage, alarmes, idempotence)
+// sans porter spécifiquement sur l'antirejeu persistant (#105, couvert
+// par ses propres tests dédiés contre FileQuorumStateStore) — toujours
+// ok=true, jamais un blocage inattendu ici.
+type acceptQuorumState struct{}
+
+func (acceptQuorumState) Consume(string, int64) (bool, error) { return true, nil }
 
 // ---------------------------------------------------------------------------
 // Doctrine §5.3 : le mode par défaut est MONITOR — jamais closed au premier
@@ -187,6 +197,7 @@ func TestModeStartRefusedBlocksEverythingUntilReconfirmed(t *testing.T) {
 		Leaves:       sink,
 		OnAlarm:      alarm.trip,
 		VerifyQuorum: acceptQuorum,
+		QuorumState:  acceptQuorumState{},
 		StartRefused: true,
 		Now:          func() time.Time { return time.Unix(testIAT+30, 0) },
 	})
