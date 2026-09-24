@@ -115,9 +115,11 @@
 //	                        /run/tbp/broker.sock
 //	TBP_BROKER_ADMIN_SOCKET plan d'ADMINISTRATION (revue de sécurité #95,
 //	                        finding A10) : GET /v1/supervision/{stats,epoch,
-//	                        arbitration} — défaut /run/tbp/broker-admin.sock.
-//	                        Socket SÉPARÉ du plan de données, jamais
-//	                        multiplexé dessus.
+//	                        arbitration}, POST /v1/epoch/renew (issue #126 —
+//	                        renouvellement du bail d'époque multi-cellules,
+//	                        scripts/genesis renew) — défaut
+//	                        /run/tbp/broker-admin.sock. Socket SÉPARÉ du
+//	                        plan de données, jamais multiplexé dessus.
 //	Transport réseau du plan de données (revue de sécurité #124) —
 //	optionnel, absent par défaut (Unix uniquement, comportement
 //	historique) ; si l'un des quatre champs suivants est présent, les
@@ -184,6 +186,11 @@ const defaultBrokerAdminSocket = "/run/tbp/broker-admin.sock"
 // readHeaderTimeout borne la lecture des en-têtes (même doctrine que le
 // serveur broker — slowloris).
 const readHeaderTimeout = 5 * time.Second
+
+// maxEpochTokenBytes borne le corps accepté par POST /v1/epoch/renew
+// (issue #126) — un jeton d'époque signé est quelques centaines d'octets ;
+// large marge sans ouvrir de vecteur mémoire non borné.
+const maxEpochTokenBytes = 1 << 16 // 64 KiB
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -729,6 +736,41 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
+	})
+	// POST /v1/epoch/renew (issue #126) : renouvellement du bail d'époque
+	// pour un déploiement multi-cellules déjà en service. N'ajoute AUCUNE
+	// logique de fencing — expose l'admission déjà exercée par le tracker au
+	// démarrage (tracker.Accept, epoch0) comme opération d'administration,
+	// pour un jeton N+1 signé HORS-BANDE par le MÊME quorum de contrôleurs
+	// que la genèse (scripts/genesis renew, deploy/cellule.md). Sur le
+	// socket ADMIN (revue #95) — l'accès au socket EST le contrôle d'accès,
+	// même doctrine que les trois lectures ci-dessus. Mono-cellule (#97) :
+	// aucun tracker, donc rien à renouveler — refus honnête, pas un 200
+	// qui simulerait un bail inexistant.
+	adminMux.HandleFunc("POST /v1/epoch/renew", func(w http.ResponseWriter, r *http.Request) {
+		if tracker == nil {
+			http.Error(w, `{"error":"mono-cellule (issue #97) — aucun bail d'époque à renouveler"}`, http.StatusConflict)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxEpochTokenBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"corps illisible"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxEpochTokenBytes {
+			http.Error(w, `{"error":"jeton trop volumineux"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		if err := tracker.Accept(r.Context(), body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		st, err := tracker.Status() // lecture locale — erreur structurellement nil
+		if err != nil {
+			http.Error(w, `{"error":"source indisponible"}`, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, newEpochView(st))
 	})
 
 	if err := os.MkdirAll(filepath.Dir(cfg.socketPath), 0o750); err != nil {

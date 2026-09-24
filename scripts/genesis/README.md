@@ -73,6 +73,54 @@ export SOFTHSM2_MODULE=/chemin/libsofthsm2.so TBP_DEV_PIN=0000
 publique (`crypto/ed25519`), un entrant tardif n'a besoin que du manifest,
 du jeton et de l'ancre reçue par le canal hors-bande (§3.2).
 
+## Renouvellement du bail d'époque (issue #126)
+
+Un déploiement multi-cellules (§7.2, `TBP_TOPOLOGY=multi`) sert sous un bail
+d'époque `(N, authority, ttl_s)` — `epoch0.json` ci-dessus n'en est que le
+premier. Sans renouvellement, le bail expire à `ttl_s` et la cellule cesse
+de servir (`epoch-unavailable`, fail-closed) : jamais de mécanisme
+« automatique » qui prolongerait un bail sans repasser par le quorum — ce
+serait autoriser une autorité à se maintenir elle-même, exactement ce que
+le fencing (§7.2) existe pour empêcher.
+
+**Qui signe** : les MÊMES contrôleurs, le même trousseau, le même quorum
+m-of-n que la genèse — aucune nouvelle autorité introduite. **Quel
+quorum** : celui déjà configuré (`TBP_QUORUM_MIN` / manifest de
+contrôleurs), jamais un paramètre séparé. **À quelle fréquence** :
+décision opérationnelle de l'opérateur (humaine ou scriptée côté
+surveillance), jamais automatique côté `brokerd` — surveiller
+`GET /v1/supervision/epoch` (champ `expires_at`) et renouveler avant
+expiration, avec la même marge que pour toute rotation manuelle (§7.2).
+
+```sh
+# Sur la machine qui détient les clés de contrôleurs (même custody que la
+# genèse — jamais sur la cellule elle-même) :
+./genesis renew -m 2 -n 3 -out out
+#   -authority <cellule>   optionnel : vide = même autorité (renouvellement
+#                          pur) ; différente = bascule volontaire, même
+#                          mécanisme
+#   -ttl <secondes>        optionnel, défaut 60 (§7.2 : 10-300 s)
+#   -prev <fichier>        optionnel, défaut out/epoch0.json au premier
+#                          renouvellement ; passer le epoch-N.json produit
+#                          par le renouvellement précédent ensuite
+
+# Sur (ou via un accès administratif à) la cellule qui fait tourner brokerd,
+# plan d'ADMINISTRATION (revue #95) — l'accès au socket EST le contrôle
+# d'accès :
+curl --unix-socket "$TBP_BROKER_ADMIN_SOCKET" \
+     -X POST --data-binary @out/epoch-1.json \
+     http://localhost/v1/epoch/renew
+```
+
+`POST /v1/epoch/renew` n'ajoute aucune logique de fencing : il expose
+l'admission déjà exercée par `tracker.Accept` au démarrage (`epoch0.json`)
+comme opération d'administration — même vérification stricte (forme, TTL
+borné, signatures m-of-n distinctes, monotonie de N, anti-équivoque), même
+feuille `KindEpoch` tracée. Un jeton insuffisamment signé ou mal formé est
+refusé (400) sans toucher à l'époque servie ; en mode mono-cellule (#97,
+aucun tracker), l'appel est refusé honnêtement (409) plutôt que de simuler
+un bail inexistant.
+
 ## Dépendances
 
 - Go ≥ 1.23, CGO
