@@ -1,12 +1,22 @@
 #!/bin/sh
-# test_eap_tls.sh — validation RÉELLE du critère d'acceptation T18 (#18) :
+# test_eap_tls.sh — validation RÉELLE du critère d'acceptation T18 (#18) et
+# de la révocation sans redémarrage (issue #130) :
 # FreeRADIUS + eapol_test (802.1X/EAP-TLS sans switch, le lab T19 viendra).
 #
 #   1. certificat de la PKI du handshake (§3) → Access-Accept ;
 #   2. certificat d'une PKI ÉTRANGÈRE → Access-Reject (vers VLAN captif,
 #      côté switch — ici on prouve le Reject) ;
-#   3. certificat RÉVOQUÉ (CRL, check_crl=yes) → Access-Reject ;
+#   3. certificat RÉVOQUÉ → Access-Reject, vérifié EN DIRECT par OCSP
+#      (ocsp_responder.sh) SANS jamais redémarrer FreeRADIUS (issue #130 :
+#      avant ce correctif, seule une CRL relue au redémarrage rendait la
+#      révocation effective — ce test prouve maintenant qu'aucun
+#      redémarrage de FreeRADIUS n'a lieu entre l'admission et le refus) ;
 #   4. enrôlement et révocation ont chacun leur feuille (§4.1, hash-only §6.2).
+#
+# La configuration FreeRADIUS exercée ici est produite par render_config.sh
+# (config/freeradius/scripts/) — le MÊME script que celui destiné à un
+# déploiement réel (T19/T20) : tester ce fichier, c'est tester la
+# configuration livrée, pas une logique parallèle inventée pour le test.
 #
 # Variables d'environnement :
 #   TBP_FREERADIUS        binaire freeradius (requis)
@@ -32,7 +42,7 @@ done
 [ -d "$RADDB_SRC" ] || { echo "erreur: raddb stock introuvable: $RADDB_SRC" >&2; exit 2; }
 
 WORK=$(mktemp -d /tmp/tbp_t18_test.XXXXXX)
-trap 'kill $(cat "$WORK/freeradius.pid" 2>/dev/null) 2>/dev/null || true; [ -n "${TBP_TEST_KEEP:-}" ] && { echo "WORK conservé: $WORK"; exit 0; }; rm -rf "$WORK"' EXIT
+trap 'kill $(cat "$WORK/freeradius.pid" 2>/dev/null) 2>/dev/null || true; sh "$SCRIPT_DIR/ocsp_responder.sh" stop "$WORK/pki" 2>/dev/null || true; [ -n "${TBP_TEST_KEEP:-}" ] && { echo "WORK conservé: $WORK"; exit 0; }; rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
 
@@ -66,29 +76,14 @@ openssl x509 -req -in "$WORK/foreign/rogue.csr" -CA "$WORK/foreign/ca.crt" \
 	-out "$WORK/foreign/rogue.crt" 2>/dev/null
 ok "PKI étrangère générée (certificat « rogue » valide mais hors PKI)"
 
-# --- 2. Configuration FreeRADIUS de test (fixture — la config de production
-#        reste à T19/T20 ; on part de l'arbre stock ajusté) ------------------
+# --- 2. Configuration FreeRADIUS RÉELLE (render_config.sh — le MÊME
+#        chemin de code qu'un déploiement T19/T20, pas une logique de
+#        test séparée), plus le répondeur OCSP live (issue #130) ---------
+OCSP_PORT=${TBP_OCSP_PORT:-18999}
 CONF="$WORK/raddb"
-cp -a "$RADDB_SRC" "$CONF"
-chmod -R u+w "$CONF"
-# un arbre issu de « dpkg -x » n'a pas les symlinks créés par postinst :
-# recréer l'ensemble de modules/sites par défaut de Debian
-for m in always attr_filter cache_eap chap date detail detail.log digest \
-		dynamic_clients eap echo exec expiration expr files linelog \
-		logintime mschap ntlm_auth pap passwd preprocess radutmp realm \
-		replicate sradutmp totp unix unpack utf8; do
-	[ -e "$CONF/mods-available/$m" ] && \
-		ln -sf "../mods-available/$m" "$CONF/mods-enabled/$m" || true
-done
-for s in default inner-tunnel; do
-	[ -e "$CONF/sites-available/$s" ] && \
-		ln -sf "../sites-available/$s" "$CONF/sites-enabled/$s" || true
-done
-mkdir -p "$CONF/certs" "$WORK/log" "$WORK/var/run/freeradius"
-# certificats : serveur RADIUS (profil nac-server), CA+CRL combinés
-install -m 0400 "$PKI/certs/radius.key" "$CONF/certs/server.key"
-install -m 0444 "$PKI/certs/radius.crt" "$CONF/certs/server.pem"
-cat "$PKI/ca/ca.crt" "$PKI/crl/ca.crl" > "$CONF/certs/ca.pem"
+sh "$SCRIPT_DIR/render_config.sh" "$RADDB_SRC" "$CONF" "$PKI" "http://127.0.0.1:$OCSP_PORT/" >/dev/null \
+	|| fail "render_config.sh"
+mkdir -p "$WORK/log" "$WORK/var/run/freeradius"
 
 sed -i \
 	-e "s|^[[:space:]]*user = .*|\tuser = $(id -un)|" \
@@ -101,15 +96,7 @@ sed -i \
 [ -n "${TBP_FREERADIUS_PREFIX:-}" ] && \
 	sed -i "s|^prefix = .*|prefix = $TBP_FREERADIUS_PREFIX|" "$CONF/radiusd.conf"
 
-# module eap : TLS seul (une seule voie d'authentification, §1), CA du
-# handshake, vérification CRL
-sed -i \
-	-e "s|private_key_file = .*|private_key_file = \${certdir}/server.key|" \
-	-e "s|certificate_file = .*|certificate_file = \${certdir}/server.pem|" \
-	-e "s|ca_file = .*|ca_file = \${certdir}/ca.pem|" \
-	-e "s|^[[:space:]#]*check_crl = .*|\t\tcheck_crl = yes|" \
-	-e "s|default_eap_type = md5|default_eap_type = tls|" \
-	"$CONF/mods-available/eap"
+sh "$SCRIPT_DIR/ocsp_responder.sh" start "$PKI" "$OCSP_PORT" >/dev/null || fail "ocsp_responder.sh start"
 
 start_radius() {
 	# pas de -i/-p : les sections « listen » du site default héritent du
@@ -168,24 +155,28 @@ else
 	ok "CRITÈRE: certificat de PKI étrangère → Access-Reject (vers VLAN captif côté switch)"
 fi
 
-# --- 4. révocation : CRL régénérée, serveur rechargé, accès refusé ----------
+# --- 4. révocation SANS redémarrage de FreeRADIUS (issue #130) --------------
+# revoke_client.sh régénère la CRL sur disque (défense en profondeur, relue
+# au prochain redémarrage naturel) ET recharge le répondeur OCSP en direct
+# (ocsp_responder.sh restart — un processus léger, sans rapport avec
+# FreeRADIUS). FreeRADIUS n'est JAMAIS arrêté ni relancé dans ce scénario :
+# c'est précisément le comportement que #130 réclamait.
+FR_PID_BEFORE_REVOKE=$(cat "$WORK/freeradius.pid")
 sh "$SCRIPT_DIR/revoke_client.sh" endpoint-ok >/dev/null || fail "revoke endpoint-ok"
 grep -q '"action":"revocation"' "$PKI/leaves.jsonl" \
 	|| fail "pas de feuille revocation"
 ok "révocation endpoint-ok + feuille registre"
 
-cat "$PKI/ca/ca.crt" "$PKI/crl/ca.crl" > "$CONF/certs/ca.pem"
-stop_radius
-start_radius
-sleep 0.3
+kill -0 "$FR_PID_BEFORE_REVOKE" 2>/dev/null \
+	|| fail "FreeRADIUS ne tourne plus après la révocation — ce scénario doit prouver qu'aucun redémarrage n'est nécessaire"
 if "$EAPOL" -c "$WORK/eapol-endpoint-ok.conf" -a 127.0.0.1 -p "$PORT" \
 		-s testing123 > "$WORK/eapol-revoked.log" 2>&1 && \
 	grep -q "SUCCESS" "$WORK/eapol-revoked.log"; then
-	fail "certificat RÉVOQUÉ encore accepté (CRL non effective)"
+	fail "certificat RÉVOQUÉ encore accepté (OCSP non effectif)"
 else
 	grep -q "FAILURE" "$WORK/eapol-revoked.log" \
 		|| fail "résultat inattendu après révocation — voir $WORK/eapol-revoked.log"
-	ok "CRITÈRE: certificat révoqué → Access-Reject (CRL effective)"
+	ok "CRITÈRE (issue #130): certificat révoqué → Access-Reject via OCSP live, SANS redémarrer FreeRADIUS (pid $FR_PID_BEFORE_REVOKE inchangé)"
 fi
 
 # double enrôlement : refus explicite (jamais silencieux)

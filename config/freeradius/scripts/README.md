@@ -9,7 +9,10 @@ l'admission réseau (802.1X/EAP-TLS) et l'attestation applicative des agents.
 |---|---|
 | `ca_dev.sh` | bootstrap de la CA X.509 Ed25519 de **DEV** ancrée sur l'identité du handshake. Idempotent. Produit CA + CRL initiale + certificat serveur RADIUS (profil `nac-server`) + `leaves.jsonl`. |
 | `enroll_client.sh <hostname>` | enrôle un endpoint : clé Ed25519, CSR, certificat profil `nac-client` (EKU `clientAuth`, SAN `DNS:<host>.<cell>` + `URI:host/<host>.<cell>`), déploiement `client.key`/`client.crt`/`ca.crt` + `wpa_supplicant.conf`. Refuse le double enrôlement (fail-closed, §1). Feuille `enrollment`. |
-| `revoke_client.sh <hostname>` | révoque le certificat, régénère la CRL et `crl/ca-with-crl.pem` (fichier combiné pour `ca_file` FreeRADIUS avec `check_crl = yes`). Idempotent (une révocation déjà faite régénère quand même la CRL). Feuille `revocation`. |
+| `revoke_client.sh <hostname>` | révoque le certificat, régénère la CRL et `crl/ca-with-crl.pem` (défense en profondeur). **Issue #130** : recharge aussi le répondeur OCSP en direct (`ocsp_responder.sh restart`, best-effort) et tente un CoA Disconnect (`disconnect_client.sh`, best-effort) — la révocation est effective sans jamais redémarrer FreeRADIUS. Idempotent. Feuille `revocation`. |
+| `ocsp_responder.sh {start\|restart\|stop}` | répondeur OCSP de DEV adossé à la base `openssl ca` de `ca_dev.sh` — issue #130 : c'est LUI qui se recharge à chaque révocation, jamais FreeRADIUS. Voir la limite documentée en tête du script (la base est chargée une fois par processus, d'où le `restart`). |
+| `disconnect_client.sh <hostname>` | CoA Disconnect-Request (RFC 5176) vers le NAS, best-effort — termine une session déjà établie avant la révocation. No-op silencieux si `TBP_NAC_COA_NAS` n'est pas défini (T19/T20). |
+| `render_config.sh <raddb_stock> <raddb_sortie> [pki] [url_ocsp]` | transforme un arbre FreeRADIUS **stock** (paquet réel, jamais dupliqué à la main) en configuration EAP-TLS déployable sur cette PKI — même chemin de code que `test_eap_tls.sh` valide et qu'un déploiement réel (T19/T20) applique. Voir `../README.md`. |
 | `test_eap_tls.sh` | validation RÉELLE : FreeRADIUS + `eapol_test` (paquets Debian épinglés). Voir ci-dessous. |
 
 ## Doctrine
@@ -25,9 +28,13 @@ l'admission réseau (802.1X/EAP-TLS) et l'attestation applicative des agents.
   SHA-256 du DER du certificat, numéro de série, opérateur, horodatage.
   Jamais le certificat complet ni la clé.
 - **Révocation → réseau** : §5.3 — un contrôle OCSP/CRL injoignable ne doit
-  JAMAIS ouvrir l'accès ; le supplicant part en VLAN de remediation. La CRL
-  n'est relue par FreeRADIUS qu'au (re)démarrage : en production, prévoir la
-  cadence de rechargement (ou OCSP) — testé ici par redémarrage explicite.
+  JAMAIS ouvrir l'accès ; le supplicant part en VLAN de remediation. Issue
+  #130 (corrigée) : la CRL seule n'était relue par FreeRADIUS qu'au
+  (re)démarrage — `render_config.sh` active désormais l'OCSP live
+  (vérifié à CHAQUE authentification) en plus de la CRL, et
+  `revoke_client.sh` recharge le répondeur OCSP automatiquement ; FreeRADIUS
+  lui-même n'est plus jamais redémarré pour qu'une révocation soit
+  effective. Testé ici sans redémarrage (voir §4).
 - **Pas de VLAN assigné par RADIUS en v1** (§5.3) : le serveur répond
   Access-Accept / Access-Reject ; la logique VLAN captif/remediation reste
   côté switch (T19).
@@ -45,13 +52,14 @@ TBP_EAPOL_TEST=/usr/bin/eapol_test \
 sh test_eap_tls.sh
 ```
 
-Critères vérifiés (critère d'acceptation de #18) :
+Critères vérifiés (critère d'acceptation de #18, plus #130) :
 
 1. certificat de la PKI du handshake → **Access-Accept** (EAP-TLS) ;
 2. certificat d'une PKI étrangère → **Access-Reject** (le VLAN captif est
    côté switch — ici on prouve le Reject) ;
-3. certificat révoqué (CRL, `check_crl = yes`) → **Access-Reject** après
-   rechargement de la CRL ;
+3. certificat révoqué → **Access-Reject** via OCSP live, **sans jamais
+   redémarrer FreeRADIUS** (issue #130 — le pid du serveur est vérifié
+   inchangé entre l'admission et le refus) ;
 4. enrôlement et révocation laissent chacun leur feuille (§4.1, §6.2) ;
 5. double enrôlement refusé explicitement (fail-closed, §1).
 

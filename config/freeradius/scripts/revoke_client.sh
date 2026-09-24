@@ -61,3 +61,21 @@ echo "  CRL régénérée: $PKI/crl/ca.crl (+ ca-with-crl.pem combiné)"
 echo "  feuille revocation → $PKI/leaves.jsonl"
 echo "  rappel §5.3 : OCSP/CRL injoignable ⇒ VLAN de remédiation avec"
 echo "  feedback, jamais de soft-fail aveugle (testé côté switch en T20)"
+
+# Issue #130 : rendre la révocation effective SANS jamais redémarrer
+# FreeRADIUS. Best-effort, seulement si un répondeur OCSP de CETTE PKI
+# tourne déjà (ocsp_responder.sh start l'aurait lancé) — un échec ici
+# n'est jamais bloquant, la CRL régénérée ci-dessus reste la défense en
+# profondeur (relue au prochain redémarrage de FreeRADIUS, comme avant).
+if [ -f "$PKI/ocsp.pid" ] && kill -0 "$(cat "$PKI/ocsp.pid")" 2>/dev/null; then
+	if sh "$SCRIPT_DIR/ocsp_responder.sh" restart "$PKI" >/dev/null; then
+		echo "  répondeur OCSP rechargé — effectif à la prochaine authentification (FreeRADIUS jamais redémarré)"
+	else
+		echo "  AVERTISSEMENT: rechargement du répondeur OCSP échoué — CRL seule en vigueur jusqu'au prochain redémarrage de FreeRADIUS" >&2
+	fi
+fi
+
+# Second mécanisme nommé par #130 (CoA RADIUS) : coupe une session DÉJÀ
+# établie avant la révocation — best-effort, no-op silencieux si aucun NAS
+# CoA n'est configuré (voir disconnect_client.sh).
+sh "$SCRIPT_DIR/disconnect_client.sh" "$HOST" || true

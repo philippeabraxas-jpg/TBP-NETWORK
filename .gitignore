@@ -11,6 +11,7 @@
 *_ed25519
 freeradius/certs/
 config/freeradius/certs/
+config/freeradius/clients.conf
 
 # Python (src/pep, src/telemetry, src/translator probables)
 __pycache__/

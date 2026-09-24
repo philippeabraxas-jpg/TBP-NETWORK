@@ -1,0 +1,39 @@
+# clients.conf.example — déclaration des switches/APs 802.1X du pilote
+# (spec §5.1, issue #130 : "le NAC reste une intention documentée, pas un
+# artefact déployable").
+#
+# À ADAPTER (D99), jamais à copier tel quel : un secret partagé par
+# switch, jamais un secret par défaut ou partagé entre plusieurs NAS.
+# Copier ce fichier vers <raddb>/clients.conf UNIQUEMENT après avoir
+# remplacé CHAQUE "changeme-*" par un secret généré (`radsecret`, ou
+# `openssl rand -base64 24`) — jamais commité, ce fichier final reste hors
+# du dépôt (voir .gitignore : config/freeradius/clients.conf lui-même,
+# distinct de ce .example, n'est pas suivi).
+#
+# Chaque secret vit UNIQUEMENT ici et sur SON switch — jamais partagé
+# entre plusieurs NAS (un secret compromis ne doit compromettre qu'un
+# seul point d'accès physique, pas tout le pilote).
+
+# Un client par switch/AP physique — jamais un bloc générique couvrant
+# tout un sous-réseau (§1 : jamais par confiance implicite de position
+# réseau, seulement par preuve — ici, la connaissance du secret).
+client switch-pilote-01 {
+	ipaddr = 192.0.2.10          # adresse de gestion RÉELLE du switch — à adapter
+	secret = changeme-switch-pilote-01
+
+	# Nom court utilisé par le switch comme "NAS-Identifier" (souvent son
+	# hostname côté switch) — à faire correspondre à sa config 802.1X.
+	shortname = switch-pilote-01
+
+	# CoA/Disconnect (RFC 5176, issue #130) : ce switch doit aussi être
+	# déclaré comme destinataire CoA côté FreeRADIUS pour que
+	# disconnect_client.sh puisse le joindre — voir home_server côté
+	# radiusd si un pool CoA dédié est nécessaire ; pour un pilote à un
+	# seul répondeur, l'adresse/port par défaut (1700/3799 selon le
+	# firmware du switch) suffit généralement.
+}
+
+# Ajouter un bloc "client <nom>" par switch/AP supplémentaire du pilote.
+# Ne PAS réactiver le "client localhost" du clients.conf stock en
+# production — un test local avec radtest devient alors indiscernable
+# d'un vrai NAS.
