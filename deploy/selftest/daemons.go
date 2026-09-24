@@ -465,6 +465,19 @@ func runDaemons(s *suite, cfg config) {
 		s.fail(phaseDaemons, "clés d'opérateurs", err)
 		return
 	}
+	// Registre d'agents (revue #125) : "agent-1" résolu classe W — même
+	// classe que l'intention de l'action de bout en bout déclarait déjà
+	// (class 2) avant #125 ; le registre la porte désormais de façon
+	// AUTORITAIRE, la déclaration de l'intention n'étant plus qu'une
+	// forme de compatibilité de schéma, jamais la source de la décision.
+	agentsPath := filepath.Join(base, "agents.json")
+	agentsJSON, _ := json.Marshal(map[string]map[string]any{
+		"agent-1": {"class": 2},
+	})
+	if err := os.WriteFile(agentsPath, agentsJSON, 0o600); err != nil {
+		s.fail(phaseDaemons, "registre d'agents", err)
+		return
+	}
 	cellsPath := filepath.Join(base, "cells.json")
 	cellsJSON, _ := json.Marshal(map[string]any{
 		"cells": []map[string]string{{
@@ -497,6 +510,7 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_QUORUM_MIN=2",
 		"TBP_CLUSTER_MEMBERS="+daemonsCellID+",cell-b",
 		"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
+		"TBP_AGENT_REGISTRY_FILE="+agentsPath,
 		"TBP_BROKER_SOCKET="+brokerSock,
 		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
 		// GET /v1/supervision/* n'est plus servi sur le plan de données

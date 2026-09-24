@@ -57,7 +57,8 @@ func newQuorumTestBroker(t *testing.T, opaURL string, tr Translator, epochs Epoc
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: tr, Issuer: issuer, Epochs: epochs, Quorum: quorum,
-		OnTrip: trips.trip,
+		Registry: permissiveAgentRegistry{},
+		OnTrip:   trips.trip,
 	})
 	if err != nil {
 		t.Fatalf("NewBroker: %v", err)

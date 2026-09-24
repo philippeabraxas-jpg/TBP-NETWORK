@@ -376,6 +376,20 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # mono-cellule mode (#97): no epoch
 #                                      # lease minted, epoch0.json not read
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
+#   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json  # security review #125:
+#                                      # JSON {"<subject>": {"class": 0..3,
+#                                      # "quota"?: {"max_volume",
+#                                      # "max_window_s"}}, …} — identity/
+#                                      # class/quota resolved from HERE,
+#                                      # never from the agent's own
+#                                      # declaration in its issuance
+#                                      # request. Same out-of-band custody
+#                                      # doctrine as TBP_OPERATOR_KEYS_FILE
+#                                      # above — no dev escape hatch; a
+#                                      # subject absent from this table is
+#                                      # refused (agent-unknown), and an
+#                                      # agent without a "quota" entry can
+#                                      # request no passport at all
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
 #                                      # (security review #95, finding

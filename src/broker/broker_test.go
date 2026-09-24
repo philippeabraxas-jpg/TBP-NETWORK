@@ -112,6 +112,20 @@ func (s failSigner) Sign([]byte) ([]byte, error) {
 
 func (s failSigner) Public() ed25519.PublicKey { return s.pub }
 
+// permissiveAgentRegistry résout TOUT subject en classe W avec un plafond
+// de quota généreux — fixture de test pour les chemins existants qui
+// exercent la chaîne OPA/quorum/contrat/enveloppe, pas la résolution
+// d'identité elle-même (revue #125 ; voir agent_registry_test.go pour les
+// tests dédiés à agent-unknown / agent-quota-forbidden / -exceeded).
+type permissiveAgentRegistry struct{}
+
+func (permissiveAgentRegistry) Resolve(_ string) (AgentRecord, bool) {
+	return AgentRecord{
+		Class: pep.DefaultClass,
+		Quota: &AgentQuotaPolicy{MaxVolume: 1 << 40, MaxWindowS: 1 << 32},
+	}, true
+}
+
 // opaServer simule un sidecar OPA : allow selon allowFn, délai selon delay.
 func opaServer(t *testing.T, allowFn func(input map[string]any) bool, delay time.Duration) *httptest.Server {
 	t.Helper()
@@ -187,6 +201,7 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 		Translator: tr,
 		Issuer:     issuer,
 		Epochs:     StaticEpoch(7),
+		Registry:   permissiveAgentRegistry{},
 		Quorum:     newTestQuorumGate(t, leaves),
 		OnTrip:     trips.trip,
 	})
@@ -358,6 +373,7 @@ func TestBrokerOptionsFailClosed(t *testing.T) {
 	full := BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: tr, Issuer: issuer, Epochs: StaticEpoch(1),
+		Registry: permissiveAgentRegistry{},
 		Envelope: env, Ledger: ledger,
 	}
 	if _, err := NewBroker(full); err != nil {
@@ -372,6 +388,7 @@ func TestBrokerOptionsFailClosed(t *testing.T) {
 		"traducteur absent":     func(o *BrokerOptions) { o.Translator = nil },
 		"émetteur absent":       func(o *BrokerOptions) { o.Issuer = nil },
 		"époques absentes":      func(o *BrokerOptions) { o.Epochs = nil },
+		"registre absent":       func(o *BrokerOptions) { o.Registry = nil },
 		"enveloppe sans ledger": func(o *BrokerOptions) { o.Ledger = nil },
 		"ledger sans enveloppe": func(o *BrokerOptions) { o.Envelope = nil },
 	}
@@ -500,6 +517,7 @@ func TestPassportOpensQuotaCounter(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -675,6 +693,7 @@ func TestSigningFailureDenies(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -730,6 +749,7 @@ func TestEnvelopeExceededDenies(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -798,6 +818,7 @@ func TestEnvelopeSaturationTrips(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -840,6 +861,7 @@ func TestEnvelopeFaultDeniesWithAlarm(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -975,6 +997,7 @@ func TestConcurrentBrokerNoOverIssue(t *testing.T) {
 	b, err := NewBroker(BrokerOptions{
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+		Registry: permissiveAgentRegistry{},
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger,
 	})
