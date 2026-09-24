@@ -255,6 +255,10 @@ func runMono(s *suite, cfg config) {
 		"TBP_KEYRING_FILE="+keyringPath,
 		"TBP_POLICY_ID="+hex.EncodeToString(policyID[:]),
 		"TBP_REGISTRY_DIR="+regDir,
+		// mono : aucun TBP_CELL_BROKER_SOCKET (scale 1, cellule unique) —
+		// TBP_TOPOLOGY=mono le déclare EXPLICITEMENT (issue #128), fail-closed
+		// depuis la revue post-#86 si les deux venaient à diverger.
+		"TBP_TOPOLOGY=mono",
 		"TBP_LISTEN_ADDR="+monoPEPDAddr,
 		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
 		// /healthz et /v1/mode ne sont plus servis sur le plan de données

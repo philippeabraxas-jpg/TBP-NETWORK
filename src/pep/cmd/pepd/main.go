@@ -66,12 +66,21 @@
 //	                   preuve de quorum : JSON {"kid_hex": "pubkey_ed25519_hex"},
 //	                   même format que TBP_KEYRING_FILE. Requis (fail-closed :
 //	                   sans lui, AUCUNE bascule de posture n'est possible).
-//	TBP_CELL_BROKER_SOCKET  optionnel — socket Unix du brokerd co-localisé
-//	                   (deploy/apercu.md : même rôle « Cell »), lu en direct
-//	                   pour l'époque VÉRIFIÉE (§7.2-§7.3, revue #90 point 2).
-//	                   Absent ⇒ FixedEpoch(0), choix EXPLICITE du scale 1
-//	                   (cellule unique, aucun fencing) — jamais un défaut
-//	                   silencieux.
+//	TBP_TOPOLOGY       "mono" ou "multi" — revue de sécurité post-#86
+//	                   (issue #128) : DOIT être déclaré, et DOIT être
+//	                   cohérent avec la présence/absence de
+//	                   TBP_CELL_BROKER_SOCKET ci-dessous (mono ⇒ absent,
+//	                   multi ⇒ présent) — sinon refus de démarrage. Avant
+//	                   #128, seule l'absence/présence du socket décidait
+//	                   silencieusement du scale : rien ne distinguait un
+//	                   scale 1 VOULU d'un scale 3 mal configuré (broker
+//	                   co-localisé oublié dans le déploiement).
+//	TBP_CELL_BROKER_SOCKET  socket Unix du brokerd co-localisé (deploy/
+//	                   apercu.md : même rôle « Cell »), lu en direct pour
+//	                   l'époque VÉRIFIÉE (§7.2-§7.3, revue #90 point 2).
+//	                   Requis SI TBP_TOPOLOGY=multi, doit être ABSENT si
+//	                   TBP_TOPOLOGY=mono. Absent (mono) ⇒ FixedEpoch(0) —
+//	                   cellule unique, aucun fencing.
 //	TBP_DURABILITY     modèle de durabilité du chemin de décision (T38,
 //	                   issue #71) : « async-bounded » (DÉFAUT — verdict à
 //	                   l'acceptation de la feuille, fenêtre d'opposabilité
@@ -214,6 +223,10 @@ func run() error {
 		return fmt.Errorf("TBP_QUORUM_KEYRING_FILE: %w", err)
 	}
 	durabilityAsync, durabilityWindow, err := durabilityFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	multiTopology, err := topologyFromEnv(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -386,13 +399,26 @@ func run() error {
 	go watchdog.Run(ctx) // poll ntp_adjtime toutes les secondes (défaut §6.2)
 
 	// Source d'époque (§7.2 — revue de sécurité #90, point 2) : jamais la
-	// requête (le champ a été retiré du protocole). TBP_CELL_BROKER_SOCKET
-	// absent ⇒ FixedEpoch(0), choix EXPLICITE du scale 1 (cellule unique,
-	// aucun fencing possible, donc rien à révoquer). Présent ⇒ lecture live
-	// de l'époque VÉRIFIÉE par le tracker de la cellule via le brokerd
-	// co-localisé (scale 3, §7.3), jamais un cache qui fige une demi-vérité.
+	// requête (le champ a été retiré du protocole). TBP_TOPOLOGY=mono ⇒
+	// FixedEpoch(0), choix EXPLICITE du scale 1 (cellule unique, aucun
+	// fencing possible, donc rien à révoquer). TBP_TOPOLOGY=multi ⇒
+	// lecture live de l'époque VÉRIFIÉE par le tracker de la cellule via
+	// le brokerd co-localisé (scale 3, §7.3), jamais un cache qui fige une
+	// demi-vérité. Revue de sécurité post-#86 (issue #128) : la cohérence
+	// entre TBP_TOPOLOGY et TBP_CELL_BROKER_SOCKET est vérifiée AVANT de
+	// choisir — un déploiement qui déclare multi sans configurer de socket
+	// (broker co-localisé oublié) ou mono en configurant quand même un
+	// socket (résidu de config) est un refus de démarrage, jamais un
+	// scale 1 silencieux.
+	brokerSocket := os.Getenv("TBP_CELL_BROKER_SOCKET")
+	switch {
+	case multiTopology && brokerSocket == "":
+		return errors.New("TBP_TOPOLOGY=multi requiert TBP_CELL_BROKER_SOCKET (issue #128) — un déploiement multi-cellules doit lire l'époque vérifiée du brokerd co-localisé")
+	case !multiTopology && brokerSocket != "":
+		return fmt.Errorf("TBP_TOPOLOGY=mono incompatible avec TBP_CELL_BROKER_SOCKET=%q (issue #128) — un scale 1 volontaire n'a pas de broker co-localisé à interroger", brokerSocket)
+	}
 	var epochs pep.EpochSource = pep.FixedEpoch(0)
-	if sock := os.Getenv("TBP_CELL_BROKER_SOCKET"); sock != "" {
+	if sock := brokerSocket; sock != "" {
 		src := newBrokerEpochSource(sock, nil)
 		probeCtx, cancel := context.WithTimeout(ctx, epochSourceHTTPTimeout)
 		err := src.Probe(probeCtx)
@@ -620,6 +646,22 @@ func durabilityFromEnv(getenv func(string) string) (async bool, window time.Dura
 		window = time.Duration(ms) * time.Millisecond
 	}
 	return async, window, nil
+}
+
+// topologyFromEnv résout TBP_TOPOLOGY (revue de sécurité post-#86, issue
+// #128). Fail-closed : requis, et toute valeur qui ne soit ni "mono" ni
+// "multi" est une erreur de démarrage — jamais un scale déduit
+// silencieusement d'un autre réglage (voir la vérification de cohérence
+// avec TBP_CELL_BROKER_SOCKET dans run()).
+func topologyFromEnv(getenv func(string) string) (multi bool, err error) {
+	switch t := getenv("TBP_TOPOLOGY"); t {
+	case "mono":
+		return false, nil
+	case "multi":
+		return true, nil
+	default:
+		return false, fmt.Errorf("TBP_TOPOLOGY requis, doit valoir mono|multi (issue #128), reçu %q", t)
+	}
 }
 
 // checkDevEscapeHatches ferme la revue de sécurité #113 : TBP_OPA_DISABLED_DEV_UNSAFE

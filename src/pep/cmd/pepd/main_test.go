@@ -91,6 +91,49 @@ func TestDurabilityFromEnvErrorMentionsVariable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// topologyFromEnv (revue de sécurité post-#86, issue #128) : TBP_TOPOLOGY
+// requis, fail-closed sur toute valeur qui ne soit ni "mono" ni "multi" —
+// jamais un scale déduit silencieusement d'un autre réglage.
+// ---------------------------------------------------------------------------
+
+func TestTopologyFromEnvRequired(t *testing.T) {
+	if _, err := topologyFromEnv(envOf(nil)); err == nil {
+		t.Fatal("TBP_TOPOLOGY absent: erreur attendue, obtenu nil")
+	}
+}
+
+func TestTopologyFromEnvValues(t *testing.T) {
+	cases := []struct {
+		value     string
+		wantMulti bool
+		wantErr   bool
+	}{
+		{"mono", false, false},
+		{"multi", true, false},
+		{"scale3", false, true},
+		{"MONO", false, true}, // casse non normalisée
+		{"", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			multi, err := topologyFromEnv(envOf(map[string]string{"TBP_TOPOLOGY": tc.value}))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("erreur attendue, obtenu nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("erreur inattendue: %v", err)
+			}
+			if multi != tc.wantMulti {
+				t.Fatalf("multi=%v, attendu %v", multi, tc.wantMulti)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // checkDevEscapeHatches (revue #113) : TBP_OPA_DISABLED_DEV_UNSAFE et
 // TBP_OPA_INSECURE_TCP_DEV exigent le sentinel devmode, indépendant du
 // fichier d'environnement qui les porte.
