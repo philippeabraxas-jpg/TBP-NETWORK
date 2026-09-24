@@ -6,20 +6,71 @@ only route is enrollment or the forced-broker path. **EAP-TLS must reuse
 the same PKI as the TBP handshake (§3)** — a single identity
 infrastructure, not two.
 
-## What's still missing here
+## What's delivered here (issue #130)
 
-No FreeRADIUS config is provided yet — this folder is an anchor point,
-not a ready-to-deploy setup. To produce before pilot P1 (§13):
+This folder is no longer just an anchor point: `scripts/render_config.sh`
+turns a STOCK FreeRADIUS install (the real package, any version — never a
+hand-duplicated copy of its config, which would drift) into a deployable
+EAP-TLS configuration on the pilot's PKI, and `clients.conf.example` is a
+real starting template for declaring switches/APs. Adapt, never copy
+as-is (D99):
 
-- `clients.conf`: declaring switches/APs as RADIUS clients (shared
-  secrets — never committed, see the root `.gitignore`).
-- `sites-available/tbp-eap-tls`: dedicated EAP-TLS site, certificates
-  issued by the same authority as the handshake (§3), a private CA
-  dedicated to the pilot, never FreeRADIUS's default test CA.
-- `mods-available/eap`: force `tls-config` onto the pilot's CA, disable
-  EAP methods other than TLS (no PEAP/MSCHAPv2 in parallel — a single
-  authentication path, consistent with the "never by name, always by
-  signature" doctrine, §1).
+```sh
+# 1. Bootstrap the pilot CA (or point at a real, HSM-backed one in prod —
+#    see scripts/README.md).
+sh scripts/ca_dev.sh
+
+# 2. Render the real FreeRADIUS config from the installed package —
+#    EAP-TLS only, this CA, OCSP live-checked (see below).
+sh scripts/render_config.sh /etc/freeradius/3.0 /etc/freeradius/3.0 \
+    certs/dev "http://<ocsp-host>:8888/"
+
+# 3. Adapt clients.conf (secrets per switch — never committed) and the
+#    switch-side VLAN policy (T20) — these stay specific to each
+#    deployment, never generated here.
+install -m 0640 clients.conf.example /etc/freeradius/3.0/clients.conf
+# … edit secrets, then:
+freeradius -XC   # configuration check before ever starting the service
+
+# 4. Start the OCSP responder (dev) BEFORE FreeRADIUS, or point at a
+#    real production responder — see "Revocation without a restart" below.
+sh scripts/ocsp_responder.sh start
+```
+
+`sites-available/tbp-eap-tls` is intentionally not shipped as a separate
+file: FreeRADIUS's stock `sites-available/default` already implements
+EAP-TLS admission once `render_config.sh` has forced TLS-only in the eap
+module — a dedicated site would duplicate it for no behavioral gain.
+Restricting the site itself (dropping non-EAP auth methods it doesn't
+need) is a T20 hardening step, tracked separately from this issue's two
+bugs.
+
+## Revocation without a restart (issue #130)
+
+Before this fix, a revoked certificate was only rejected once FreeRADIUS
+itself restarted (the CRL is loaded once, at startup) — a real gap: a
+freshly revoked endpoint kept re-authenticating successfully until an
+operator happened to restart the service. Two mechanisms now close it,
+without ever restarting FreeRADIUS itself:
+
+- **OCSP, checked live on every EAP-TLS handshake** (`render_config.sh`
+  enables `ocsp { enable = yes }` in the eap module, pointed at
+  `ocsp_responder.sh`). `revoke_client.sh` now reloads this responder
+  automatically after every revocation — reloading a small, stateless
+  helper process (well under a second) is not the same as restarting the
+  RADIUS service: FreeRADIUS keeps serving every other client throughout.
+  The CRL is still regenerated on every revocation too (defense in depth
+  for when OCSP is unreachable, §5.3: never a silent soft-fail there —
+  route to remediation).
+- **RADIUS CoA/Disconnect-Request** (`disconnect_client.sh`, RFC 5176),
+  best-effort: terminates a session that was already established *before*
+  the revocation. Requires a NAS with CoA enabled (T19/T20) — optional,
+  silently a no-op if `TBP_NAC_COA_NAS` is not configured.
+
+`scripts/test_eap_tls.sh` proves the OCSP path end to end against a real
+FreeRADIUS process: revoke, then re-authenticate with the same
+already-running server (its PID checked unchanged) and observe the
+Access-Reject.
 
 ## Critical configuration points (doctrine §5.3)
 

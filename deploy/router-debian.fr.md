@@ -95,8 +95,18 @@ certificats jamais commités : ils se génèrent pour CE déploiement.
 **Commande** :
 
 ```bash
-# À adapter : mods-enabled/eap (tls-config), clients.conf (switch),
-# sites-enabled/default. EAP-TLS uniquement — pas de PEAP/MSCHAP.
+CFG=config/freeradius   # à adapter si le dépôt est ailleurs
+# render_config.sh applique la surcouche EAP-TLS (cette CA, OCSP en
+# direct — issue #130) sur le paquet FreeRADIUS RÉELLEMENT installé —
+# jamais une config recopiée à la main, qui dériverait du paquet :
+sh "$CFG/scripts/render_config.sh" \
+    /etc/freeradius/3.0 /etc/freeradius/3.0 \
+    "$CFG/certs/dev" "http://127.0.0.1:8888/"
+# À adapter (D99, jamais généré ci-dessus) : clients.conf (secrets par
+# switch — partir de clients.conf.example), et la politique VLAN côté
+# switch (T20).
+install -m 0640 "$CFG/clients.conf.example" /etc/freeradius/3.0/clients.conf
+sh "$CFG/scripts/ocsp_responder.sh" start   # révocation en direct, issue #130
 freeradius -XC   # vérification de configuration
 systemctl start freeradius && ss -lunp | grep 1812
 ```
