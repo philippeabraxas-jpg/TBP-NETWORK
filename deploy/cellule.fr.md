@@ -181,6 +181,8 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   TBP_ISSUER_SEED_FILE=/etc/tbp/issuer.seed
 #   TBP_GENESIS_DIR=<GENESIS_HOME>
 #   TBP_QUORUM_MIN=2
+#   TBP_TOPOLOGY=multi  # "mono" ou "multi", requis et vérifié contre le
+#                       # nombre de membres ci-dessous (issue #128)
 #   TBP_CLUSTER_MEMBERS=cell-a,cell-b
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock

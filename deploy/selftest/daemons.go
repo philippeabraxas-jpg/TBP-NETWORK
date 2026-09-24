@@ -508,6 +508,7 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_ISSUER_SEED_FILE="+issuerSeedPath,
 		"TBP_GENESIS_DIR="+genesisDir,
 		"TBP_QUORUM_MIN=2",
+		"TBP_TOPOLOGY=multi", // 2 membres déclarés ci-dessous — cohérence vérifiée fail-closed (issue #128)
 		"TBP_CLUSTER_MEMBERS="+daemonsCellID+",cell-b",
 		"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
 		"TBP_AGENT_REGISTRY_FILE="+agentsPath,

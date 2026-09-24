@@ -81,14 +81,23 @@
 //	                        requis SEULEMENT si TBP_CLUSTER_MEMBERS porte
 //	                        ≥ 2 cellules (voir ci-dessous, issue #97)
 //	TBP_QUORUM_MIN          M du quorum M-of-N (défaut 2, ≤ N contrôleurs)
+//	TBP_TOPOLOGY            "mono" ou "multi" — revue de sécurité post-#86
+//	                        (issue #128) : DOIT être déclaré, et DOIT être
+//	                        cohérent avec le nombre de membres de
+//	                        TBP_CLUSTER_MEMBERS ci-dessous (mono ⇒
+//	                        exactement 1, multi ⇒ ≥ 2) — sinon refus de
+//	                        démarrage. Avant #128, le NOMBRE de membres
+//	                        décidait seul du scale : rien ne distinguait
+//	                        un scale 1 VOULU d'un scale ≥2 mal configuré
+//	                        (un membre oublié dans le roster).
 //	TBP_CLUSTER_MEMBERS     cellules autorisées à porter l'autorité,
 //	                        séparées par des virgules — DOIT contenir
-//	                        TBP_CELL_ID. Une SEULE cellule ⇒ mode
-//	                        mono-cellule (issue #97, décision actée pour
-//	                        #86) : aucun bail d'époque, aucun epoch0.json
-//	                        requis — le fencing (§7.2) n'a rien à
-//	                        arbitrer entre une cellule et elle-même. ≥ 2
-//	                        cellules ⇒ fencing complet, epoch0.json requis
+//	                        TBP_CELL_ID. mono (une SEULE cellule, issue
+//	                        #97, décision actée pour #86) : aucun bail
+//	                        d'époque, aucun epoch0.json requis — le
+//	                        fencing (§7.2) n'a rien à arbitrer entre une
+//	                        cellule et elle-même. multi (≥ 2 cellules) ⇒
+//	                        fencing complet, epoch0.json requis
 //	TBP_OPERATOR_KEYS_FILE  JSON ["pubkey_ed25519_hex", …] ≥ 1 — clés
 //	                        d'opérateurs du store de contrats (T30)
 //	TBP_AGENT_REGISTRY_FILE JSON {"<subject>": {"class": 0..3,
@@ -211,6 +220,7 @@ type config struct {
 	issuerPKCS11PINFile  string
 	genesisDir           string
 	quorumMin            int
+	topology             bool // true = multi (issue #128) ; cohérent avec len(members), vérifié dans loadConfig
 	members              []string
 	operatorKeysFile     string
 	agentRegistryFile    string // registre d'agents (revue #125) : identité/classe/quota
@@ -338,6 +348,22 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	if !seen[cellID] {
 		return nil, fmt.Errorf("TBP_CELL_ID %q absent de TBP_CLUSTER_MEMBERS — une cellule hors roster ne peut pas servir (§7.2)", cellID)
 	}
+	// TBP_TOPOLOGY (revue de sécurité post-#86, issue #128) : avant #128,
+	// le NOMBRE de membres décidait seul du mode mono/multi-cellule — rien
+	// ne distinguait un scale 1 VOULU (une seule cellule déclarée) d'un
+	// scale ≥2 mal configuré (un membre oublié dans le roster). L'opérateur
+	// doit désormais déclarer l'intention, et une incohérence entre cette
+	// déclaration et TBP_CLUSTER_MEMBERS est un refus de démarrage.
+	multiTopology, err := topologyFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case multiTopology && len(members) < 2:
+		return nil, fmt.Errorf("TBP_TOPOLOGY=multi mais TBP_CLUSTER_MEMBERS ne porte qu'une cellule (%q) — incohérent (issue #128) : un membre manquant dans le roster tomberait sinon silencieusement en mode mono-cellule", members[0])
+	case !multiTopology && len(members) != 1:
+		return nil, fmt.Errorf("TBP_TOPOLOGY=mono mais TBP_CLUSTER_MEMBERS porte %d cellules — incohérent (issue #128) : un scale 1 volontaire ne doit lister qu'une seule cellule", len(members))
+	}
 	operatorKeysFile, err := envRequired(getenv, "TBP_OPERATOR_KEYS_FILE")
 	if err != nil {
 		return nil, err
@@ -391,6 +417,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		issuerPKCS11PINFile:  pkcs11PINFile,
 		genesisDir:           genesisDir,
 		quorumMin:            quorumMin,
+		topology:             multiTopology,
 		members:              members,
 		operatorKeysFile:     operatorKeysFile,
 		agentRegistryFile:    agentRegistryFile,
@@ -519,7 +546,8 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	// Avec UNE seule cellule dans TBP_CLUSTER_MEMBERS, ce conflit ne peut
 	// structurellement pas se produire : rien à arbitrer entre une
 	// cellule et elle-même. Mode mono-cellule (décision actée pour #86,
-	// correctif de la revue #97) : pas de tracker, pas d'epoch0 à
+	// correctif de la revue #97 ; déclaration EXPLICITE exigée par
+	// TBP_TOPOLOGY depuis la revue #128) : pas de tracker, pas d'epoch0 à
 	// importer, pas de bail à renouveler — donc rien qui expire. En
 	// scale ≥ 2 cellules, le fencing s'applique sans changement : le bail
 	// (10-300 s, §7.2) protège contre un split-brain réel, et son
@@ -529,9 +557,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	// de sécurité pour corriger un bug de disponibilité).
 	var tracker *cluster.Tracker
 	var epochs broker.EpochProvider
-	if len(cfg.members) == 1 {
+	if !cfg.topology {
 		epochs = broker.StaticEpoch(0)
-		log.Printf("brokerd: TBP_CLUSTER_MEMBERS ne porte que %s — mode mono-cellule (issue #97), aucun bail d'époque", cfg.cellID)
+		log.Printf("brokerd: TBP_TOPOLOGY=mono (%s) — aucun bail d'époque (issue #97)", cfg.cellID)
 	} else {
 		tracker, err = cluster.NewTracker(cluster.TrackerConfig{
 			CellID:      cfg.cellID,
@@ -895,6 +923,22 @@ func envRequired(getenv func(string) string, name string) (string, error) {
 		return "", fmt.Errorf("%s requis", name)
 	}
 	return v, nil
+}
+
+// topologyFromEnv résout TBP_TOPOLOGY (revue de sécurité post-#86, issue
+// #128). Fail-closed : requis, et toute valeur qui ne soit ni "mono" ni
+// "multi" est une erreur de démarrage — jamais un scale déduit
+// silencieusement du nombre de membres (voir la vérification de
+// cohérence avec TBP_CLUSTER_MEMBERS dans loadConfig).
+func topologyFromEnv(getenv func(string) string) (multi bool, err error) {
+	switch t := getenv("TBP_TOPOLOGY"); t {
+	case "mono":
+		return false, nil
+	case "multi":
+		return true, nil
+	default:
+		return false, fmt.Errorf("TBP_TOPOLOGY requis, doit valoir mono|multi (issue #128), reçu %q", t)
+	}
 }
 
 func envHex(getenv func(string) string, name string, minBytes int) ([]byte, error) {

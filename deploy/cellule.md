@@ -230,9 +230,19 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # public keys pinned (§12), same JSON
 #                                  # shape as TBP_KEYRING_FILE — required:
 #                                  # without it, NO posture switch is possible
-#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock  # optional (scale 3): live
-#                                  # VERIFIED epoch from the co-located
-#                                  # brokerd (step 7), §7.2-§7.3. Absent ⇒
+#   TBP_TOPOLOGY=multi              # "mono" or "multi" — security review
+#                                  # post-#86 (issue #128): REQUIRED, and
+#                                  # checked for consistency against
+#                                  # TBP_CELL_BROKER_SOCKET below (multi ⇒
+#                                  # present, mono ⇒ absent) — refuses to
+#                                  # start otherwise. "multi" here because
+#                                  # this example co-locates brokerd
+#                                  # (step 7); a standalone scale-1 pepd
+#                                  # uses "mono" and drops the line below.
+#   TBP_CELL_BROKER_SOCKET=/run/tbp/broker.sock  # required with
+#                                  # TBP_TOPOLOGY=multi: live VERIFIED
+#                                  # epoch from the co-located brokerd
+#                                  # (step 7), §7.2-§7.3. mono ⇒
 #                                  # FixedEpoch(0), the explicit scale-1
 #                                  # choice (single cell, no fencing)
 #   TBP_DURABILITY=async-bounded   # default (T38/#71): verdict at
@@ -304,11 +314,14 @@ regression security review #93 fixes — never work around it.
 #### Step 7 — Build and start brokerd (full decision chain, T37)
 
 **Verifiable prerequisite**: step 6 green; genesis manifest (step 1) in
-place under `$GENESIS_HOME` — `epoch0.json` too, UNLESS `TBP_CLUSTER_MEMBERS`
-below names a single cell (mono-cellule mode, security review #97: with one
-cell there is no authority conflict to fence against, so no epoch lease is
-minted or required — the two-cell example that follows still needs its
-`epoch0.json`); PUBLIC operator keys from the contract store installed
+place under `$GENESIS_HOME` — `epoch0.json` too, UNLESS `TBP_TOPOLOGY=mono`
+AND `TBP_CLUSTER_MEMBERS` below names a single cell (mono-cellule mode,
+security review #97: with one cell there is no authority conflict to fence
+against, so no epoch lease is minted or required — the two-cell example
+that follows declares `TBP_TOPOLOGY=multi` and still needs its
+`epoch0.json`; security review post-#86, issue #128: the two settings are
+checked for consistency, so declaring one without the matching other
+refuses to start); PUBLIC operator keys from the contract store installed
 (T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1); issuer custody provisioned —
 EITHER a DEV issuer seed at 0600 (P1 lab/CI only) OR a real HSM/SoftHSM2
 token with an Ed25519 key pair generated inside it and its PIN at 0600
@@ -372,9 +385,16 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   #                                    # over a persistent file like this
 #   TBP_GENESIS_DIR=<GENESIS_HOME>
 #   TBP_QUORUM_MIN=2
-#   TBP_CLUSTER_MEMBERS=cell-a,cell-b  # ONE cell here (e.g. "cell-a") ⇒
-#                                      # mono-cellule mode (#97): no epoch
-#                                      # lease minted, epoch0.json not read
+#   TBP_TOPOLOGY=multi                 # "mono" or "multi" — security review
+#                                      # post-#86 (issue #128): REQUIRED,
+#                                      # and checked for consistency
+#                                      # against the member count below
+#                                      # (mono ⇒ exactly one, multi ⇒ ≥ 2)
+#                                      # — refuses to start otherwise
+#   TBP_CLUSTER_MEMBERS=cell-a,cell-b  # ONE cell here (e.g. "cell-a", with
+#                                      # TBP_TOPOLOGY=mono) ⇒ mono-cellule
+#                                      # mode (#97): no epoch lease minted,
+#                                      # epoch0.json not read
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json  # security review #125:
 #                                      # JSON {"<subject>": {"class": 0..3,

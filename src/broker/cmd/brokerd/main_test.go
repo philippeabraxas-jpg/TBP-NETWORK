@@ -66,6 +66,7 @@ func validConfigEnv() map[string]string {
 		"TBP_TRANSLATOR":           "structured",
 		"TBP_ISSUER_SEED_FILE":     "/etc/tbp/issuer.seed",
 		"TBP_GENESIS_DIR":          "/etc/tbp/genesis",
+		"TBP_TOPOLOGY":             "multi",
 		"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 		"TBP_OPERATOR_KEYS_FILE":   "/etc/tbp/operators.json",
 		"TBP_AGENT_REGISTRY_FILE":  "/etc/tbp/agents.json",
@@ -157,6 +158,15 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		{"quorum_zero", func(e map[string]string) { e["TBP_QUORUM_MIN"] = "0" }, "TBP_QUORUM_MIN invalide"},
 		{"quorum_non_numerique", func(e map[string]string) { e["TBP_QUORUM_MIN"] = "deux" }, "TBP_QUORUM_MIN invalide"},
 		{"membres_absents", func(e map[string]string) { delete(e, "TBP_CLUSTER_MEMBERS") }, "TBP_CLUSTER_MEMBERS requis"},
+		{"topologie_absente", func(e map[string]string) { delete(e, "TBP_TOPOLOGY") }, "TBP_TOPOLOGY requis"},
+		{"topologie_invalide", func(e map[string]string) { e["TBP_TOPOLOGY"] = "scale3" }, "TBP_TOPOLOGY requis"},
+		{"topologie_mono_mais_multi_membres", func(e map[string]string) {
+			e["TBP_TOPOLOGY"] = "mono" // validConfigEnv liste cell-a,cell-b — incohérent (#128)
+		}, "incohérent (issue #128)"},
+		{"topologie_multi_mais_un_seul_membre", func(e map[string]string) {
+			e["TBP_TOPOLOGY"] = "multi"
+			e["TBP_CLUSTER_MEMBERS"] = "cell-a" // un seul membre sous multi déclaré — #128
+		}, "incohérent (issue #128)"},
 		{"cellule_hors_roster", func(e map[string]string) {
 			e["TBP_CLUSTER_MEMBERS"] = "cell-b,cell-c"
 		}, "absent de TBP_CLUSTER_MEMBERS"},
@@ -375,6 +385,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 			"TBP_TRANSLATOR":           "structured",
 			"TBP_ISSUER_SEED_FILE":     seedFile,
 			"TBP_GENESIS_DIR":          genDir,
+			"TBP_TOPOLOGY":             "multi",
 			"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 			"TBP_OPERATOR_KEYS_FILE":   opsFile,
 			"TBP_AGENT_REGISTRY_FILE":  agentsFile,
@@ -745,6 +756,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		"TBP_ISSUER_SEED_FILE":     seedFile,
 		"TBP_GENESIS_DIR":          genDir,
 		"TBP_QUORUM_MIN":           "1",
+		"TBP_TOPOLOGY":             "mono",
 		"TBP_CLUSTER_MEMBERS":      "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
 		"TBP_OPERATOR_KEYS_FILE":   opsFile,
 		"TBP_AGENT_REGISTRY_FILE":  agentsFile,
