@@ -86,6 +86,18 @@ func openCellFixture(t *testing.T, cellID string) *cellFixture {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", cellID, err)
 	}
+	// CI flake (issue #137) : sans ce Close, la goroutine de publication
+	// périodique de checkpoint du CellLog survit au retour du test — elle
+	// continue d'écrire dans dir APRÈS que le Cleanup de t.TempDir() l'ait
+	// supprimé ("no such file or directory" en boucle), et s'accumule au fil
+	// des tests de ce paquet (3 cellFixture par monitorFixture, des dizaines
+	// de tests) jusqu'à peser assez sur un runner CI chargé pour perturber
+	// des tests plus tardifs — jamais reproduit sur une machine peu chargée.
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = log.Close(closeCtx)
+	})
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		t.Fatalf("sel: %v", err)
