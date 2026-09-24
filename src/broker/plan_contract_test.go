@@ -85,6 +85,7 @@ func newContractBroker(t *testing.T, opaURL string, tr Translator, gate Contract
 		Translator: tr,
 		Issuer:     issuer,
 		Epochs:     StaticEpoch(7),
+		Registry:   permissiveAgentRegistry{},
 		Quorum:     newTestQuorumGate(t, leaves),
 		Contract:   gate,
 		OnTrip:     trips.trip,

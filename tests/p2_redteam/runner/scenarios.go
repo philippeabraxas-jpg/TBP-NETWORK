@@ -245,6 +245,10 @@ func scenarioBrokerFlood(ctx context.Context, cfg Config, sink *countingSink, sa
 		CellID: cfg.CellID, Salt: salt, Leaves: leafSink,
 		OPA: opa, Translator: broker.StructuredTranslator{},
 		Issuer: issuer, Epochs: broker.StaticEpoch(1),
+		// "michel" résolu classe Out (§125) : cette submersion teste la
+		// tenue sous charge, pas la classification — même classe que
+		// l'intention déclarait avant que le registre devienne autoritaire.
+		Registry: broker.StaticAgentRegistry{"michel": broker.AgentRecord{Class: pep.ClassOut}},
 	})
 	if err != nil {
 		return false, "", fmt.Errorf("broker: %w", err)
@@ -775,6 +779,10 @@ func scenarioTelemetryCut(ctx context.Context, cfg Config, sink *countingSink, s
 		OPA: opa, Translator: broker.StructuredTranslator{},
 		Issuer: issuer, Epochs: broker.StaticEpoch(7),
 		Quorum: gate,
+		// "admin-sous-pression" résolu classe W (§125) : le scénario teste
+		// précisément la coupure classe W (défaut §5.3 avant #125,
+		// désormais l'assignation explicite du registre).
+		Registry: broker.StaticAgentRegistry{"admin-sous-pression": broker.AgentRecord{Class: pep.ClassW}},
 	})
 	if err != nil {
 		return false, "", fmt.Errorf("broker: %w", err)

@@ -68,6 +68,7 @@ func validConfigEnv() map[string]string {
 		"TBP_GENESIS_DIR":          "/etc/tbp/genesis",
 		"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 		"TBP_OPERATOR_KEYS_FILE":   "/etc/tbp/operators.json",
+		"TBP_AGENT_REGISTRY_FILE":  "/etc/tbp/agents.json",
 	}
 }
 
@@ -166,6 +167,7 @@ func TestLoadConfigFailClosed(t *testing.T) {
 			e["TBP_CLUSTER_MEMBERS"] = "cell-a,,cell-b"
 		}, "membre vide ou en double"},
 		{"operateurs_absents", func(e map[string]string) { delete(e, "TBP_OPERATOR_KEYS_FILE") }, "TBP_OPERATOR_KEYS_FILE requis"},
+		{"registre_agents_absent", func(e map[string]string) { delete(e, "TBP_AGENT_REGISTRY_FILE") }, "TBP_AGENT_REGISTRY_FILE requis"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,11 +229,12 @@ func TestLoadConfigPKCS11NoDevFlagsNoSentinelRequired(t *testing.T) {
 // clés d'opérateurs) —
 
 type runFixture struct {
-	env       map[string]string
-	genDir    string
-	seedFile  string
-	opsFile   string
-	adminSock string
+	env        map[string]string
+	genDir     string
+	seedFile   string
+	opsFile    string
+	agentsFile string
+	adminSock  string
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -332,6 +335,21 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		t.Fatalf("operateurs: %v", err)
 	}
 
+	// Registre d'agents (revue #125) : "agent-1" résolu classe F — les
+	// requêtes de ce fichier déclaraient déjà "class":0 avant #125 ; le
+	// registre porte désormais la même classe, mais de façon AUTORITAIRE.
+	agentsFile := filepath.Join(dir, "agents.json")
+	agents, err := json.Marshal(map[string]agentRegistryEntry{
+		"agent-1": {Class: 0},
+		"agent-2": {Class: 0},
+	})
+	if err != nil {
+		t.Fatalf("registre d'agents: %v", err)
+	}
+	if err := os.WriteFile(agentsFile, agents, 0o600); err != nil {
+		t.Fatalf("registre d'agents: %v", err)
+	}
+
 	policy := make([]byte, 32)
 	salt := make([]byte, 16)
 	if _, err := rand.Read(policy); err != nil {
@@ -342,10 +360,11 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	}
 	adminSock := filepath.Join(dir, "broker-admin.sock")
 	return &runFixture{
-		genDir:    genDir,
-		seedFile:  seedFile,
-		opsFile:   opsFile,
-		adminSock: adminSock,
+		genDir:     genDir,
+		seedFile:   seedFile,
+		opsFile:    opsFile,
+		agentsFile: agentsFile,
+		adminSock:  adminSock,
 		env: map[string]string{
 			"TBP_CELL_ID":              "cell-a",
 			"TBP_SALT":                 hex.EncodeToString(salt),
@@ -358,6 +377,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 			"TBP_GENESIS_DIR":          genDir,
 			"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 			"TBP_OPERATOR_KEYS_FILE":   opsFile,
+			"TBP_AGENT_REGISTRY_FILE":  agentsFile,
 			"TBP_BROKER_SOCKET":        sock,
 			"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 		},
@@ -688,6 +708,11 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	if err := os.WriteFile(opsFile, ops, 0o600); err != nil {
 		t.Fatalf("operateurs: %v", err)
 	}
+	agentsFile := filepath.Join(dir, "agents.json")
+	agents, _ := json.Marshal(map[string]agentRegistryEntry{"agent-1": {Class: 0}})
+	if err := os.WriteFile(agentsFile, agents, 0o600); err != nil {
+		t.Fatalf("registre d'agents: %v", err)
+	}
 	policy, salt := make([]byte, 32), make([]byte, 16)
 	if _, err := rand.Read(policy); err != nil {
 		t.Fatalf("policy: %v", err)
@@ -722,6 +747,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		"TBP_QUORUM_MIN":           "1",
 		"TBP_CLUSTER_MEMBERS":      "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
 		"TBP_OPERATOR_KEYS_FILE":   opsFile,
+		"TBP_AGENT_REGISTRY_FILE":  agentsFile,
 		"TBP_BROKER_SOCKET":        sock,
 		"TBP_BROKER_ADMIN_SOCKET":  adminSock,
 	}

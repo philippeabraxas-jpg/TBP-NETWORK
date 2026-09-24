@@ -51,22 +51,25 @@ const maxPlanBindingBytes = 5 + 32 + 2 + pep.MaxPlanParamsBytes
 // issuance-failed et leaf-write-failed sont des FAUTES système (alarme
 // OnTrip, couture T14). Les raisons d'enveloppe sont celles d'envelope.go.
 const (
-	ReasonRequestInvalid     = "request-invalid"
-	ReasonEpochUnavailable   = "epoch-unavailable"
-	ReasonTranslationFailed  = "translation-failed"
-	ReasonQuorumRequired     = "quorum-required"
-	ReasonQuorumInsufficient = "quorum-insufficient"
-	ReasonPlanUnverified     = "plan-unverified" // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
-	ReasonPlanBindingInvalid = "plan-binding-invalid"
-	ReasonPlanUnknown        = "plan-unknown"
-	ReasonPlanPending        = "plan-pending"
-	ReasonPlanExpired        = "plan-expired"
-	ReasonPlanRevoked        = "plan-revoked"
-	ReasonPlanDeviation      = "plan-deviation"
-	ReasonPlanStoreFault     = "plan-store-fault" // FAUTE système (alarmée)
-	ReasonEnvelopeUnverified = "envelope-unverified"
-	ReasonEnvelopeSaturated  = "envelope-saturated"
-	ReasonIssuanceFailed     = "issuance-failed"
+	ReasonRequestInvalid      = "request-invalid"
+	ReasonAgentUnknown        = "agent-unknown"         // subject absent du registre (§125) — refus AVANT traduction
+	ReasonAgentQuotaForbidden = "agent-quota-forbidden" // passeport demandé, agent sans politique de quota (§125)
+	ReasonAgentQuotaExceeded  = "agent-quota-exceeded"  // volume/fenêtre demandés au-delà du plafond résolu (§125)
+	ReasonEpochUnavailable    = "epoch-unavailable"
+	ReasonTranslationFailed   = "translation-failed"
+	ReasonQuorumRequired      = "quorum-required"
+	ReasonQuorumInsufficient  = "quorum-insufficient"
+	ReasonPlanUnverified      = "plan-unverified" // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
+	ReasonPlanBindingInvalid  = "plan-binding-invalid"
+	ReasonPlanUnknown         = "plan-unknown"
+	ReasonPlanPending         = "plan-pending"
+	ReasonPlanExpired         = "plan-expired"
+	ReasonPlanRevoked         = "plan-revoked"
+	ReasonPlanDeviation       = "plan-deviation"
+	ReasonPlanStoreFault      = "plan-store-fault" // FAUTE système (alarmée)
+	ReasonEnvelopeUnverified  = "envelope-unverified"
+	ReasonEnvelopeSaturated   = "envelope-saturated"
+	ReasonIssuanceFailed      = "issuance-failed"
 )
 
 // Translation est l'action STRUCTURÉE produite par le traducteur (§4.5) —
@@ -269,6 +272,13 @@ type BrokerOptions struct {
 	// erreur de CurrentEpoch refuse la demande (epoch-unavailable, feuille
 	// + alarme) AVANT toute traduction : pas d'autorité, pas de service.
 	Epochs EpochProvider
+	// Registry est la couture de résolution d'identité d'agent (revue
+	// #125, agent_registry.go) : classe et quota d'un subject viennent
+	// D'ICI, jamais de la déclaration de l'agent dans la demande. Requis
+	// — un subject absent du registre est refusé (agent-unknown) AVANT
+	// même la traduction, même doctrine que l'époque (étape 1bis : pas
+	// d'identité résolue, pas de service).
+	Registry AgentRegistry
 	// Quorum est la couture de co-signature k-of-n de la classe W (§7.5,
 	// T29 — cluster.QuorumGate). Optionnelle, mais fail-closed dès
 	// qu'elle s'applique : toute demande classée W (claim −4=W OU absent,
@@ -306,6 +316,7 @@ type Broker struct {
 	translator Translator
 	issuer     *Issuer
 	epochs     EpochProvider
+	registry   AgentRegistry
 	quorum     QuorumGate
 	contract   ContractGate
 	envelope   *HTTPEnvelopeEvaluator
@@ -324,6 +335,7 @@ type BrokerStats struct {
 	Allows              uint64 // jetons/passeports émis
 	Denies              uint64 // refus (toutes étapes)
 	TranslationFailures uint64 // « je ne sais pas traduire » (§4.5)
+	AgentDenies         uint64 // identité inconnue ou quota hors plafond résolu (§125)
 	EnvelopeEvals       uint64 // évaluations d'enveloppe (§4.1-bis)
 	EnvelopeDenies      uint64 // refus d'enveloppe (agrégat plein)
 	QuorumDenies        uint64 // refus de quorum classe W (§7.5)
@@ -356,6 +368,9 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 	if opts.Epochs == nil {
 		return nil, errors.New("broker: couture d'époque requise (§7.2 : révocation = nouvelle époque)")
 	}
+	if opts.Registry == nil {
+		return nil, errors.New("broker: registre d'agents requis (§125 : identité/classe/quota résolues par le broker, jamais déclarées par l'agent)")
+	}
 	if (opts.Envelope == nil) != (opts.Ledger == nil) {
 		return nil, errors.New("broker: évaluateur et ledger d'enveloppe requis ENSEMBLE (§4.1-bis : l'état sans la règle, ou la règle sans l'état, ne ferment rien)")
 	}
@@ -373,6 +388,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		translator: opts.Translator,
 		issuer:     opts.Issuer,
 		epochs:     opts.Epochs,
+		registry:   opts.Registry,
 		quorum:     opts.Quorum,
 		contract:   opts.Contract,
 		envelope:   opts.Envelope,
@@ -416,6 +432,20 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		return b.deny(ctx, [16]byte{}, ReasonRequestInvalid, nil)
 	}
 
+	// Étape 1bis — résolution d'identité (revue #125) : le subject
+	// n'entre dans la chaîne que s'il est CONNU du registre — jamais un
+	// privilège par défaut pour une identité non provisionnée. Comme
+	// l'entrée mal formée ci-dessus, ce refus trace avec l'identifiant
+	// nul : pas encore d'identité résolue, pas de jti (même doctrine que
+	// « pas d'autorité, pas de service » de l'étape époque plus bas).
+	agent, known := b.registry.Resolve(subject)
+	if !known {
+		b.mu.Lock()
+		b.stats.AgentDenies++
+		b.mu.Unlock()
+		return b.deny(ctx, [16]byte{}, ReasonAgentUnknown, nil)
+	}
+
 	// Étape 2 — jti tiré AVANT l'évaluation OPA : la feuille de décision
 	// (T11) et le jeton émis portent le même identifiant (§4.3 — chaque
 	// feuille d'exécution porte le jti).
@@ -447,11 +477,14 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 
 	// Étape 5 — évaluation OPA via le client T11 : fail-closed,
 	// circuit-breaker 5 ms et feuille « TBPD1 » sont hérités — le broker
-	// n'y touche pas (D34 : on réutilise, on ne réécrit pas).
-	class := pep.DefaultClass // claim −4 absent ⇒ W (§5.3)
-	if tr.Class != nil {
-		class = *tr.Class
-	}
+	// n'y touche pas (D34 : on réutilise, on ne réécrit pas). La classe
+	// vient du registre résolu à l'étape 1bis, JAMAIS de tr.Class : un
+	// traducteur structuré typé la déclaration de classe de l'agent
+	// (structuredIntent.Class) sans jamais l'authentifier — c'est
+	// exactement le trou de la revue #125. tr.Class reste analysé par le
+	// traducteur (compat de forme du schéma), mais n'influence plus
+	// aucune décision ici.
+	class := agent.Class
 	dec := b.opa.Eval(ctx, pep.OPAInput{
 		JTI:      jti,
 		Subject:  subject,
@@ -528,6 +561,25 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 	// passeports. Réservation pessimiste AVANT l'appel OPA (envelope.go) ;
 	// libérée sur tout refus ou échec aval.
 	if tr.Quota != nil {
+		// Étape 7bis — plafond de quota résolu (revue #125) : le volume et
+		// la fenêtre demandés restent une PROPOSITION de l'agent
+		// (Translation.Quota) — jamais accordée telle quelle. Un agent
+		// sans politique de quota au registre ne peut demander AUCUN
+		// passeport ; un dépassement du plafond résolu est un refus,
+		// jamais un plafonnement silencieux (§1). Placé AVANT toute
+		// réservation d'enveloppe : un dépassement ne consomme rien.
+		if agent.Quota == nil {
+			b.mu.Lock()
+			b.stats.AgentDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonAgentQuotaForbidden, &dec)
+		}
+		if tr.Quota.VolumeMax > agent.Quota.MaxVolume || tr.Quota.WindowS > agent.Quota.MaxWindowS {
+			b.mu.Lock()
+			b.stats.AgentDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonAgentQuotaExceeded, &dec)
+		}
 		if b.envelope == nil || b.ledger == nil {
 			// Config « actions simples uniquement » : tout passeport est
 			// refusé — même doctrine que quota-unverified (T9).
@@ -566,7 +618,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		Subject:    subject,
 		Action:     tr.Action,
 		Resource:   tr.Resource,
-		Class:      tr.Class,
+		Class:      &class, // classe résolue par le registre (§125) — jamais tr.Class
 		ObjectSeal: tr.ObjectSeal,
 		Quota:      tr.Quota,
 		PlanSeal:   planSeal,

@@ -91,6 +91,14 @@
 //	                        cellules ⇒ fencing complet, epoch0.json requis
 //	TBP_OPERATOR_KEYS_FILE  JSON ["pubkey_ed25519_hex", …] ≥ 1 — clés
 //	                        d'opérateurs du store de contrats (T30)
+//	TBP_AGENT_REGISTRY_FILE JSON {"<subject>": {"class": 0..3,
+//	                        "quota"?: {"max_volume", "max_window_s"}}, …}
+//	                        ≥ 1 — registre d'agents (revue de sécurité
+//	                        #125) : identité/classe/quota résolues D'ICI,
+//	                        jamais depuis la déclaration de l'agent dans
+//	                        sa demande d'émission. Provisionné hors-bande,
+//	                        même doctrine que TBP_OPERATOR_KEYS_FILE
+//	                        ci-dessus — pas d'échappatoire dev.
 //	TBP_ENVELOPE_ENDPOINT   optionnel — règle d'enveloppe §4.1-bis ;
 //	                        absent ⇒ toute demande de passeport refusée
 //	                        (envelope-unverified, doctrine existante)
@@ -185,6 +193,7 @@ type config struct {
 	quorumMin            int
 	members              []string
 	operatorKeysFile     string
+	agentRegistryFile    string // registre d'agents (revue #125) : identité/classe/quota
 	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
 	socketPath           string // plan de données : POST /v1/actions
 	adminSocketPath      string // plan d'administration (revue #95) : GET /v1/supervision/*
@@ -302,6 +311,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	if err != nil {
 		return nil, err
 	}
+	agentRegistryFile, err := envRequired(getenv, "TBP_AGENT_REGISTRY_FILE")
+	if err != nil {
+		return nil, err
+	}
 	socketPath := getenv("TBP_BROKER_SOCKET")
 	if socketPath == "" {
 		socketPath = defaultBrokerSocket
@@ -329,6 +342,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		quorumMin:            quorumMin,
 		members:              members,
 		operatorKeysFile:     operatorKeysFile,
+		agentRegistryFile:    agentRegistryFile,
 		envelopeEndpoint:     getenv("TBP_ENVELOPE_ENDPOINT"),
 		socketPath:           socketPath,
 		adminSocketPath:      adminSocketPath,
@@ -504,6 +518,14 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err != nil {
 		return err
 	}
+
+	// Registre d'agents (revue de sécurité #125) : identité/classe/quota
+	// résolues depuis une source hors-bande — même doctrine que les clés
+	// d'opérateurs ci-dessus, jamais depuis la demande d'émission elle-même.
+	agentRegistry, err := loadAgentRegistry(cfg.agentRegistryFile)
+	if err != nil {
+		return err
+	}
 	contracts, err := pep.NewContractStore(pep.ContractOptions{
 		CellID:       cfg.cellID,
 		PolicyID:     cfg.policyID,
@@ -565,6 +587,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		Translator: broker.StructuredTranslator{},
 		Issuer:     issuer,
 		Epochs:     epochs,
+		Registry:   agentRegistry,
 		Quorum:     quorumGate,
 		Contract:   contracts,
 		Envelope:   envelope,
@@ -863,6 +886,56 @@ func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
 		keys = append(keys, ed25519.PublicKey(pub))
 	}
 	return keys, nil
+}
+
+// agentRegistryEntry est la forme JSON d'un enregistrement du registre
+// d'agents (revue de sécurité #125) : la classe PLAFOND de l'agent et,
+// optionnellement, son plafond de quota. Quota absent ⇒ cet agent ne peut
+// demander AUCUN passeport (agent-quota-forbidden) — seules les actions
+// simples lui sont ouvertes.
+type agentRegistryEntry struct {
+	Class uint8 `json:"class"`
+	Quota *struct {
+		MaxVolume  uint64 `json:"max_volume"`
+		MaxWindowS uint64 `json:"max_window_s"`
+	} `json:"quota,omitempty"`
+}
+
+// loadAgentRegistry charge le registre d'agents (revue de sécurité #125) :
+// JSON {"<subject>": {"class": 0..3, "quota"?: {"max_volume", "max_window_s"}}, …},
+// ≥ 1 agent — même doctrine hors-bande que loadOperatorKeys ci-dessus :
+// provisionné à la genèse, jamais résolu dynamiquement, jamais accepté
+// depuis la demande d'émission elle-même.
+func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("registre d'agents: %w", err)
+	}
+	var raw map[string]agentRegistryEntry
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("registre d'agents JSON: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("registre d'agents : table vide — au moins un agent provisionné requis (§125)")
+	}
+	reg := make(broker.StaticAgentRegistry, len(raw))
+	for subject, entry := range raw {
+		if subject == "" {
+			return nil, errors.New("registre d'agents : subject vide refusé")
+		}
+		if entry.Class > uint8(pep.ClassOut) {
+			return nil, fmt.Errorf("registre d'agents : agent %q classe %d hors [0..3] (§5.3)", subject, entry.Class)
+		}
+		rec := broker.AgentRecord{Class: pep.Class(entry.Class)}
+		if entry.Quota != nil {
+			rec.Quota = &broker.AgentQuotaPolicy{
+				MaxVolume:  entry.Quota.MaxVolume,
+				MaxWindowS: entry.Quota.MaxWindowS,
+			}
+		}
+		reg[subject] = rec
+	}
+	return reg, nil
 }
 
 // loadIssuer construit l'émetteur — EXACTEMENT un des deux mécanismes de
