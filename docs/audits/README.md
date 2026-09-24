@@ -9,3 +9,6 @@ If the source documents for these audits exist, drop them here
 (`gemini-v1.1.md`, `deepseek-v1.2.md`, `claude-v1.3.md`, one per audit) so
 the spec's changelog can point to them precisely instead of summarizing
 from memory.
+
+`issue-86-analyse.md` : synthèse versionnée de la revue post-#86
+(issues #105-#114) — voir #131.
