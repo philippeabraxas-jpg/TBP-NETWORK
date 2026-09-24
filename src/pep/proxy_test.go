@@ -60,7 +60,7 @@ func TestBlockingProxyForwardsOnAllowMonitor(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	p := newProxyFixture(t, f, backend.URL)
+	p := newProxyFixture(t, f, backend.URL, func(po *ProxyOptions) { po.ExposeDecisionHeaders = true })
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, nominalClaims())))
 
@@ -75,6 +75,31 @@ func TestBlockingProxyForwardsOnAllowMonitor(t *testing.T) {
 	}
 	if rec.Header().Get("X-TBP-Mode") != "monitor" {
 		t.Fatalf("X-TBP-Mode=%q, veut monitor", rec.Header().Get("X-TBP-Mode"))
+	}
+}
+
+// TestBlockingProxyHidesDecisionHeadersByDefault : #127 — un appelant
+// (potentiellement l'agent surveillé lui-même) ne doit JAMAIS apprendre la
+// posture exacte ni le code machine du refus par défaut ; ces en-têtes
+// restent réservés au débogage explicite (ExposeDecisionHeaders).
+func TestBlockingProxyHidesDecisionHeadersByDefault(t *testing.T) {
+	f := newListenerFixture(t, false)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	claims := nominalClaims()
+	claims.action = "write.delete" // portée invalide ⇒ deny
+	p := newProxyFixture(t, f, backend.URL)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, claims)))
+
+	if mode := rec.Header().Get("X-TBP-Mode"); mode != "" {
+		t.Fatalf("X-TBP-Mode=%q, veut absent par défaut (#127 — oracle de refus)", mode)
+	}
+	if reason := rec.Header().Get("X-TBP-Reason"); reason != "" {
+		t.Fatalf("X-TBP-Reason=%q, veut absent par défaut (#127 — oracle de refus)", reason)
 	}
 }
 
@@ -93,7 +118,7 @@ func TestBlockingProxyMonitorForwardsEvenDeny(t *testing.T) {
 
 	claims := nominalClaims()
 	claims.action = "write.delete" // portée invalide ⇒ deny scope-mismatch
-	p := newProxyFixture(t, f, backend.URL)
+	p := newProxyFixture(t, f, backend.URL, func(po *ProxyOptions) { po.ExposeDecisionHeaders = true })
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, bearerReq(t, http.MethodGet, "/docs/42", mintToken(t, claims)))
 
@@ -101,7 +126,7 @@ func TestBlockingProxyMonitorForwardsEvenDeny(t *testing.T) {
 		t.Fatalf("hits=%d, veut 1 (monitor: deny quand même transmis — log only, §5.3)", hits)
 	}
 	if rec.Header().Get("X-TBP-Reason") == "" {
-		t.Fatal("X-TBP-Reason absent — la raison du deny devrait être exposée même en monitor")
+		t.Fatal("X-TBP-Reason absent — la raison du deny devrait être exposée quand ExposeDecisionHeaders=true, même en monitor")
 	}
 }
 
@@ -471,7 +496,10 @@ func TestBlockingProxyEndToEndBodySealBlocksTamperedAmount(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	p := newProxyFixture(t, f, backend.URL, func(po *ProxyOptions) { po.DeriveRequest = nil }) // defaultDeriveRequest réel
+	p := newProxyFixture(t, f, backend.URL, func(po *ProxyOptions) {
+		po.DeriveRequest = nil // defaultDeriveRequest réel
+		po.ExposeDecisionHeaders = true
+	})
 
 	// Le montant EXACT couvert par le sceau : autorisé, transmis.
 	rec := httptest.NewRecorder()

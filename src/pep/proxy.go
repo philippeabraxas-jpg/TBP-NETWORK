@@ -53,6 +53,18 @@ package pep
 //     qui transmet lui-même le trafic réel, décompte désormais un
 //     quantum PAR REQUÊTE avant de transmettre — jamais laissé à la
 //     discrétion de qui que ce soit côté appelant.
+//   - #127 : X-TBP-Mode/X-TBP-Reason étaient posés sur CHAQUE réponse,
+//     y compris celles renvoyées à l'appelant — potentiellement l'agent
+//     surveillé lui-même. Un appelant adverse qui sonde ces en-têtes
+//     apprend la posture exacte de la cellule et le code machine précis
+//     de chaque refus (scope-mismatch, quota-saturated, opa-deny, …), un
+//     oracle qui l'aide à affiner ses tentatives. Le verdict complet est
+//     déjà tracé de façon infalsifiable dans le registre chaîné
+//     (Validate/Eval écrivent leur propre feuille) — l'appelant n'a donc
+//     jamais BESOIN de ces en-têtes pour que la décision soit auditable.
+//     Ils ne sont plus posés par défaut ; ProxyOptions.ExposeDecisionHeaders
+//     les réactive explicitement pour un usage de débogage légitime
+//     (lab, dev) — jamais le défaut en déploiement réel.
 //
 // Honnêteté d'intégration (même doctrine que le commentaire de
 // listener.go) : defaultDeriveRequest est une HEURISTIQUE GÉNÉRIQUE
@@ -129,18 +141,28 @@ type ProxyOptions struct {
 	// politique, qui a sa propre feuille via evaluate(). Nil ⇒
 	// log.Printf.
 	OnProxyError func(err error, req *http.Request)
+	// ExposeDecisionHeaders pose X-TBP-Mode/X-TBP-Reason sur la réponse
+	// renvoyée à l'APPELANT (revue de sécurité #127) — false par défaut.
+	// L'appelant est potentiellement l'agent surveillé lui-même : lui
+	// exposer la posture exacte et le code machine du refus lui donne un
+	// oracle pour affiner ses tentatives, alors que le verdict complet
+	// est déjà tracé de façon infalsifiable dans le registre chaîné
+	// (Validate/Eval, indépendamment de cette option). À réserver au
+	// débogage en lab/dev — jamais activé par défaut en déploiement réel.
+	ExposeDecisionHeaders bool
 }
 
 // BlockingProxy est le proxy bloquant. Sûr pour un usage concurrent
 // (délègue à *Listener, déjà concurrent-safe, et à
 // httputil.ReverseProxy, documenté concurrent-safe).
 type BlockingProxy struct {
-	listener      *Listener
-	backend       *url.URL
-	rp            *httputil.ReverseProxy
-	deriveRequest func(*http.Request) (Request, error)
-	tokenFrom     func(*http.Request) (string, error)
-	tokenHeader   string
+	listener              *Listener
+	backend               *url.URL
+	rp                    *httputil.ReverseProxy
+	deriveRequest         func(*http.Request) (Request, error)
+	tokenFrom             func(*http.Request) (string, error)
+	tokenHeader           string
+	exposeDecisionHeaders bool
 }
 
 // NewBlockingProxy construit le proxy. Fail-closed : listener et backend
@@ -176,12 +198,13 @@ func NewBlockingProxy(opts ProxyOptions) (*BlockingProxy, error) {
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	return &BlockingProxy{
-		listener:      opts.Listener,
-		backend:       opts.Backend,
-		rp:            rp,
-		deriveRequest: deriveRequest,
-		tokenFrom:     tokenFrom,
-		tokenHeader:   tokenHeader,
+		listener:              opts.Listener,
+		backend:               opts.Backend,
+		rp:                    rp,
+		deriveRequest:         deriveRequest,
+		tokenFrom:             tokenFrom,
+		tokenHeader:           tokenHeader,
+		exposeDecisionHeaders: opts.ExposeDecisionHeaders,
 	}, nil
 }
 
@@ -214,8 +237,13 @@ func (p *BlockingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := p.listener.evaluate(r.Context(), wire, req)
-	w.Header().Set("X-TBP-Mode", p.listener.mode.Mode().String())
-	w.Header().Set("X-TBP-Reason", out.Decision.Reason)
+	// #127 : jamais posés par défaut — voir ExposeDecisionHeaders et le
+	// commentaire d'en-tête de fichier. Le verdict est déjà tracé dans le
+	// registre chaîné indépendamment de ces en-têtes.
+	if p.exposeDecisionHeaders {
+		w.Header().Set("X-TBP-Mode", p.listener.mode.Mode().String())
+		w.Header().Set("X-TBP-Reason", out.Decision.Reason)
+	}
 	if !out.Forwarded {
 		http.Error(w, fmt.Sprintf("refusé par la politique (%s)", out.Decision.Reason), http.StatusForbidden)
 		return
