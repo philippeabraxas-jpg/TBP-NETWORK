@@ -11,13 +11,20 @@ package broker
 // séparée.
 //
 // AVERTISSEMENT D'HONNÊTETÉ (§5.3 : un trou non instrumenté est une
-// porte) : cette v1 n'implémente NI TLS NI authentification applicative.
-// Le broker est un composant INTERNE de la cellule (§7.1) : l'écoute par
-// défaut est un socket Unix local, et l'authentification des agents sur le
-// réseau relève du NAC/EAP-TLS (§5.1 — VLAN d'accès au broker) et de
-// l'exposition inter-cellules (T29/T35). Toute exposition TCP sans ces
-// couches est un choix de déploiement hors de ce fichier — et le README
-// le dit explicitement.
+// porte) : ce Server lui-même n'implémente NI TLS NI authentification
+// applicative — il sert du texte en clair sur le net.Listener qu'on lui
+// donne, quel qu'il soit. Le socket Unix par défaut (0660, utilisateur/
+// groupe tbp-broker) reste la forme d'exposition attendue pour un broker
+// INTERNE à la cellule (§7.1). Une exposition RÉSEAU n'est offerte que
+// par brokerd/cmd/brokerd (revue #124) : un net.Listener TLS mutuel
+// (TLS 1.3 minimum, ClientAuth: RequireAndVerifyClientCert) construit AU-
+// DESSUS de ce Server — jamais un TCP en clair, jamais un mode dégradé.
+// Cette authentification de TRANSPORT ne résout PAS pour autant l'identité
+// applicative de l'appelant (classe, quota) : brokerd fait aujourd'hui
+// encore confiance à la déclaration {subject, intent} du corps de requête
+// — voir #125. NAC/EAP-TLS (§5.1) et l'exposition inter-cellules
+// (T29/T35) restent des couches de déploiement séparées, hors de ce
+// fichier.
 //
 // Un deny n'est PAS une erreur HTTP : une demande bien formée qui reçoit
 // un refus obtient 200 avec {"allow": false, "reason": …} — le refus est

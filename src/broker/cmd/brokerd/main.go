@@ -109,6 +109,24 @@
 //	                        arbitration} — défaut /run/tbp/broker-admin.sock.
 //	                        Socket SÉPARÉ du plan de données, jamais
 //	                        multiplexé dessus.
+//	Transport réseau du plan de données (revue de sécurité #124) —
+//	optionnel, absent par défaut (Unix uniquement, comportement
+//	historique) ; si l'un des quatre champs suivants est présent, les
+//	QUATRE sont requis ENSEMBLE (net_tls.go) :
+//	TBP_BROKER_LISTEN_ADDR     adresse d'écoute réseau (ex. :8444) — un
+//	                        agent qui ne tourne pas sur la même machine que
+//	                        le broker en a besoin pour obtenir un jeton.
+//	TBP_BROKER_TLS_CERT_FILE, TBP_BROKER_TLS_KEY_FILE  certificat/clé
+//	                        serveur PEM.
+//	TBP_BROKER_TLS_CLIENT_CA_FILE  autorité de certification PEM des
+//	                        clients — mTLS exclusivement : un pair sans
+//	                        certificat, ou avec un certificat signé par
+//	                        une autre autorité, est rejeté à la poignée de
+//	                        main (TLS 1.3 minimum). Aucune échappatoire
+//	                        TCP en clair n'est offerte ici — contrairement
+//	                        à TBP_OPA_INSECURE_TCP_DEV, un plan de données
+//	                        qui émet des jetons de gouvernance n'a pas de
+//	                        variante dev/lab moins sûre.
 //
 // Doctrine §1 : le moindre défaut de configuration est FATAL au démarrage
 // — un broker à moitié configuré émettrait des décisions à moitié
@@ -118,12 +136,14 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -197,6 +217,17 @@ type config struct {
 	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
 	socketPath           string // plan de données : POST /v1/actions
 	adminSocketPath      string // plan d'administration (revue #95) : GET /v1/supervision/*
+	// Transport réseau du plan de données (revue de sécurité #124) :
+	// optionnel — "" ⇒ Unix uniquement (comportement historique, valeur
+	// par défaut). Si netListenAddr est non vide, les trois champs TLS
+	// suivants sont TOUS requis ensemble : mTLS est la SEULE forme
+	// d'exposition réseau offerte, jamais un TCP en clair (§12/§95 :
+	// même doctrine de transport authentifié que le socket Unix+SO_PEERCRED
+	// d'OPA, §92.A3 — ici la preuve d'identité est le certificat client).
+	netListenAddr      string
+	netTLSCertFile     string
+	netTLSKeyFile      string
+	netTLSClientCAFile string
 }
 
 // loadConfig lit et valide TOUTE la configuration — la moindre pièce
@@ -323,6 +354,26 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	if adminSocketPath == "" {
 		adminSocketPath = defaultBrokerAdminSocket
 	}
+	// Transport réseau du plan de données (revue #124) : optionnel, mais
+	// EXACTEMENT « absent » ou « les quatre présents ensemble » — jamais
+	// une adresse d'écoute sans mTLS pleinement configuré, jamais un
+	// certificat orphelin sans adresse. Aucune échappatoire TCP en clair
+	// n'est offerte ici (contrairement à TBP_OPA_INSECURE_TCP_DEV) : le
+	// plan de données du broker émet des jetons de gouvernance, jamais
+	// exposable sans authentification mutuelle.
+	netListenAddr := getenv("TBP_BROKER_LISTEN_ADDR")
+	netTLSCertFile := getenv("TBP_BROKER_TLS_CERT_FILE")
+	netTLSKeyFile := getenv("TBP_BROKER_TLS_KEY_FILE")
+	netTLSClientCAFile := getenv("TBP_BROKER_TLS_CLIENT_CA_FILE")
+	switch {
+	case netListenAddr == "" && netTLSCertFile == "" && netTLSKeyFile == "" && netTLSClientCAFile == "":
+		// Écoute réseau désactivée — Unix uniquement, comportement historique.
+	case netListenAddr != "" && netTLSCertFile != "" && netTLSKeyFile != "" && netTLSClientCAFile != "":
+		// Configuration complète — validée plus loin (chargement réel des
+		// fichiers) au moment de construire le listener.
+	default:
+		return nil, errors.New("TBP_BROKER_LISTEN_ADDR, TBP_BROKER_TLS_CERT_FILE, TBP_BROKER_TLS_KEY_FILE et TBP_BROKER_TLS_CLIENT_CA_FILE sont requis ENSEMBLE (revue de sécurité #124) — l'écoute réseau est mTLS ou absente, jamais partiellement configurée")
+	}
 	return &config{
 		cellID:               cellID,
 		salt:                 salt,
@@ -346,6 +397,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		envelopeEndpoint:     getenv("TBP_ENVELOPE_ENDPOINT"),
 		socketPath:           socketPath,
 		adminSocketPath:      adminSocketPath,
+		netListenAddr:        netListenAddr,
+		netTLSCertFile:       netTLSCertFile,
+		netTLSKeyFile:        netTLSKeyFile,
+		netTLSClientCAFile:   netTLSClientCAFile,
 	}, nil
 }
 
@@ -662,6 +717,20 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err != nil {
 		return fmt.Errorf("plan d'administration: %w", err)
 	}
+	// Transport réseau optionnel du plan de données (revue #124) — mTLS
+	// exclusivement, voir net_tls.go. nil si TBP_BROKER_LISTEN_ADDR est
+	// absent : le broker reste Unix-only, comportement historique.
+	var netLis net.Listener
+	if cfg.netListenAddr != "" {
+		tlsConfig, err := buildBrokerTLSConfig(cfg.netTLSCertFile, cfg.netTLSKeyFile, cfg.netTLSClientCAFile)
+		if err != nil {
+			return fmt.Errorf("plan de données réseau (mTLS, revue #124): %w", err)
+		}
+		netLis, err = tls.Listen("tcp", cfg.netListenAddr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("plan de données réseau (écoute %s): %w", cfg.netListenAddr, err)
+		}
+	}
 	httpSrv := &http.Server{Handler: dataMux, ReadHeaderTimeout: readHeaderTimeout}
 	adminSrv := &http.Server{Handler: adminMux, ReadHeaderTimeout: readHeaderTimeout}
 	go func() {
@@ -671,7 +740,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		// jeton, ou pire un jeton sans feuille.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		_ = httpSrv.Shutdown(shutdownCtx) // ferme AUSSI netLis (même *http.Server)
 		_ = adminSrv.Shutdown(shutdownCtx)
 	}()
 	epoch, authority := 0, cfg.cellID
@@ -686,12 +755,25 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	go func() {
 		adminErr <- adminSrv.Serve(adminLis)
 	}()
-	log.Printf("brokerd: cellule %s en écoute sur unix://%s (époque %d, autorité %s) ; administration sur unix://%s",
-		cfg.cellID, cfg.socketPath, epoch, authority, cfg.adminSocketPath)
+	netErr := make(chan error, 1)
+	if netLis != nil {
+		go func() {
+			netErr <- httpSrv.Serve(netLis)
+		}()
+		log.Printf("brokerd: cellule %s en écoute sur unix://%s ET mtls://%s (époque %d, autorité %s) ; administration sur unix://%s",
+			cfg.cellID, cfg.socketPath, cfg.netListenAddr, epoch, authority, cfg.adminSocketPath)
+	} else {
+		netErr <- nil
+		log.Printf("brokerd: cellule %s en écoute sur unix://%s (époque %d, autorité %s) ; administration sur unix://%s",
+			cfg.cellID, cfg.socketPath, epoch, authority, cfg.adminSocketPath)
+	}
 	if err := httpSrv.Serve(lis); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	if err := <-adminErr; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := <-netErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

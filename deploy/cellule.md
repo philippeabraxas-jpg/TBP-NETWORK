@@ -400,6 +400,27 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # #92, A5) — checked once,
 #                                      # SYNCHRONOUSLY, before brokerd
 #                                      # serves; a mismatch refuses to start
+#   # --- optional NETWORK listener for the data plane (security review
+#   # #124) — the Unix socket above (TBP_BROKER_SOCKET) keeps working
+#   # unmodified; these four are OFF by default (Unix-only) and, if used,
+#   # are required ALL FOUR TOGETHER — brokerd refuses to start on a
+#   # partial set. There is no plaintext TCP option: an unauthenticated
+#   # network listener would let an impostor occupying this address issue
+#   # tokens indistinguishably from the real broker (same class of fault
+#   # as #92.A3, on the issuing side this time) ---
+#   # TBP_BROKER_LISTEN_ADDR=0.0.0.0:8443
+#   # TBP_BROKER_TLS_CERT_FILE=/etc/tbp/broker-tls.pem     # server leaf
+#   # TBP_BROKER_TLS_KEY_FILE=/etc/tbp/broker-tls.key.pem  # 0600
+#   # TBP_BROKER_TLS_CLIENT_CA_FILE=/etc/tbp/broker-client-ca.pem
+#   #                                      # any peer without a certificate
+#   #                                      # signed by this CA is rejected at
+#   #                                      # the TLS handshake (TLS 1.3
+#   #                                      # minimum, mutual auth required) —
+#   #                                      # never reaches the application mux.
+#   #                                      # This authenticates the TRANSPORT
+#   #                                      # only: it does not yet resolve the
+#   #                                      # caller's application identity
+#   #                                      # (class, quota) — see #125.
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now tbp-brokerd
 curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/epoch
