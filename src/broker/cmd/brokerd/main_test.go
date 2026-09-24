@@ -20,12 +20,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -239,12 +241,13 @@ func TestLoadConfigPKCS11NoDevFlagsNoSentinelRequired(t *testing.T) {
 // clés d'opérateurs) —
 
 type runFixture struct {
-	env        map[string]string
-	genDir     string
-	seedFile   string
-	opsFile    string
-	agentsFile string
-	adminSock  string
+	env             map[string]string
+	genDir          string
+	seedFile        string
+	opsFile         string
+	agentsFile      string
+	adminSock       string
+	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -275,18 +278,13 @@ func mintManifest(t *testing.T, dir string, nKeys int) []ed25519.PrivateKey {
 	return privs
 }
 
-// mintGenesis écrit un manifest (nKeys contrôleurs, key_id 1-basé) et un
-// epoch0 signé par nSigs clés — exactement le format de scripts/genesis
-// (payload JSON à champs fixes, signature Ed25519 du payload seul).
-func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl int) {
+// signEpochPayload signe payload avec les nSigs premières clés de privs
+// (key_id 1-based, même convention que scripts/genesis) et rend le jeton
+// JSON prêt à passer à Tracker.Accept ou à poster sur /v1/epoch/renew
+// (issue #126) — le même format, que ce soit l'epoch0 de la genèse ou un
+// renouvellement ultérieur.
+func signEpochPayload(t *testing.T, privs []ed25519.PrivateKey, quorum, nSigs int, payload cluster.EpochPayload) []byte {
 	t.Helper()
-	privs := mintManifest(t, dir, nKeys)
-	payload := cluster.EpochPayload{
-		N:          0,
-		Authority:  authority,
-		IssuedAt:   time.Now().UTC().Format(time.RFC3339),
-		TTLSeconds: ttl,
-	}
 	canonical, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("payload: %v", err)
@@ -300,16 +298,37 @@ func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl 
 	}
 	token := cluster.EpochToken{
 		Payload:    payload,
-		Quorum:     fmt.Sprintf("%d-of-%d", quorum, nKeys),
+		Quorum:     fmt.Sprintf("%d-of-%d", quorum, len(privs)),
 		Signatures: sigs,
 	}
 	tok, err := json.Marshal(token)
 	if err != nil {
 		t.Fatalf("token: %v", err)
 	}
+	return tok
+}
+
+// mintGenesis écrit un manifest (nKeys contrôleurs, key_id 1-basé) et un
+// epoch0 signé par nSigs clés — exactement le format de scripts/genesis
+// (payload JSON à champs fixes, signature Ed25519 du payload seul). Rend
+// les clés privées des contrôleurs : le seul appelant qui en a besoin
+// (newRunFixture) les réutilise pour signer des renouvellements (#126)
+// avec les MÊMES contrôleurs que la genèse, comme un déploiement réel le
+// ferait (scripts/genesis renew).
+func mintGenesis(t *testing.T, dir, authority string, nKeys, quorum, nSigs, ttl int) []ed25519.PrivateKey {
+	t.Helper()
+	privs := mintManifest(t, dir, nKeys)
+	payload := cluster.EpochPayload{
+		N:          0,
+		Authority:  authority,
+		IssuedAt:   time.Now().UTC().Format(time.RFC3339),
+		TTLSeconds: ttl,
+	}
+	tok := signEpochPayload(t, privs, quorum, nSigs, payload)
 	if err := os.WriteFile(filepath.Join(dir, "epoch0.json"), tok, 0o600); err != nil {
 		t.Fatalf("epoch0: %v", err)
 	}
+	return privs
 }
 
 // newRunFixture prépare tous les fichiers d'une configuration runnable
@@ -321,7 +340,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	if err := os.MkdirAll(genDir, 0o700); err != nil {
 		t.Fatalf("genesis dir: %v", err)
 	}
-	mintGenesis(t, genDir, "cell-a", 3, 2, 2, 60)
+	controllerPrivs := mintGenesis(t, genDir, "cell-a", 3, 2, 2, 60)
 
 	seed := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(seed); err != nil {
@@ -370,11 +389,12 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	}
 	adminSock := filepath.Join(dir, "broker-admin.sock")
 	return &runFixture{
-		genDir:     genDir,
-		seedFile:   seedFile,
-		opsFile:    opsFile,
-		agentsFile: agentsFile,
-		adminSock:  adminSock,
+		genDir:          genDir,
+		seedFile:        seedFile,
+		opsFile:         opsFile,
+		agentsFile:      agentsFile,
+		adminSock:       adminSock,
+		controllerPrivs: controllerPrivs,
 		env: map[string]string{
 			"TBP_CELL_ID":              "cell-a",
 			"TBP_SALT":                 hex.EncodeToString(salt),
@@ -679,6 +699,98 @@ func TestBrokerdEndToEnd(t *testing.T) {
 	}
 }
 
+// TestBrokerdEpochRenewEndToEnd : POST /v1/epoch/renew (issue #126) admet
+// un NOUVEAU bail d'époque signé m-of-n par les MÊMES contrôleurs que la
+// genèse — même mécanisme que l'admission d'epoch0 au démarrage
+// (tracker.Accept), exposé comme opération d'administration pour qu'un
+// déploiement multi-cellules survive à l'expiration de son bail initial
+// sans jamais élargir le TTL pour compenser (#97 : ce serait une
+// régression de sécurité pour corriger un bug de disponibilité). Témoin
+// non-vacue : un jeton insuffisamment signé est refusé ET laisse l'époque
+// servie inchangée — jamais une bascule partielle.
+func TestBrokerdEpochRenewEndToEnd(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			fmt.Fprintf(w, `{"result":{"allow":true},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, fx.env["TBP_POLICY_ID"])
+			return
+		}
+		fmt.Fprint(w, `{"result":{"allow":true}}`)
+	}))
+	defer opa.Close()
+	fx.env["TBP_OPA_ENDPOINT"] = opa.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, mapGetenv(fx.env), statPresent) }()
+	waitSocket(t, sock)
+	waitSocket(t, fx.adminSock)
+	adminHC := unixClient(t, fx.adminSock)
+
+	var before epochView
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/epoch", &before)
+	if before.Epoch != 0 {
+		t.Fatalf("époque initiale = %d, veut 0", before.Epoch)
+	}
+
+	// Témoin : un jeton sous-signé (1 sur 2 requis, 2-of-3) est refusé ET
+	// laisse l'époque servie INCHANGÉE.
+	badTok := signEpochPayload(t, fx.controllerPrivs, 2, 1, cluster.EpochPayload{
+		N: 1, Authority: "cell-a",
+		IssuedAt: time.Now().UTC().Format(time.RFC3339), TTLSeconds: 60,
+	})
+	badResp, err := adminHC.Post("http://brokerd/v1/epoch/renew", "application/json", bytes.NewReader(badTok))
+	if err != nil {
+		t.Fatalf("POST /v1/epoch/renew (sous-signé): %v", err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("statut jeton sous-signé = %d, veut %d", badResp.StatusCode, http.StatusBadRequest)
+	}
+	var mid epochView
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/epoch", &mid)
+	if mid.Epoch != 0 {
+		t.Fatalf("époque après jeton refusé = %d, veut inchangée à 0", mid.Epoch)
+	}
+
+	// Renouvellement valide : 2-of-3, N=1, même autorité — exactement ce
+	// que produirait scripts/genesis renew en réel.
+	goodTok := signEpochPayload(t, fx.controllerPrivs, 2, 2, cluster.EpochPayload{
+		N: 1, Authority: "cell-a",
+		IssuedAt: time.Now().UTC().Format(time.RFC3339), TTLSeconds: 60,
+	})
+	goodResp, err := adminHC.Post("http://brokerd/v1/epoch/renew", "application/json", bytes.NewReader(goodTok))
+	if err != nil {
+		t.Fatalf("POST /v1/epoch/renew: %v", err)
+	}
+	defer goodResp.Body.Close()
+	if goodResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(goodResp.Body)
+		t.Fatalf("statut renouvellement = %d, veut 200 (%s)", goodResp.StatusCode, body)
+	}
+	var after epochView
+	if err := json.NewDecoder(goodResp.Body).Decode(&after); err != nil {
+		t.Fatalf("décodage réponse renouvellement: %v", err)
+	}
+	if after.Epoch != 1 || after.Authority != "cell-a" {
+		t.Fatalf("réponse de renouvellement = %+v, veut epoch=1 authority=cell-a", after)
+	}
+
+	var final epochView
+	getJSON(t, adminHC, "http://brokerd/v1/supervision/epoch", &final)
+	if final.Epoch != 1 {
+		t.Fatalf("époque servie après renouvellement = %d, veut 1", final.Epoch)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
 // TestBrokerdMonoCelluleNoEpochLease : revue de sécurité #97 (confirmée en
 // exécution contre le vrai binaire avant ce correctif : une cellule
 // s'arrêtait de servir au plus tard TTLSeconds après sa genèse, sans
@@ -802,6 +914,18 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	res = postAction(t, hc, "agent-1", `{"action":"read","resource":"doc-2","class":0}`)
 	if !res.Allow || res.Reason == "epoch-unavailable" {
 		t.Fatalf("action refusée après délai en mode mono-cellule: %+v", res)
+	}
+
+	// Issue #126 : mono-cellule n'a AUCUN tracker — un renouvellement doit
+	// être refusé honnêtement (409), jamais un 200 qui simulerait un bail
+	// inexistant (même doctrine que la vue GET ci-dessus).
+	renewResp, err := adminHC.Post("http://brokerd/v1/epoch/renew", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST /v1/epoch/renew: %v", err)
+	}
+	renewResp.Body.Close()
+	if renewResp.StatusCode != http.StatusConflict {
+		t.Fatalf("statut renouvellement en mono-cellule = %d, veut %d", renewResp.StatusCode, http.StatusConflict)
 	}
 
 	cancel()

@@ -107,6 +107,8 @@ func main() {
 		err = cmdAnchor(os.Args[2:])
 	case "verify":
 		err = cmdVerify(os.Args[2:])
+	case "renew":
+		err = cmdRenew(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -124,6 +126,8 @@ func usage() {
   sign    -m 2 -n 3 -authority <cellule> -module ... -pin ... -out <dir>
   anchor  -out <dir>
   verify  -m 2 -out <dir>
+  renew   -m 2 -n 3 [-authority <cellule>] [-ttl 60] [-prev <fichier>]
+          -module ... -pin ... -out <dir>
 
 `+softHSMWarning)
 }
@@ -446,6 +450,93 @@ func cmdSign(args []string) error {
 	}
 	fmt.Printf("epoch 0 signé (%s) → %s\n", token.Quorum, filepath.Join(*out, "epoch0.json"))
 	fmt.Println("⚠ " + softHSMWarning)
+	return nil
+}
+
+// cmdRenew signe un NOUVEAU jeton d'époque pour un déploiement DÉJÀ en
+// service (issue #126 : le renouvellement de bail pour les déploiements
+// multi-cellules n'avait jamais été tranché depuis #97). Même custody que
+// 'sign' — mêmes contrôleurs, mêmes clés HSM, quorum m-of-n identique — mais
+// N = (époque précédente + 1) au lieu de toujours 0, et l'autorité peut
+// rester la même (renouvellement pur) ou changer (bascule volontaire, même
+// mécanisme). La QUESTION « à quelle fréquence » reste, comme la genèse,
+// PROCÉDURALE et hors de ce programme : ce dernier signe sur demande, il ne
+// décide jamais seul quand renouveler — l'opérateur surveille le bail
+// courant (GET /v1/supervision/epoch, champ expires_at) et lance 'renew'
+// avant expiration. Voir deploy/cellule.md pour la procédure complète et
+// POST /v1/epoch/renew (brokerd, plan admin) pour l'appliquer.
+func cmdRenew(args []string) error {
+	fs, module, pin, out := newFlagSet()
+	m := fs.Int("m", 2, "quorum (m de m-of-n) — même trousseau que la genèse")
+	n := fs.Int("n", 3, "nombre total de contrôleurs")
+	authority := fs.String("authority", "", "cellule autorité du nouveau bail — vide = même que le jeton précédent (renouvellement pur), différente = bascule volontaire")
+	ttl := fs.Int("ttl", 60, "durée de vie du nouveau bail, en secondes (§7.2 : 10-300 s)")
+	prev := fs.String("prev", "", "jeton d'époque précédent — défaut <out>/epoch0.json (premier renouvellement) ; passer le dernier <out>/epoch-<N>.json produit par 'renew' pour les suivants")
+	fs.Parse(args)
+	if *m < 1 || *m > *n {
+		return fmt.Errorf("quorum invalide : m=%d, n=%d", *m, *n)
+	}
+
+	prevPath := *prev
+	if prevPath == "" {
+		prevPath = filepath.Join(*out, "epoch0.json")
+	}
+	prevBytes, err := os.ReadFile(prevPath)
+	if err != nil {
+		return fmt.Errorf("jeton précédent introuvable (%s) — -prev requis si ce n'est pas le premier renouvellement: %w", prevPath, err)
+	}
+	var prevTok EpochToken
+	if err := json.Unmarshal(prevBytes, &prevTok); err != nil {
+		return fmt.Errorf("jeton précédent illisible (%s): %w", prevPath, err)
+	}
+
+	auth := *authority
+	if auth == "" {
+		auth = prevTok.Payload.Authority
+	}
+
+	payload := EpochPayload{
+		N:          prevTok.Payload.N + 1,
+		Authority:  auth,
+		IssuedAt:   time.Now().UTC().Format(time.RFC3339),
+		TTLSeconds: *ttl,
+	}
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	h, err := openHSM(*module, *pin)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+
+	token := EpochToken{
+		Payload: payload,
+		Quorum:  fmt.Sprintf("%d-of-%d", *m, *n),
+		Warning: softHSMWarning,
+	}
+	for i := 1; i <= *m; i++ {
+		sig, err := h.sign(i, canonical)
+		if err != nil {
+			return err
+		}
+		token.Signatures = append(token.Signatures, Signature{KeyID: i, Sig: hex.EncodeToString(sig)})
+		fmt.Printf("signature %d/%d : contrôleur %d (clé restée dans le HSM)\n", i, *m, i)
+	}
+
+	data, err := json.MarshalIndent(token, "", "  ")
+	if err != nil {
+		return err
+	}
+	outFile := filepath.Join(*out, fmt.Sprintf("epoch-%d.json", payload.N))
+	if err := os.WriteFile(outFile, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("époque %d signée (%s), autorité %s → %s\n", payload.N, token.Quorum, auth, outFile)
+	fmt.Println("⚠ " + softHSMWarning)
+	fmt.Printf("à appliquer : curl --unix-socket <TBP_BROKER_ADMIN_SOCKET> -X POST --data-binary @%s http://localhost/v1/epoch/renew\n", outFile)
 	return nil
 }
 
