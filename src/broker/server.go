@@ -19,12 +19,17 @@ package broker
 // par brokerd/cmd/brokerd (revue #124) : un net.Listener TLS mutuel
 // (TLS 1.3 minimum, ClientAuth: RequireAndVerifyClientCert) construit AU-
 // DESSUS de ce Server — jamais un TCP en clair, jamais un mode dégradé.
-// Cette authentification de TRANSPORT ne résout PAS pour autant l'identité
-// applicative de l'appelant (classe, quota) : brokerd fait aujourd'hui
-// encore confiance à la déclaration {subject, intent} du corps de requête
-// — voir #125. NAC/EAP-TLS (§5.1) et l'exposition inter-cellules
-// (T29/T35) restent des couches de déploiement séparées, hors de ce
-// fichier.
+// Cette authentification de TRANSPORT résout désormais l'identité
+// applicative de l'appelant sur le chemin réseau : `handleAction` lit le
+// CN du certificat client vérifié (`peerCertCN`) et le fait vérifier par
+// le broker contre `AgentRecord.TransportIdentity` (revues #125/#162/
+// #163) — un subject dont l'identité de transport ne correspond pas est
+// refusé, jamais accepté sur la foi de sa seule déclaration. Le socket
+// Unix garde sa frontière à gros grain (§7.1, permissions 0660) : ce
+// fichier ne lui impose aucune liaison par identité, c'est un choix
+// documenté, pas un oubli. NAC/EAP-TLS (§5.1) et l'exposition
+// inter-cellules (T29/T35) restent des couches de déploiement séparées,
+// hors de ce fichier.
 //
 // Un deny n'est PAS une erreur HTTP : une demande bien formée qui reçoit
 // un refus obtient 200 avec {"allow": false, "reason": …} — le refus est
@@ -114,6 +119,20 @@ func NewServer(opts ServerOptions) (*Server, error) {
 // existant de la cellule).
 func (s *Server) Handler() http.Handler { return s.mux }
 
+// peerCertCN rend le CN du certificat client mTLS présenté sur CETTE
+// requête, ou "" si la requête n'arrive pas sur une connexion TLS (chemin
+// socket Unix — voir agent_registry.go pour la doctrine de frontière à
+// gros grain qui s'applique alors). r.TLS n'est jamais falsifiable par
+// l'appelant : c'est l'état de la connexion vérifiée par la stdlib au
+// moment de la poignée de main (ClientAuth: RequireAndVerifyClientCert,
+// revue #124), jamais une donnée relue depuis le corps de la requête.
+func peerCertCN(r *http.Request) string {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return ""
+	}
+	return r.TLS.PeerCertificates[0].Subject.CommonName
+}
+
 // handleAction reçoit une demande, la borne, la fait orchestrer et rend la
 // décision. Jamais de contenu métier dans les logs ni les feuilles (§6.2).
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +145,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := s.broker.HandleAction(r.Context(), req.Subject, req.Intent)
+	res := s.broker.HandleAction(r.Context(), req.Subject, req.Intent, peerCertCN(r))
 
 	resp := actionResponseJSON{
 		Allow:  res.Allow,

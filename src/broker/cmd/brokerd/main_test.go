@@ -367,9 +367,13 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	// Registre d'agents (revue #125) : "agent-1" résolu classe F — les
 	// requêtes de ce fichier déclaraient déjà "class":0 avant #125 ; le
 	// registre porte désormais la même classe, mais de façon AUTORITAIRE.
+	// "agent-1" porte aussi transport_identity="agent-test" (revue #163) :
+	// le CN du certificat client de test (brokerTLSFixture.clientCert,
+	// net_tls_test.go) — TestBrokerdNetworkMTLSEndToEnd déclare "agent-1"
+	// sur le plan de données RÉSEAU avec ce certificat précis.
 	agentsFile := filepath.Join(dir, "agents.json")
 	agents, err := json.Marshal(map[string]agentRegistryEntry{
-		"agent-1": {Class: 0},
+		"agent-1": {Class: 0, TransportIdentity: "agent-test"},
 		"agent-2": {Class: 0},
 	})
 	if err != nil {
