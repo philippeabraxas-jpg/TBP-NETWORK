@@ -56,6 +56,8 @@ const (
 	ReasonAgentQuotaForbidden   = "agent-quota-forbidden"   // passeport demandé, agent sans politique de quota (§125)
 	ReasonAgentQuotaExceeded    = "agent-quota-exceeded"    // volume/fenêtre demandés au-delà du plafond résolu (§125)
 	ReasonAgentTransportUnbound = "agent-transport-unbound" // subject réseau mTLS sans CN correspondant au registre (§162/§163)
+	ReasonSkillUnknown          = "skill-unknown"           // action sans skill correspondant au registre (catalogue #142-#161)
+	ReasonSkillScopeViolation   = "skill-scope-violation"   // action connue, ressource hors du périmètre déclaré du skill
 	ReasonEpochUnavailable      = "epoch-unavailable"
 	ReasonTranslationFailed     = "translation-failed"
 	ReasonQuorumRequired        = "quorum-required"
@@ -280,6 +282,14 @@ type BrokerOptions struct {
 	// même la traduction, même doctrine que l'époque (étape 1bis : pas
 	// d'identité résolue, pas de service).
 	Registry AgentRegistry
+	// Skills est la couture de résolution d'identité/périmètre de skill
+	// (skill_registry.go, catalogue de conformité #142-#161). Optionnelle,
+	// mais fail-closed dès qu'elle s'applique — même doctrine que Quorum/
+	// Contract/Envelope ci-dessous (jamais Registry/OPA/Issuer, qui restent
+	// fondationnels) : nil ⇒ aucune notion de skill, comportement historique
+	// inchangé — pas de régression pour les déploiements existants qui ne
+	// la configurent pas encore.
+	Skills SkillRegistry
 	// Quorum est la couture de co-signature k-of-n de la classe W (§7.5,
 	// T29 — cluster.QuorumGate). Optionnelle, mais fail-closed dès
 	// qu'elle s'applique : toute demande classée W (claim −4=W OU absent,
@@ -318,6 +328,7 @@ type Broker struct {
 	issuer     *Issuer
 	epochs     EpochProvider
 	registry   AgentRegistry
+	skills     SkillRegistry
 	quorum     QuorumGate
 	contract   ContractGate
 	envelope   *HTTPEnvelopeEvaluator
@@ -337,6 +348,7 @@ type BrokerStats struct {
 	Denies              uint64 // refus (toutes étapes)
 	TranslationFailures uint64 // « je ne sais pas traduire » (§4.5)
 	AgentDenies         uint64 // identité inconnue ou quota hors plafond résolu (§125)
+	SkillDenies         uint64 // skill inconnu ou ressource hors périmètre déclaré (catalogue #142-#161)
 	EnvelopeEvals       uint64 // évaluations d'enveloppe (§4.1-bis)
 	EnvelopeDenies      uint64 // refus d'enveloppe (agrégat plein)
 	QuorumDenies        uint64 // refus de quorum classe W (§7.5)
@@ -390,6 +402,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		issuer:     opts.Issuer,
 		epochs:     opts.Epochs,
 		registry:   opts.Registry,
+		skills:     opts.Skills,
 		quorum:     opts.Quorum,
 		contract:   opts.Contract,
 		envelope:   opts.Envelope,
@@ -505,6 +518,32 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 		b.stats.TranslationFailures++
 		b.mu.Unlock()
 		return b.deny(ctx, jti, ReasonTranslationFailed, nil)
+	}
+
+	// Étape 4bis — résolution du skill invoqué (catalogue de conformité
+	// #142-#161 : le trou « aucune notion de skill installable » confirmé
+	// sept fois par des référentiels indépendants). Optionnelle, fail-closed
+	// dès qu'elle s'applique — même doctrine que Quorum/Contract/Envelope,
+	// jamais Registry/OPA/Issuer (fondationnels). tr.Action EST le skill
+	// (§4.5 : « the executed action is the translated action ») : un agent
+	// ne peut jamais faire exister un skill non provisionné en le nommant
+	// simplement dans son intention, ni élargir le périmètre d'un skill
+	// existant — le registre est hors-bande, jamais résolu depuis la
+	// demande (voir skill_registry.go).
+	if b.skills != nil {
+		skill, known := b.skills.Resolve(tr.Action)
+		if !known {
+			b.mu.Lock()
+			b.stats.SkillDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonSkillUnknown, nil)
+		}
+		if !skill.allows(tr.Resource) {
+			b.mu.Lock()
+			b.stats.SkillDenies++
+			b.mu.Unlock()
+			return b.deny(ctx, jti, ReasonSkillScopeViolation, nil)
+		}
 	}
 
 	// Étape 5 — évaluation OPA via le client T11 : fail-closed,
