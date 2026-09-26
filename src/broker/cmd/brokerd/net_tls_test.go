@@ -95,8 +95,9 @@ type brokerTLSFixture struct {
 	caFile         string
 	serverCertFile string
 	serverKeyFile  string
-	clientCert     tls.Certificate // signé par la bonne CA
-	wrongCACert    tls.Certificate // signé par une AUTRE CA — doit être refusé
+	clientCert     tls.Certificate // signé par la bonne CA, CN "agent-test"
+	wrongCACert    tls.Certificate // signé par une AUTRE CA — doit être refusé à la poignée de main
+	otherValidCert tls.Certificate // signé par la BONNE CA, CN "agent-other" — poignée de main OK, mais ne doit jamais pouvoir se déclarer "agent-1" (revue #162/#163)
 }
 
 func newBrokerTLSFixture(t *testing.T) *brokerTLSFixture {
@@ -138,12 +139,30 @@ func newBrokerTLSFixture(t *testing.T) *brokerTLSFixture {
 		t.Fatalf("X509KeyPair (imposteur): %v", err)
 	}
 
+	// Autre agent LÉGITIME : signé par la BONNE CA (poignée de main
+	// acceptée), mais CN différent de "agent-test" — le témoin direct de
+	// la revue #162/#163 : une identité de transport authentifiée mais
+	// NON liée au subject déclaré doit être refusée par le broker
+	// lui-même, pas seulement par la vérification TLS.
+	_, otherKey, otherDER := genCert(t, "agent-other", false, caCert, caKey)
+	otherCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: otherDER})
+	otherKeyDER, err := x509.MarshalPKCS8PrivateKey(otherKey)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey (autre agent): %v", err)
+	}
+	otherKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: otherKeyDER})
+	otherCert, err := tls.X509KeyPair(otherCertPEM, otherKeyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair (autre agent): %v", err)
+	}
+
 	return &brokerTLSFixture{
 		caFile:         caFile,
 		serverCertFile: serverCertFile,
 		serverKeyFile:  serverKeyFile,
 		clientCert:     clientCert,
 		wrongCACert:    wrongCert,
+		otherValidCert: otherCert,
 	}
 }
 
@@ -358,6 +377,102 @@ func TestBrokerdNetworkMTLSEndToEnd(t *testing.T) {
 	res2 := postAction(t, hc, "agent-2", `{"action":"read","resource":"doc-2","class":0}`)
 	if !res2.Allow {
 		t.Fatalf("socket Unix non fonctionnel alors que le réseau est actif: %+v", res2)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestBrokerdNetworkSubjectBoundToTransportIdentity : preuve NON VACUE
+// directe de la revue #162/#163 — distincte de TestBrokerdNetworkMTLSEndToEnd,
+// qui ne prouve que l'authentification du TRANSPORT (une CA différente ou
+// l'absence de certificat sont refusées à la poignée de main). Ici, les
+// TROIS clients présentent un certificat VALIDE signé par la bonne CA —
+// la poignée de main TLS réussit systématiquement — et seule la
+// vérification applicative (subject ↔ CN) doit faire la différence.
+func TestBrokerdNetworkSubjectBoundToTransportIdentity(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	tlsFx := newBrokerTLSFixture(t)
+
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			fmt.Fprintf(w, `{"result":{"allow":true},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":%q}}}}`, fx.env["TBP_POLICY_ID"])
+			return
+		}
+		fmt.Fprint(w, `{"result":{"allow":true}}`)
+	}))
+	defer opa.Close()
+	fx.env["TBP_OPA_ENDPOINT"] = opa.URL
+	fx.env["TBP_BROKER_TLS_CERT_FILE"] = tlsFx.serverCertFile
+	fx.env["TBP_BROKER_TLS_KEY_FILE"] = tlsFx.serverKeyFile
+	fx.env["TBP_BROKER_TLS_CLIENT_CA_FILE"] = tlsFx.caFile
+	fx.env["TBP_BROKER_LISTEN_ADDR"] = "127.0.0.1:18444" // port distinct de TestBrokerdNetworkMTLSEndToEnd
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, mapGetenv(fx.env), statPresent) }()
+	waitSocket(t, sock)
+
+	caPool := x509.NewCertPool()
+	caPEM, err := os.ReadFile(tlsFx.caFile)
+	if err != nil {
+		t.Fatalf("lecture CA: %v", err)
+	}
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("CA de test illisible")
+	}
+	post := func(cert tls.Certificate, subject string) actionResp {
+		t.Helper()
+		client := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: caPool, ServerName: "localhost"},
+			},
+			Timeout: 10 * time.Second,
+		}
+		body, _ := json.Marshal(map[string]string{"subject": subject, "intent": `{"action":"read","resource":"doc-1","class":0}`})
+		resp, err := client.Post("https://127.0.0.1:18444/v1/actions", "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatalf("poignée de main TLS refusée alors que le certificat est valide (subject=%s): %v", subject, err)
+		}
+		defer resp.Body.Close()
+		var res actionResp
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			t.Fatalf("décodage: %v", err)
+		}
+		return res
+	}
+
+	// 1. Certificat "agent-test" déclarant "agent-1" (registre : "agent-1"
+	// → transport_identity="agent-test") : identité de transport LIÉE au
+	// subject déclaré — jeton émis.
+	res := post(tlsFx.clientCert, "agent-1")
+	if !res.Allow || res.Token == "" {
+		t.Fatalf("agent-1/agent-test (lien correct) refusé : %+v", res)
+	}
+
+	// 2. MÊME certificat "agent-test", valide, déclarant "agent-2" —
+	// "agent-2" n'a AUCUNE transport_identity enregistrée (provisionné
+	// socket Unix uniquement, newRunFixture) : refus, quel que soit le
+	// certificat présenté — jamais un repli permissif.
+	res = post(tlsFx.clientCert, "agent-2")
+	if res.Allow || res.Reason != "agent-transport-unbound" {
+		t.Fatalf("agent-2 sans transport_identity accepté sur le réseau : allow=%v reason=%q, veut deny/agent-transport-unbound (#163)", res.Allow, res.Reason)
+	}
+
+	// 3. Certificat DIFFÉRENT mais tout aussi VALIDE (CN "agent-other",
+	// signé par la MÊME bonne CA — la poignée de main TLS réussit)
+	// déclarant "agent-1" : c'est le témoin central de #162/#163 — une
+	// identité de transport authentifiée avec succès mais qui n'est PAS
+	// celle enregistrée pour ce subject doit être refusée par le broker
+	// lui-même, pas seulement acceptée parce que le certificat est valide.
+	res = post(tlsFx.otherValidCert, "agent-1")
+	if res.Allow || res.Reason != "agent-transport-unbound" {
+		t.Fatalf("agent-1 réclamé par un certificat valide MAIS différent (agent-other) accepté : allow=%v reason=%q — BOLA/Broken Authentication (#162) non fermé", res.Allow, res.Reason)
 	}
 
 	cancel()

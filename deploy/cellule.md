@@ -399,9 +399,10 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json  # security review #125:
 #                                      # JSON {"<subject>": {"class": 0..3,
 #                                      # "quota"?: {"max_volume",
-#                                      # "max_window_s"}}, …} — identity/
-#                                      # class/quota resolved from HERE,
-#                                      # never from the agent's own
+#                                      # "max_window_s"},
+#                                      # "transport_identity"?: "<mTLS CN>"}, …}
+#                                      # — identity/class/quota resolved from
+#                                      # HERE, never from the agent's own
 #                                      # declaration in its issuance
 #                                      # request. Same out-of-band custody
 #                                      # doctrine as TBP_OPERATOR_KEYS_FILE
@@ -409,7 +410,17 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # subject absent from this table is
 #                                      # refused (agent-unknown), and an
 #                                      # agent without a "quota" entry can
-#                                      # request no passport at all
+#                                      # request no passport at all.
+#                                      # transport_identity (security review
+#                                      # #162/#163): required for this
+#                                      # subject to be usable over the
+#                                      # NETWORK mTLS listener below — a
+#                                      # request whose client certificate CN
+#                                      # does not match is refused
+#                                      # (agent-transport-unbound), even
+#                                      # though the certificate itself is
+#                                      # valid. Absent ⇒ this agent may only
+#                                      # be reached over the Unix socket.
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
 #                                      # (security review #95, finding
@@ -437,10 +448,15 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   #                                      # the TLS handshake (TLS 1.3
 #   #                                      # minimum, mutual auth required) —
 #   #                                      # never reaches the application mux.
-#   #                                      # This authenticates the TRANSPORT
-#   #                                      # only: it does not yet resolve the
-#   #                                      # caller's application identity
-#   #                                      # (class, quota) — see #125.
+#   #                                      # The verified certificate's CN is
+#   #                                      # then checked against each
+#   #                                      # subject's transport_identity in
+#   #                                      # TBP_AGENT_REGISTRY_FILE (security
+#   #                                      # review #162/#163): a valid
+#   #                                      # certificate claiming a subject it
+#   #                                      # isn't registered for is refused
+#   #                                      # by the broker itself, not just by
+#   #                                      # the TLS handshake.
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now tbp-brokerd
 curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/epoch

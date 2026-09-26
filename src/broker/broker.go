@@ -51,25 +51,26 @@ const maxPlanBindingBytes = 5 + 32 + 2 + pep.MaxPlanParamsBytes
 // issuance-failed et leaf-write-failed sont des FAUTES système (alarme
 // OnTrip, couture T14). Les raisons d'enveloppe sont celles d'envelope.go.
 const (
-	ReasonRequestInvalid      = "request-invalid"
-	ReasonAgentUnknown        = "agent-unknown"         // subject absent du registre (§125) — refus AVANT traduction
-	ReasonAgentQuotaForbidden = "agent-quota-forbidden" // passeport demandé, agent sans politique de quota (§125)
-	ReasonAgentQuotaExceeded  = "agent-quota-exceeded"  // volume/fenêtre demandés au-delà du plafond résolu (§125)
-	ReasonEpochUnavailable    = "epoch-unavailable"
-	ReasonTranslationFailed   = "translation-failed"
-	ReasonQuorumRequired      = "quorum-required"
-	ReasonQuorumInsufficient  = "quorum-insufficient"
-	ReasonPlanUnverified      = "plan-unverified" // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
-	ReasonPlanBindingInvalid  = "plan-binding-invalid"
-	ReasonPlanUnknown         = "plan-unknown"
-	ReasonPlanPending         = "plan-pending"
-	ReasonPlanExpired         = "plan-expired"
-	ReasonPlanRevoked         = "plan-revoked"
-	ReasonPlanDeviation       = "plan-deviation"
-	ReasonPlanStoreFault      = "plan-store-fault" // FAUTE système (alarmée)
-	ReasonEnvelopeUnverified  = "envelope-unverified"
-	ReasonEnvelopeSaturated   = "envelope-saturated"
-	ReasonIssuanceFailed      = "issuance-failed"
+	ReasonRequestInvalid        = "request-invalid"
+	ReasonAgentUnknown          = "agent-unknown"           // subject absent du registre (§125) — refus AVANT traduction
+	ReasonAgentQuotaForbidden   = "agent-quota-forbidden"   // passeport demandé, agent sans politique de quota (§125)
+	ReasonAgentQuotaExceeded    = "agent-quota-exceeded"    // volume/fenêtre demandés au-delà du plafond résolu (§125)
+	ReasonAgentTransportUnbound = "agent-transport-unbound" // subject réseau mTLS sans CN correspondant au registre (§162/§163)
+	ReasonEpochUnavailable      = "epoch-unavailable"
+	ReasonTranslationFailed     = "translation-failed"
+	ReasonQuorumRequired        = "quorum-required"
+	ReasonQuorumInsufficient    = "quorum-insufficient"
+	ReasonPlanUnverified        = "plan-unverified" // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
+	ReasonPlanBindingInvalid    = "plan-binding-invalid"
+	ReasonPlanUnknown           = "plan-unknown"
+	ReasonPlanPending           = "plan-pending"
+	ReasonPlanExpired           = "plan-expired"
+	ReasonPlanRevoked           = "plan-revoked"
+	ReasonPlanDeviation         = "plan-deviation"
+	ReasonPlanStoreFault        = "plan-store-fault" // FAUTE système (alarmée)
+	ReasonEnvelopeUnverified    = "envelope-unverified"
+	ReasonEnvelopeSaturated     = "envelope-saturated"
+	ReasonIssuanceFailed        = "issuance-failed"
 )
 
 // Translation est l'action STRUCTURÉE produite par le traducteur (§4.5) —
@@ -417,9 +418,21 @@ func (b *Broker) Stats() (BrokerStats, error) {
 // enveloppe évaluée (§4.1-bis). Elapsed mesure l'orchestration réelle
 // (horloge locale, comme T11 — l'horloge injectée est l'horloge NTS des
 // feuilles et des iat, pas l'instrument de mesure).
-func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res Result) {
+// transportIdentity est un paramètre optionnel unique (revue #162/#163) :
+// le CN du certificat client mTLS authentifié par le transport réseau
+// (#124), extrait par la couture HTTP (server.go) et jamais par le
+// broker lui-même — le broker ne fait QUE comparer ce fait de transport
+// au registre. Absent (chemin socket Unix, ou tout appelant qui construit
+// Broker directement) ⇒ aucune vérification de liaison n'est appliquée,
+// la frontière de confiance du socket Unix (§7.1) reste seule en jeu —
+// comportement inchangé pour tous les appelants existants.
+func (b *Broker) HandleAction(ctx context.Context, subject, intent string, transportIdentity ...string) (res Result) {
 	start := time.Now()
 	defer func() { res.Elapsed = time.Since(start) }()
+	var txID string
+	if len(transportIdentity) > 0 {
+		txID = transportIdentity[0]
+	}
 
 	b.mu.Lock()
 	b.stats.Requests++
@@ -444,6 +457,25 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string) (res 
 		b.stats.AgentDenies++
 		b.mu.Unlock()
 		return b.deny(ctx, [16]byte{}, ReasonAgentUnknown, nil)
+	}
+
+	// Étape 1ter — liaison subject ↔ identité de transport (revue #125,
+	// point noté « non résolu » à l'époque ; fermé par la revue #162/#163,
+	// OWASP API Security Top 10 API1/API2 : une demande authentifiée au
+	// niveau transport n'était jamais vérifiée comme provenant du subject
+	// qu'elle prétendait être — deux appelants partageant un même
+	// certificat client mTLS pouvaient se déclarer sous des subjects
+	// différents. Ne s'applique QUE si le transport a fourni un fait
+	// vérifiable (txID non vide, c.-à-d. le chemin réseau mTLS) : le
+	// socket Unix n'en fournit pas ici et garde sa frontière à gros grain
+	// (§7.1) — voir agent_registry.go. Un agent sans TransportIdentity
+	// enregistrée est refusé dès qu'il apparaît sur le réseau : il n'a
+	// jamais été provisionné pour ce transport, jamais un repli permissif.
+	if txID != "" && agent.TransportIdentity != txID {
+		b.mu.Lock()
+		b.stats.AgentDenies++
+		b.mu.Unlock()
+		return b.deny(ctx, [16]byte{}, ReasonAgentTransportUnbound, nil)
 	}
 
 	// Étape 2 — jti tiré AVANT l'évaluation OPA : la feuille de décision

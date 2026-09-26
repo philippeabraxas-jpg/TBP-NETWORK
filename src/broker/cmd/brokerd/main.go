@@ -101,13 +101,20 @@
 //	TBP_OPERATOR_KEYS_FILE  JSON ["pubkey_ed25519_hex", …] ≥ 1 — clés
 //	                        d'opérateurs du store de contrats (T30)
 //	TBP_AGENT_REGISTRY_FILE JSON {"<subject>": {"class": 0..3,
-//	                        "quota"?: {"max_volume", "max_window_s"}}, …}
+//	                        "quota"?: {"max_volume", "max_window_s"},
+//	                        "transport_identity"?: "<CN mTLS>"}, …}
 //	                        ≥ 1 — registre d'agents (revue de sécurité
 //	                        #125) : identité/classe/quota résolues D'ICI,
 //	                        jamais depuis la déclaration de l'agent dans
 //	                        sa demande d'émission. Provisionné hors-bande,
 //	                        même doctrine que TBP_OPERATOR_KEYS_FILE
 //	                        ci-dessus — pas d'échappatoire dev.
+//	                        transport_identity (revue #162/#163) : requis
+//	                        pour qu'un agent puisse se déclarer sur le plan
+//	                        de données RÉSEAU (mTLS, #124) — un subject
+//	                        sans transport_identity qui apparaît sur le
+//	                        réseau est refusé (agent-transport-unbound),
+//	                        quel que soit le certificat présenté.
 //	TBP_ENVELOPE_ENDPOINT   optionnel — règle d'enveloppe §4.1-bis ;
 //	                        absent ⇒ toute demande de passeport refusée
 //	                        (envelope-unverified, doctrine existante)
@@ -1067,6 +1074,11 @@ type agentRegistryEntry struct {
 		MaxVolume  uint64 `json:"max_volume"`
 		MaxWindowS uint64 `json:"max_window_s"`
 	} `json:"quota,omitempty"`
+	// TransportIdentity, si présent, est le CN attendu du certificat
+	// client mTLS (revue #124) de cet agent — requis pour que ce subject
+	// puisse être déclaré sur le plan de données RÉSEAU (revue #162/#163) ;
+	// absent ⇒ cet agent n'est provisionné que pour le socket Unix.
+	TransportIdentity string `json:"transport_identity,omitempty"`
 }
 
 // loadAgentRegistry charge le registre d'agents (revue de sécurité #125) :
@@ -1094,7 +1106,7 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 		if entry.Class > uint8(pep.ClassOut) {
 			return nil, fmt.Errorf("registre d'agents : agent %q classe %d hors [0..3] (§5.3)", subject, entry.Class)
 		}
-		rec := broker.AgentRecord{Class: pep.Class(entry.Class)}
+		rec := broker.AgentRecord{Class: pep.Class(entry.Class), TransportIdentity: entry.TransportIdentity}
 		if entry.Quota != nil {
 			rec.Quota = &broker.AgentQuotaPolicy{
 				MaxVolume:  entry.Quota.MaxVolume,

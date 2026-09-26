@@ -17,10 +17,14 @@ package broker
 // identité inconnue, refusée AVANT même la traduction (§1 : le moindre
 // défaut d'entrée est un refus, jamais une dégradation silencieuse).
 //
-// Ce que ceci NE résout PAS : le lien cryptographique entre le subject
-// déclaré et le canal de transport (certificat client mTLS de la revue
-// #124, ou SO_PEERCRED du socket Unix) reste une couture séparée,
-// délibérément hors de ce fichier — voir la discussion de #125.
+// Suite donnée à la revue #125 par la revue #162/#163 : le lien
+// cryptographique entre le subject déclaré et le canal de transport est
+// maintenant résolu ICI pour le chemin réseau mTLS (revue #124) — voir
+// AgentRecord.TransportIdentity ci-dessous. Le socket Unix garde sa
+// frontière de confiance à gros grain (permissions 0660, §7.1) : tout
+// process qui y a accès reste traité comme interne à la cellule, comme
+// avant #163 — ce n'est pas un repli oublié, c'est la frontière déjà
+// acceptée pour ce transport précis.
 
 import (
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -47,6 +51,16 @@ type AgentQuotaPolicy struct {
 type AgentRecord struct {
 	Class pep.Class
 	Quota *AgentQuotaPolicy
+	// TransportIdentity, si non vide, est le CN attendu du certificat
+	// client mTLS (revue #124) pour cet agent. Une demande arrivant par
+	// le plan de données RÉSEAU et déclarant ce subject doit présenter
+	// EXACTEMENT ce CN, sinon refus (agent-transport-unbound, revue
+	// #162/#163) — jamais un repli permissif (§1). Vide ⇒ cet agent n'est
+	// provisionné que pour le socket Unix ; toute demande le déclarant
+	// par le réseau mTLS est refusée, quel que soit le certificat
+	// présenté — un agent non provisionné pour le réseau ne peut pas y
+	// apparaître « par accident ».
+	TransportIdentity string
 }
 
 // AgentRegistry est la couture de résolution d'identité (revue #125).
