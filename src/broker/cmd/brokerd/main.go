@@ -115,6 +115,20 @@
 //	                        sans transport_identity qui apparaît sur le
 //	                        réseau est refusé (agent-transport-unbound),
 //	                        quel que soit le certificat présenté.
+//	TBP_SKILL_REGISTRY_FILE optionnel — JSON {"<action>": {"provenance":
+//	                        "<éditeur/source>", "scope": ["<ressource>", …]},
+//	                        …} (catalogue de conformité #142-#161 : « aucune
+//	                        notion de skill installable », confirmé sept fois
+//	                        par des référentiels indépendants). Absent ⇒
+//	                        aucune notion de skill, comportement historique
+//	                        inchangé. Présent ⇒ fail-closed pour TOUTE
+//	                        action : une action sans skill correspondant est
+//	                        refusée (skill-unknown), une action ciblant une
+//	                        ressource hors du scope déclaré est refusée
+//	                        (skill-scope-violation). Provisionné hors-bande,
+//	                        même doctrine que TBP_AGENT_REGISTRY_FILE
+//	                        ci-dessus — pas d'échappatoire dev, jamais résolu
+//	                        depuis la demande elle-même.
 //	TBP_ENVELOPE_ENDPOINT   optionnel — règle d'enveloppe §4.1-bis ;
 //	                        absent ⇒ toute demande de passeport refusée
 //	                        (envelope-unverified, doctrine existante)
@@ -238,6 +252,7 @@ type config struct {
 	members              []string
 	operatorKeysFile     string
 	agentRegistryFile    string // registre d'agents (revue #125) : identité/classe/quota
+	skillRegistryFile    string // registre de skills (catalogue #142-#161) : "" = pas de notion de skill (doctrine existante)
 	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
 	socketPath           string // plan de données : POST /v1/actions
 	adminSocketPath      string // plan d'administration (revue #95) : GET /v1/supervision/*
@@ -386,6 +401,14 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	if err != nil {
 		return nil, err
 	}
+	// TBP_SKILL_REGISTRY_FILE (catalogue de conformité #142-#161) :
+	// optionnel, contrairement à TBP_AGENT_REGISTRY_FILE ci-dessus — absent
+	// ⇒ aucune notion de skill, comportement historique inchangé (pas de
+	// régression pour les déploiements existants). Présent ⇒ fail-closed
+	// dès que loadSkillRegistry(...) est appelé plus bas : une table vide
+	// ou un skill mal formé refuse le démarrage, même doctrine que le
+	// registre d'agents.
+	skillRegistryFile := getenv("TBP_SKILL_REGISTRY_FILE")
 	socketPath := getenv("TBP_BROKER_SOCKET")
 	if socketPath == "" {
 		socketPath = defaultBrokerSocket
@@ -435,6 +458,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		members:              members,
 		operatorKeysFile:     operatorKeysFile,
 		agentRegistryFile:    agentRegistryFile,
+		skillRegistryFile:    skillRegistryFile,
 		envelopeEndpoint:     getenv("TBP_ENVELOPE_ENDPOINT"),
 		socketPath:           socketPath,
 		adminSocketPath:      adminSocketPath,
@@ -623,6 +647,27 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err != nil {
 		return err
 	}
+
+	// Registre de skills (catalogue de conformité #142-#161) : identité/
+	// périmètre résolus depuis une source hors-bande, comme le registre
+	// d'agents ci-dessus — mais optionnel (voir loadConfig) : nil tant que
+	// TBP_SKILL_REGISTRY_FILE n'est pas déclaré, aucune régression pour les
+	// déploiements existants.
+	// Type interface (broker.SkillRegistry), pas broker.StaticSkillRegistry :
+	// affecter une StaticSkillRegistry nil à une variable d'interface la
+	// rendrait non-nil (interface portant un type concret nil, piège
+	// classique de Go) — HandleAction verrait alors b.skills != nil et
+	// refuserait TOUTE action en skill-unknown même sans configuration.
+	// Cette variable reste un nil d'INTERFACE tant que le fichier n'est pas
+	// déclaré, exactement ce que BrokerOptions.Skills doit recevoir pour
+	// préserver le comportement historique (voir skill_registry.go).
+	var skillRegistry broker.SkillRegistry
+	if cfg.skillRegistryFile != "" {
+		skillRegistry, err = loadSkillRegistry(cfg.skillRegistryFile)
+		if err != nil {
+			return err
+		}
+	}
 	contracts, err := pep.NewContractStore(pep.ContractOptions{
 		CellID:       cfg.cellID,
 		PolicyID:     cfg.policyID,
@@ -685,6 +730,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		Issuer:     issuer,
 		Epochs:     epochs,
 		Registry:   agentRegistry,
+		Skills:     skillRegistry,
 		Quorum:     quorumGate,
 		Contract:   contracts,
 		Envelope:   envelope,
@@ -1114,6 +1160,44 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 			}
 		}
 		reg[subject] = rec
+	}
+	return reg, nil
+}
+
+// skillRegistryEntry est la forme JSON d'un enregistrement du registre de
+// skills (catalogue de conformité #142-#161).
+type skillRegistryEntry struct {
+	Provenance string   `json:"provenance"`
+	Scope      []string `json:"scope"`
+}
+
+// loadSkillRegistry charge le registre de skills : JSON
+// {"<action>": {"provenance": "<éditeur/source>", "scope": ["<ressource>", …]}, …},
+// ≥ 1 skill — même doctrine hors-bande que loadAgentRegistry ci-dessus :
+// provisionné à la genèse, jamais résolu dynamiquement, jamais accepté
+// depuis la demande elle-même. Provenance vide refusée : un skill de
+// provenance inconnue n'est pas provisionnable (§1, voir skill_registry.go).
+func loadSkillRegistry(path string) (broker.StaticSkillRegistry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("registre de skills: %w", err)
+	}
+	var raw map[string]skillRegistryEntry
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("registre de skills JSON: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("registre de skills : table vide — au moins un skill provisionné requis, ou TBP_SKILL_REGISTRY_FILE non déclaré")
+	}
+	reg := make(broker.StaticSkillRegistry, len(raw))
+	for action, entry := range raw {
+		if action == "" {
+			return nil, errors.New("registre de skills : action vide refusée")
+		}
+		if entry.Provenance == "" {
+			return nil, fmt.Errorf("registre de skills : skill %q sans provenance déclarée refusé (§1)", action)
+		}
+		reg[action] = broker.SkillRecord{Provenance: entry.Provenance, Scope: entry.Scope}
 	}
 	return reg, nil
 }

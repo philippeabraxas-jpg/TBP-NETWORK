@@ -421,6 +421,34 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # though the certificate itself is
 #                                      # valid. Absent ⇒ this agent may only
 #                                      # be reached over the Unix socket.
+#   # TBP_SKILL_REGISTRY_FILE=/etc/tbp/skills.json  # OPTIONAL — closes the
+#                                      # structural gap confirmed seven times
+#                                      # independently across the compliance
+#                                      # catalog (#142-#161): TBP had no
+#                                      # notion of an installable "skill".
+#                                      # JSON {"<action>": {"provenance":
+#                                      # "<publisher/source>", "scope":
+#                                      # ["<resource>", …]}, …}. Absent ⇒ no
+#                                      # skill concept at all — historical
+#                                      # behavior unchanged, NOT a hidden
+#                                      # regression, a deliberate
+#                                      # backward-compatibility choice (opt
+#                                      # in for production). Present ⇒
+#                                      # fail-closed for EVERY action: one
+#                                      # whose name matches no registered
+#                                      # skill is refused (skill-unknown),
+#                                      # one targeting a resource outside the
+#                                      # declared scope is refused
+#                                      # (skill-scope-violation) — exact
+#                                      # string match only, never a prefix
+#                                      # (same confusion class as #107/#108).
+#                                      # Same out-of-band custody doctrine as
+#                                      # TBP_AGENT_REGISTRY_FILE above: no
+#                                      # hot-reload path exists in the code —
+#                                      # an agent can never add, widen, or
+#                                      # remove a skill entry; only an
+#                                      # operator editing this file and
+#                                      # restarting brokerd can.
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
 #                                      # (security review #95, finding
