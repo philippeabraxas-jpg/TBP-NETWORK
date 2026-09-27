@@ -133,7 +133,9 @@ func (l *anchorTripLog) has(reason string) bool { return l.count(reason) > 0 }
 func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *fakeTSA, trips, alarms *anchorTripLog) (*Anchorer, *CellLog, *CellLog) {
 	t.Helper()
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, master)
 	a, err := NewAnchorer(AnchorerOptions{
 		BrokerID: "broker-test",
 		CellID:   "cell-test",
@@ -150,6 +152,23 @@ func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *f
 		t.Fatalf("NewAnchorer: %v", err)
 	}
 	return a, cell, master
+}
+
+// closeTestLogOnCleanup ferme log à la fin du test. Chaque CellLog ouvert
+// par ce fichier tient des goroutines Tessera d'arrière-plan (checkpoint
+// périodique) — non fermées, elles continuent d'écrire dans le
+// t.TempDir() déjà supprimé une fois le test terminé (bruit
+// "no such file or directory" observé en CI sous charge : ce fichier
+// ouvrait jusqu'à 22 CellLog réels par exécution du paquet sans jamais en
+// fermer un seul, jusqu'à perturber des tests sans rapport exécutés
+// ensuite dans le même binaire — voir issue de suivi CI).
+func closeTestLogOnCleanup(t *testing.T, log *CellLog) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = log.Close(ctx)
+	})
 }
 
 // seedCell écrit une feuille de décision — la tête ancrée est réelle.
@@ -213,7 +232,13 @@ func TestAnchorRecordMarshal(t *testing.T) {
 func TestAnchorerValidation(t *testing.T) {
 	ctx := context.Background()
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
-	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
+	// Master n'a besoin que d'être non-nil pour cette validation de
+	// construction — jamais lu ni écrit ici. stubMaster (déjà utilisé plus
+	// bas dans ce fichier) évite d'ouvrir un second CellLog Tessera réel
+	// pour rien : chaque CellLog réel tient des goroutines d'arrière-plan
+	// (checkpoint, GC, awaiter), un de moins ici est un de moins à fermer.
+	master := &stubMaster{}
 	tsa := &fakeTSA{genTime: time.Now}
 
 	base := AnchorerOptions{
@@ -448,6 +473,7 @@ func TestAnchorerStoreAndForward(t *testing.T) {
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	master := &stubMaster{}
 	master.failing.Store(true)
 	a, err := NewAnchorer(AnchorerOptions{
@@ -523,6 +549,7 @@ func TestAnchorerBacklogOverflow(t *testing.T) {
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	master := &stubMaster{}
 	master.failing.Store(true)
 	a, err := NewAnchorer(AnchorerOptions{
@@ -622,7 +649,9 @@ func TestAnchorerRun(t *testing.T) {
 	tsa := &fakeTSA{genTime: time.Now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, master)
 	a, err := NewAnchorer(AnchorerOptions{
 		BrokerID: "broker-test", CellID: "cell-test",
 		Cell: cell, Master: master, TSA: tsa,
@@ -759,6 +788,7 @@ func TestAnchorerBacklogFlushNoFalseRecovery(t *testing.T) {
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+200s].
 	// #3 flush de cette entrée : OK (mais elle reste vieille de 200s par
 	// rapport à "maintenant"). #4 ancrage courant qui suit dans le même
@@ -831,6 +861,7 @@ func TestAnchorerPartialFlushWithholdsCurrent(t *testing.T) {
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	closeTestLogOnCleanup(t, cell)
 	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+100s].
 	// #3 rejeu de cette entrée échoue À NOUVEAU (panne ponctuelle).
 	master := &nthFailMaster{failAt: map[int]bool{2: true, 3: true}}

@@ -91,6 +91,22 @@ type CellLog struct {
 	await    *tessera.PublicationAwaiter
 	verifier note.Verifier
 	bp       BackpressureChecker
+	// bgCancel arrête les tâches d'arrière-plan de Tessera (file, appender,
+	// ramasse-miettes, statistiques d'intégration, scrutation de
+	// l'awaiter). Doctrine documentée par tessera.NewAppender lui-même :
+	// « the correct process for shutting down an Appender cleanly is to
+	// first call the shutdown function that is returned, and then cancel
+	// the context » — le contexte en question est celui passé à
+	// NewAppender/NewPublicationAwaiter, JAMAIS celui de l'appelant d'Open
+	// (qui ne sert qu'à l'ouverture elle-même et peut rester vivant après,
+	// voire ne jamais être annulé — context.Background() dans la quasi-
+	// totalité des appelants). Avant ce champ, Close() n'appelait QUE
+	// shutdown() sans jamais annuler ce contexte : les 5 goroutines
+	// Tessera par CellLog ne s'arrêtaient JAMAIS (confirmé par dump de
+	// goroutines, y compris 10 s après Close() — pas un délai, une fuite
+	// permanente), quel que soit le soin apporté par l'appelant à fermer
+	// le CellLog.
+	bgCancel context.CancelFunc
 	// cpInterval est l'intervalle de checkpoint résolu à l'ouverture —
 	// lu par AsyncWriter (T38, #71) pour borner sa fenêtre d'opposabilité.
 	cpInterval time.Duration
@@ -133,12 +149,20 @@ func Open(ctx context.Context, opts Options) (*CellLog, error) {
 		cpInterval = defaultCheckpointInterval
 	}
 
-	appender, shutdown, reader, err := tessera.NewAppender(ctx, driver,
+	// Contexte D'ARRIÈRE-PLAN propre au CellLog — JAMAIS celui de l'appelant
+	// (ctx ci-dessus ne sert qu'à cette ouverture). Tessera référence ce
+	// contexte pour la durée de vie de ses goroutines internes (doc de
+	// NewAppender) ; bgCancel, appelé par Close() APRÈS shutdown() (jamais
+	// avant : annuler avant shutdown risquerait de perdre des entrées non
+	// encore publiées, même doc), est ce qui les arrête réellement.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	appender, shutdown, reader, err := tessera.NewAppender(bgCtx, driver,
 		tessera.NewAppendOptions().
 			WithCheckpointSigner(opts.Signer).
 			WithBatching(batchSize, batchAge).
 			WithCheckpointInterval(cpInterval))
 	if err != nil {
+		bgCancel()
 		return nil, fmt.Errorf("appender: %w", err)
 	}
 
@@ -146,10 +170,11 @@ func Open(ctx context.Context, opts Options) (*CellLog, error) {
 		appender:   appender,
 		shutdown:   shutdown,
 		reader:     reader,
-		await:      tessera.NewPublicationAwaiter(ctx, reader.ReadCheckpoint, awaitPollPeriod),
+		await:      tessera.NewPublicationAwaiter(bgCtx, reader.ReadCheckpoint, awaitPollPeriod),
 		verifier:   opts.Verifier,
 		bp:         opts.Backpressure,
 		cpInterval: cpInterval,
+		bgCancel:   bgCancel,
 	}, nil
 }
 
@@ -285,9 +310,13 @@ func ParseCheckpoint(raw []byte, verifier note.Verifier) (*log.Checkpoint, error
 }
 
 // Close termine proprement : flush des feuilles en vol et publication du
-// checkpoint final.
+// checkpoint final, PUIS arrêt réel des goroutines Tessera d'arrière-plan
+// (bgCancel) — dans cet ordre, jamais l'inverse (doc tessera.NewAppender :
+// annuler avant shutdown risquerait de perdre des entrées non publiées).
 func (l *CellLog) Close(ctx context.Context) error {
-	return l.shutdown(ctx)
+	err := l.shutdown(ctx)
+	l.bgCancel()
+	return err
 }
 
 // ---------------------------------------------------------------------------
