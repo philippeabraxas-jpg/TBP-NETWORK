@@ -74,6 +74,52 @@ submodule that silently falls behind a security fix upstream is worse
 than no submodule at all — treat bumping it with the same care as any
 other dependency update, and check the core repo's own changelog first.
 
+## Compliance mapping
+
+TBP has been checked control-by-control against 21 external security,
+AI-governance, and regulatory frameworks — not as a marketing claim, but as a
+gap analysis honest about what's covered, what's partial, and what's
+structurally outside TBP's scope. The full breakdown (one file per standard,
+with citations to the exact mechanism behind every ✅) lives in
+[`tbp-compliance/`](tbp-compliance/README.md); this table is the summary.
+
+| Standard | Status | Detail |
+|---|---|---|
+| OWASP Agentic Skills Top 10 (AST10) | 🟡 Partial | [tbp-compliance/142-…](tbp-compliance/142-owasp-agentic-skills-top10.md) |
+| OWASP GenAI LLM Top 10 (2026) | 🟡 Partial | [tbp-compliance/143-…](tbp-compliance/143-owasp-llm-top10.md) |
+| CSA MAESTRO (7-layer threat model) | 🟡 Partial | [tbp-compliance/144-…](tbp-compliance/144-csa-maestro.md) |
+| MITRE ATLAS (16 tactics) | 🟢 Full | [tbp-compliance/145-…](tbp-compliance/145-mitre-atlas.md) |
+| EU AI Act | 🟡 Partial | [tbp-compliance/146-…](tbp-compliance/146-eu-ai-act.md) |
+| NIST AI RMF 1.0 | 🟡 Partial | [tbp-compliance/147-…](tbp-compliance/147-nist-ai-rmf.md) |
+| ISO/IEC 42001:2023 (AIMS) | 🟢 Full | [tbp-compliance/148-…](tbp-compliance/148-iso-iec-42001.md) |
+| ISO/IEC 22989:2022 (terminology) | ⚪ N/A | [tbp-compliance/149-…](tbp-compliance/149-iso-iec-22989.md) |
+| ISO/IEC 23894:2023 (AI risk mgmt) | 🟡 Partial | [tbp-compliance/150-…](tbp-compliance/150-iso-iec-23894.md) |
+| US federal AI directives (M-25-21/22) | 🟡 Partial | [tbp-compliance/151-…](tbp-compliance/151-us-federal-ai-directives.md) |
+| ISO/IEC 27001/27002:2022 | 🟢 Full | [tbp-compliance/152-…](tbp-compliance/152-iso-iec-27001-27002.md) |
+| NIST CSF 2.0 / SP 800-53 | 🟡 Partial | [tbp-compliance/153-…](tbp-compliance/153-nist-csf-800-53.md) |
+| SOC 2 (5 Trust Services Criteria) | 🟡 Partial | [tbp-compliance/154-…](tbp-compliance/154-soc2.md) |
+| GDPR | 🟡 Partial | [tbp-compliance/155-…](tbp-compliance/155-gdpr.md) |
+| SLSA v1.0 (build provenance) | 🟢 Full | [tbp-compliance/156-…](tbp-compliance/156-slsa.md) |
+| OWASP SCVS (component verification) | 🟢 Full | [tbp-compliance/157-…](tbp-compliance/157-owasp-scvs.md) |
+| CIS Benchmarks | 🟢 Full | [tbp-compliance/158-…](tbp-compliance/158-cis-benchmarks.md) |
+| NIST SP 800-207 (Zero Trust) | 🟡 Partial — strongest match | [tbp-compliance/159-…](tbp-compliance/159-nist-800-207-zero-trust.md) |
+| IEC 62443 (OT/industrial) | 🟡 Partial | [tbp-compliance/160-…](tbp-compliance/160-iec-62443.md) |
+| FIPS 140-3 (crypto module validation) | 🟢 Full — documentary scoping | [tbp-compliance/161-…](tbp-compliance/161-fips-140-3.md) |
+| OWASP API Security Top 10 (2023) | 🟢 Full | [tbp-compliance/162-…](tbp-compliance/162-owasp-api-security-top10.md) |
+
+**8 standards Full, 12 Partial, 1 Not applicable** (terminology-only, no
+controls to rate). "Partial" is not a failing grade here — several frameworks
+(EU AI Act, NIST AI RMF, SOC 2 Availability) are inherently partial because
+part of what they ask for is an organizational process TBP cannot itself be;
+each file states plainly which gaps are real code work versus a documented,
+deliberate design tradeoff (fail-closed over availability) versus genuinely
+out of scope. Two recurring findings drove real fixes: a `SkillRegistry`
+gap independently confirmed by seven frameworks (#165/PR #166), and a
+BOLA/Broken-Authentication gap on `POST /v1/actions` found by the OWASP API
+Security Top 10 catalog (#163/PR #164) — see
+[`tbp-compliance/README.md`](tbp-compliance/README.md) for the full list of
+threads running across the series.
+
 ## Repository structure
 
 ```
