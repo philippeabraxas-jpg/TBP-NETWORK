@@ -14,14 +14,22 @@
 //	Broker → serveur HTTP sur socket Unix (déploiement v1).
 //
 // Le serveur expose AUSSI trois lectures de supervision (GET-only) :
-// /v1/supervision/stats, /v1/supervision/epoch, /v1/supervision/arbitration.
-// Ce sont des handlers d'assemblage qui sérialisent ce que les méthodes
-// publiques des briques rendent déjà — zéro modification de bibliothèque
-// (D109). Séparées du plan de données depuis la revue de sécurité #95
+// /v1/supervision/stats, /v1/supervision/epoch, /v1/supervision/arbitration
+// — et, depuis #177, le canal d'opérateur du contrat de plan (§4.2, T30) :
+// POST /v1/supervision/plan/submit et /plan/approve. Ce sont des handlers
+// d'assemblage qui appellent ce que les méthodes publiques des briques
+// exposent déjà (ContractStore.Submit/Approve pour les deux routes de
+// plan) — zéro modification de bibliothèque (D109), zéro logique métier
+// ajoutée : Submit/Approve refont eux-mêmes toutes leurs validations.
+// Séparées du plan de données depuis la revue de sécurité #95
 // (finding A10) : socket Unix DÉDIÉ (TBP_BROKER_ADMIN_SOCKET), jamais le
 // socket que POST /v1/actions écoute — l'accès au socket EST le contrôle
-// d'accès, doctrine déjà posée pour la console T34c. L'exposition réseau
-// inter-cellules est une autre issue (T35).
+// d'accès, doctrine déjà posée pour la console T34c. Les deux routes de
+// plan sont des POST sur CE socket admin local (jamais réseau — même
+// exposition que /v1/epoch/renew ci-dessous), exactement le canal que
+// plan_contract.go anticipait sans le construire (« API Go niveau
+// cellule, doctrine socket de cellule — pas d'endpoint HTTP [réseau] »).
+// L'exposition réseau inter-cellules est une autre issue (T35).
 //
 // Configuration par variables d'environnement (toutes requises sauf
 // mention contraire) :
@@ -212,6 +220,18 @@ const readHeaderTimeout = 5 * time.Second
 // (issue #126) — un jeton d'époque signé est quelques centaines d'octets ;
 // large marge sans ouvrir de vecteur mémoire non borné.
 const maxEpochTokenBytes = 1 << 16 // 64 KiB
+
+// maxPlanSubmitBytes borne le corps accepté par POST
+// /v1/supervision/plan/submit (#177) — un plan plein (MaxPlanSteps=64
+// étapes, MaxPlanParamsBytes=4096 octets de params chacune, §4.3) encodé
+// en hex + enveloppe JSON tient large dans cette marge.
+const maxPlanSubmitBytes = 1 << 20 // 1 MiB
+
+// maxPlanApproveBytes borne le corps accepté par POST
+// /v1/supervision/plan/approve (#177) — hash de plan (32 octets),
+// horodatage d'expiry, signature Ed25519 (64 octets) : quelques centaines
+// d'octets, même marge que /v1/epoch/renew.
+const maxPlanApproveBytes = 1 << 16 // 64 KiB
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -790,6 +810,95 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 		writeJSON(w, http.StatusOK, view)
 	})
+	// POST /v1/supervision/plan/submit (#177) : canal d'opérateur du
+	// contrat de plan (§4.2, T30) — jusqu'ici hors périmètre du dépôt
+	// (plan_contract.go le dit explicitement : « API Go niveau cellule,
+	// doctrine socket de cellule — pas d'endpoint HTTP », jamais construit).
+	// #177 a rendu plan_binding obligatoire pour toute action de classe I/W
+	// (§5.3) sans qu'aucun canal n'existe pour obtenir ce binding — ce
+	// handler ferme ce trou. Sur le socket ADMIN (revue #95), jamais le
+	// plan de données : l'accès au socket EST le contrôle d'accès, même
+	// doctrine que les trois lectures ci-dessus. Reçoit les étapes en
+	// clair (action, resource, params bruts en hex) — le store ne retient
+	// QUE ParamsHash (§6.2 : feuilles hash-only, D57) ; c'est CE canal, pas
+	// le broker ni les feuilles, qui voit les paramètres en clair.
+	adminMux.HandleFunc("POST /v1/supervision/plan/submit", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPlanSubmitBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"corps illisible"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxPlanSubmitBytes {
+			http.Error(w, `{"error":"corps trop volumineux"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		var req planSubmitRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
+			return
+		}
+		steps := make([]pep.PlanStep, 0, len(req.Steps))
+		for _, s := range req.Steps {
+			params, err := hex.DecodeString(s.ParamsHex)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "params_hex invalide"})
+				return
+			}
+			steps = append(steps, pep.PlanStep{
+				Action:     s.Action,
+				Resource:   s.Resource,
+				ParamsHash: pep.HashParams(params),
+			})
+		}
+		hash, err := contracts.Submit(r.Context(), steps)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, planSubmitResponse{PlanHash: hex.EncodeToString(sliceOf(hash))})
+	})
+	// POST /v1/supervision/plan/approve (#177) : la signature Ed25519 de
+	// l'opérateur qui active le contrat (§4.2 : « l'arbitrage est une
+	// signature, pas une lecture »). Ce handler ne fait QUE désérialiser
+	// et relayer à ContractStore.Approve, qui refait sa propre vérification
+	// contre le trousseau d'opérateurs épinglé (operatorKeys, construit
+	// plus haut) — ceinture-bretelles : le handler ne pourrait de toute
+	// façon pas la contourner. Toute tentative invalide laisse sa feuille
+	// de refus (Approve le fait déjà, §4.2 : un refus d'approbation est un
+	// événement de sécurité, pas du bruit).
+	adminMux.HandleFunc("POST /v1/supervision/plan/approve", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPlanApproveBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"corps illisible"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxPlanApproveBytes {
+			http.Error(w, `{"error":"corps trop volumineux"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		var req planApproveRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
+			return
+		}
+		hashBytes, err := hex.DecodeString(req.PlanHash)
+		if err != nil || len(hashBytes) != 32 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan_hash invalide (32 octets hex)"})
+			return
+		}
+		var hash [32]byte
+		copy(hash[:], hashBytes)
+		sig, err := hex.DecodeString(req.Signature)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+			return
+		}
+		if err := contracts.Approve(r.Context(), hash, req.ExpiresAt, sig); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+	})
 	// POST /v1/epoch/renew (issue #126) : renouvellement du bail d'époque
 	// pour un déploiement multi-cellules déjà en service. N'ajoute AUCUNE
 	// logique de fencing — expose l'admission déjà exercée par le tracker au
@@ -976,6 +1085,34 @@ type pendingPlanView struct {
 type arbitrationView struct {
 	PolicyID string            `json:"policy_id"`
 	Pending  []pendingPlanView `json:"pending"`
+}
+
+// — Corps JSON de POST /v1/supervision/plan/{submit,approve} (#177) —
+//
+// Contrats de requête/réponse du canal d'opérateur ouvert par #177 :
+// contrairement aux vues ci-dessus (lecture seule), ces types portent des
+// données ENTRANTES — jamais interprétées au-delà de ce que ContractStore
+// exige déjà (Submit/Approve refont eux-mêmes toutes les validations,
+// §4.2 : ce fichier ne fait qu'assembler, aucune logique métier ajoutée).
+
+type planSubmitStepRequest struct {
+	Action    string `json:"action"`
+	Resource  string `json:"resource"`
+	ParamsHex string `json:"params_hex"` // hex des octets BRUTS (D57) ; "" = étape sans paramètres
+}
+
+type planSubmitRequest struct {
+	Steps []planSubmitStepRequest `json:"steps"`
+}
+
+type planSubmitResponse struct {
+	PlanHash string `json:"plan_hash"`
+}
+
+type planApproveRequest struct {
+	PlanHash  string    `json:"plan_hash"`  // hex, 32 octets
+	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans ApprovalMessage (D59)
+	Signature string    `json:"signature"`  // hex Ed25519, trousseau opérateur épinglé (§12)
 }
 
 func newArbitrationView(contracts *pep.ContractStore) (arbitrationView, error) {
