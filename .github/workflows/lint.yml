@@ -48,3 +48,42 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - run: docker compose -f lab/docker-compose.yml config
+
+  # Catalogue de conformité #157 (OWASP SCVS), famille « Analyse de
+  # composants » : aucun scanner de vulnérabilités des dépendances n'était
+  # câblé — govulncheck est l'outil officiel Go, il ne signale que les
+  # vulnérabilités RÉELLEMENT atteignables par du code appelé (pas
+  # simplement présentes dans go.sum), donc pas de bruit de faux positifs
+  # sur une dépendance importée mais jamais invoquée.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: "install govulncheck (épinglé — même doctrine que OPA ci-dessus : une CVE amont ne doit jamais changer silencieusement de comportement de scan)"
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: govulncheck ./...
+        run: govulncheck ./...
+
+  # Catalogue de conformité #157 (OWASP SCVS), famille « SBOM » : aucune
+  # nomenclature logicielle générée. cyclonedx-gomod produit un SBOM
+  # CycloneDX du module Go, publié comme artefact du run — pas un gate qui
+  # bloque la CI (une nomenclature n'est pas un contrôle pass/fail), juste
+  # une preuve de composition publiée à chaque build.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: install cyclonedx-gomod (épinglé)
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+      - name: générer le SBOM CycloneDX
+        run: cyclonedx-gomod mod -json -output sbom.json .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
