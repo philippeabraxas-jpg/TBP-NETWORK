@@ -244,3 +244,13 @@ vérification post-déploiement, à adapter aux unités de la cellule.
 
 `config/sysctl/99-tbp-hardening.conf` est un point de départ à adapter au
 noyau et à la carte réseau locaux — jamais copié tel quel (D99).
+
+**Référence de durcissement OS** (catalogue de conformité #158, CIS
+Benchmarks) : appliquer le [CIS Debian Linux
+Benchmark](https://www.cisecurity.org/benchmark/debian_linux) à la
+machine hôte avant d'y déployer la cellule. TBP n'est ni un runtime de
+conteneurs ni un système d'exploitation et n'applique jamais lui-même la
+configuration de l'hôte (§7.1 : le broker est du bétail, jamais la racine
+de confiance de son propre hôte) — c'est un prérequis de déploiement,
+documenté sur le même modèle que le NAC 802.1X dans
+`router-debian.fr.md`, jamais une fonctionnalité de TBP.

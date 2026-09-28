@@ -545,3 +545,12 @@ post-deployment verification pattern, to adapt to the cell's units.
 
 `config/sysctl/99-tbp-hardening.conf` is a starting point to adapt to the
 local kernel and network card — never copied as-is (D99).
+
+**OS-level hardening reference** (compliance catalog #158, CIS
+Benchmarks): apply the [CIS Debian Linux
+Benchmark](https://www.cisecurity.org/benchmark/debian_linux) to the host
+before deploying the cell on it. TBP is not a container or OS runtime and
+never enforces host-level configuration itself (§7.1: the broker is
+cattle, never the root of trust for its own host) — this is a deployment
+prerequisite, documented the same way NAC 802.1X is documented in
+`router-debian.md`, never a TBP feature.

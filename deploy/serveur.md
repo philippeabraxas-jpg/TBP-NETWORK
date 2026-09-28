@@ -97,6 +97,14 @@ reports no drift.
 **On failure: STOP** — an unconfined PEP is an attack surface; fix
 the unit before opening the service to applications.
 
+**OS-level hardening reference** (compliance catalog #158, CIS
+Benchmarks): apply the [CIS Debian Linux
+Benchmark](https://www.cisecurity.org/benchmark/debian_linux) to this
+host in addition to the sysctl/systemd hardening above. TBP is not a
+container or OS runtime and never enforces host-level configuration
+itself (§7.1) — this is a deployment prerequisite, documented the same
+way NAC 802.1X is documented in `router-debian.md`, never a TBP feature.
+
 #### Step 5 — §9.1 measurements in monitor, then switch request
 
 **Verifiable prerequisite**: steps 2-4 green; agreed monitor observation

@@ -97,6 +97,15 @@ ne rapporte aucun écart.
 **En cas d'échec : STOP** — un PEP non confiné est une surface ; corriger
 l'unité avant d'ouvrir le service aux applications.
 
+**Référence de durcissement OS** (catalogue de conformité #158, CIS
+Benchmarks) : appliquer le [CIS Debian Linux
+Benchmark](https://www.cisecurity.org/benchmark/debian_linux) à cette
+machine, en complément du durcissement sysctl/systemd ci-dessus. TBP
+n'est ni un runtime de conteneurs ni un système d'exploitation et
+n'applique jamais lui-même la configuration de l'hôte (§7.1) — c'est un
+prérequis de déploiement, documenté sur le même modèle que le NAC 802.1X
+dans `router-debian.fr.md`, jamais une fonctionnalité de TBP.
+
 #### Étape 5 — Mesures §9.1 en monitor, puis demande de bascule
 
 **Prérequis vérifiable** : étapes 2-4 vertes ; fenêtre d'observation
