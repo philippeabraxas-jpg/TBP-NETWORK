@@ -14,6 +14,52 @@ everything around it — NAC, PEPs, cell registries — that extends TBP's
 governance from a single machine to a network of entities that have to
 trust each other without simply trusting each other.
 
+## What TBP is — and isn't
+
+**TBP does not close every hole; it audits every hole.** That's not a
+limitation to work around, it's the founding postulate (spec §1: *"we do
+not close every hole; we rank holes by impact and mitigate proportionally
+— governance is allocation, not completeness"*). TBP is not a
+self-sufficient security system — it doesn't replace SELinux, firewalls,
+IAM, or OS-level sandboxing, and it never will by design. What it does is
+narrower and non-negotiable: no governed action executes without a
+cryptographically provable decision, and no decision — allow or deny —
+escapes the audit chain unprovable and uncorrupted. TBP is a governance
+and attestation layer over whatever enforcement stack a deployment already
+has, not a substitute for it.
+
+**How much TBP restricts is a deployment choice, not a protocol
+property.** Between allow-all (monitor mode, everything logged, nothing
+blocked) and deny-all sits a whole spectrum, shaped by which OPA rule
+packs a cell loads, which scale (below) it operates at, and how far it
+pushes plan contracts, quorum, and the (planned) risk-scoring layer
+([#177](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/177)–[#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181)).
+A personal lab and a regulated production cell can run the identical
+protocol at very different points on that spectrum, and that's by design,
+not a gap — see "Next planned work" below for the rule-pack / posture
+presets planned for the per-scale admin console.
+
+**Exactly two things don't move, at any point on that spectrum**:
+
+1. **The three non-derogable invariants** carried by the core protocol —
+   **F-STABILITY** (no autonomous value transfer / market manipulation),
+   **I-INTEGRITY** (no autonomous agent control of industrial/OT systems),
+   **W-MONOPOLY** (no integration into lethal kill chains or WMD
+   development) — see
+   [`tbp4.2.1/README.md`](tbp4.2.1/README.md#the-solution-fiw-invariants).
+   These are the categories where a bad action isn't reversible by
+   revoking access after the fact; no deployment posture, rule pack, or
+   scale ever relaxes them.
+2. **Provable audit** — that an action happened, and that the record of it
+   hasn't been tampered with, is always provable by construction (hash-only
+   leaves, Merkle-anchored chain, §6.2), independent of how permissive or
+   strict the policy loaded on top of it is.
+
+Everything else — how wide the allowed envelope is, how much friction an
+operator accepts, which compositions require a human signature — is a
+choice between complexity, operational need, and what a given deployment
+can actually run, not a property of the protocol itself.
+
 **Note on language**: the reference specification is now
 **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)** (English) — this is the
 document code and audits should be built against. The author's working
@@ -359,7 +405,12 @@ kinds of effort:
    - a **rule/policy editor** for the OPA Rego bundle — edit, test
      against the same determinism and capability-stripping gates
      `validate_determinism.go` already enforces, and diff against what's
-     deployed, before anything reaches production;
+     deployed, before anything reaches production; the per-scale version
+     of this is a library of **rule packs** and named posture presets
+     (permissive ↔ closed) an operator selects rather than hand-writes,
+     so tuning where a cell sits on the allow-all/deny-all spectrum ("What
+     TBP is — and isn't" above) doesn't require Rego fluency at scale 1
+     the same way it does at scale 3;
    - an **audit browser** for the registry — search and filter the leaf
      history (`KindDecision`, `KindTelemetry`, `KindQuorum`, …) with the
      same third-party-verifiable checkpoint proof `ChainWatcher` already
