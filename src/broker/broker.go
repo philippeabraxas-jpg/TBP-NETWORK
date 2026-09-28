@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
@@ -170,6 +171,43 @@ type structuredIntent struct {
 	} `json:"quota,omitempty"`
 }
 
+// smugglingRanges liste les points de code Unicode utilisés par les
+// techniques d'instruction-smuggling invisibles (LLM01.5, catalogue de
+// conformité #143) : des caractères qui ne s'affichent jamais à l'écran
+// mais restent présents dans la chaîne de bytes évaluée par OPA, tracée
+// dans les feuilles, ou comparée — deux chaînes visuellement identiques
+// peuvent diverger, ou porter une instruction cachée à travers toute la
+// chaîne de décision.
+var smugglingRanges = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{Lo: 0x200B, Hi: 0x200F, Stride: 1}, // espaces/joints de largeur nulle, marques directionnelles
+		{Lo: 0x202A, Hi: 0x202E, Stride: 1}, // formatage directionnel
+		{Lo: 0x2060, Hi: 0x2064, Stride: 1}, // word joiner, opérateurs invisibles
+		{Lo: 0xFE00, Hi: 0xFE0F, Stride: 1}, // sélecteurs de variation 1-16
+		{Lo: 0xFEFF, Hi: 0xFEFF, Stride: 1}, // BOM / zero-width no-break space
+	},
+	R32: []unicode.Range32{
+		{Lo: 0xE0000, Hi: 0xE007F, Stride: 1}, // caractères de balise — plage de la technique « ASCII smuggling »
+		{Lo: 0xE0100, Hi: 0xE01EF, Stride: 1}, // sélecteurs de variation supplémentaires 17-256
+	},
+}
+
+// rejectSmugglingUnicode refuse toute chaîne contenant un point de code
+// d'instruction-smuggling invisible — fail-closed (§1), jamais un
+// nettoyage silencieux : réécrire l'entrée de l'agent sans le dire serait
+// une demi-vérité, la même doctrine que le refus (jamais le plafonnement
+// silencieux) d'un dépassement de quota (#125).
+func rejectSmugglingUnicode(strs ...string) error {
+	for _, s := range strs {
+		for _, r := range s {
+			if unicode.Is(smugglingRanges, r) {
+				return fmt.Errorf("broker: caractère Unicode d'instruction-smuggling refusé (U+%04X, LLM01.5 catalogue #143)", r)
+			}
+		}
+	}
+	return nil
+}
+
 // Translate parse l'intention structurée. Tout écart de forme est une
 // erreur (« je ne sais pas traduire ») — le broker refuse.
 func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Translation, error) {
@@ -179,6 +217,9 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 	}
 	if s.Action == "" || s.Resource == "" {
 		return Translation{}, errors.New("broker: intention structurée sans action ou resource")
+	}
+	if err := rejectSmugglingUnicode(s.Action, s.Resource); err != nil {
+		return Translation{}, err
 	}
 	tr := Translation{Action: s.Action, Resource: s.Resource}
 	if s.Class != nil {
@@ -196,6 +237,9 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 		tr.ObjectSeal = &seal
 	}
 	if s.Quota != nil {
+		if err := rejectSmugglingUnicode(s.Quota.Resource, s.Quota.Operation); err != nil {
+			return Translation{}, err
+		}
 		tr.Quota = &pep.Quota{
 			Resource:  s.Quota.Resource,
 			Operation: s.Quota.Operation,
