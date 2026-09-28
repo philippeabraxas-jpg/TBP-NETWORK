@@ -62,9 +62,13 @@ can actually run, not a property of the protocol itself.
 
 **Note on language**: the reference specification is now
 **[`docs/spec-en-v1.0.md`](docs/spec-en-v1.0.md)** (English) — this is the
-document code and audits should be built against. The author's working
-note — denser, less linear, useful for design-rationale digging, but not
-the one to cite — exists in two languages:
+document code and audits should be built against. Its version number
+resets to 1.0 deliberately: it's a clean restart into a citable, versioned
+document (§13: "versioned conservatively; changes pass through signed,
+attested transitions"), not a continuation of the working note's own
+count — the higher-numbered working note is not the newer document. The
+author's working note — denser, less linear, useful for design-rationale
+digging, but not the one to cite — exists in two languages:
 [`docs/spec-v1.4.10.md`](docs/spec-v1.4.10.md) (English) and
 [`docs/spec-v1.4.10.fr.md`](docs/spec-v1.4.10.fr.md) (original French).
 The same convention applies across the repo: every document originally
