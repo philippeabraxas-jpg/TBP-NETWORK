@@ -1,0 +1,45 @@
+# OWASP API Security Top 10 (2023)
+
+**Status: Full**
+**Source**: [issue #162](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/162) · fix: [issue #163 / PR #164](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/163)
+**Reference**: OWASP API Security Top 10, 2023 edition (still current).
+**Last verified**: 2026-09-28
+
+## Scope note
+
+Last of the four frameworks added after the initial series closed. Unlike most frameworks catalogued earlier, this one applies DIRECTLY to the code's real HTTP endpoints — `POST /v1/actions` (data plane, `server.go`), `GET /v1/supervision/*` (admin plane, #95), the supervision console (#86).
+
+Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope
+
+## The 10 risks vs. `POST /v1/actions`
+
+| # | Risk | Status | Detail |
+|---|---|---|---|
+| **API1** | Broken Object Level Authorization (BOLA) | ✅ | **Fixed** — see below. |
+| **API2** | Broken Authentication | ✅ | **Fixed** — see below. |
+| **API3** | Broken Object Property Level Authorization (mass assignment) | ✅ | `dec.DisallowUnknownFields()` (`server.go:handleAction`) categorically rejects any unexpected JSON field — direct mass-assignment protection. |
+| **API4** | Unrestricted Resource Consumption | ✅ | `defaultMaxBody` (64 KiB), `maxIntentBytes`, `maxIssSubActionLen`, and the `AgentQuotaPolicy` cap (#125) resolved by the broker — solid coverage, same finding as LLM06 ([#143](143-owasp-llm-top10.md)). |
+| **API5** | Broken Function Level Authorization | ✅ | Data/admin plane separation (§95): two distinct HTTP muxes, two distinct sockets, `POST` on a supervision view → 405. A clean example of strict functional separation. |
+| **API6** | Unrestricted Access to Sensitive Business Flows | 🟡 | `QuorumGate` (class W) already limits access to a sensitive business flow (irreversible action) to a k-of-n approval — a good partial match. |
+| **API7** | Server-Side Request Forgery (SSRF) | ✅ | TBP NEVER makes an outbound request built from caller-supplied data — the OPA/envelope endpoints are FIXED configuration URLs, never derived from `resource`. No SSRF surface by construction. |
+| **API8** | Security Misconfiguration | ✅ | The devmode-sentinel doctrine (#113) + generalized configuration fail-closed make a misconfiguration block startup rather than silently become exploitable; error responses carry stable `Reason` codes, never raw Go stack traces. |
+| **API9** | Improper Inventory Management | 🟡 | HTTP routing is minimal and explicit (one `mux.HandleFunc` per route) — no visible ghost endpoint, but no formal API versioning/deprecation process documented. |
+| **API10** | Unsafe Consumption of APIs | ✅ | The OPA client (`pep.OPAClient`) already treats a third party's (OPA's) response as potentially faulty — timeout, 5ms circuit breaker, fail-closed deny on any malformed response (T11). |
+
+## API1/API2 in detail — the real gap this catalog found, now fixed
+
+**Finding**: `POST /v1/actions` authenticated the CONNECTION (mandatory mTLS since #124, or `SO_PEERCRED` on the Unix socket), and `AgentRegistry` (#125) resolved class/quota from the `subject` declared in the request's JSON body — but nothing verified that the transport-authenticated peer was actually authorized to act ON BEHALF OF that specific `subject`. Two agents sharing socket access (same Unix group, or a reused mTLS client certificate in some deployments) could declare ANY registered `subject` and consume its class/quota. Exactly the BOLA/Broken Authentication risk class: authentication exists, but it doesn't BIND the authenticated identity to the object (here: agent identity) the action targets.
+
+**Fix** (#163, PR #164): `AgentRecord.TransportIdentity` + verification of the mTLS client certificate's CN before any class/quota resolution (`agent-transport-unbound` refusal on mismatch). The declared `subject` is never again accepted on its word alone — it must exactly match the transport fact verified by the TLS stack (never re-read from the request body).
+
+**Non-vacuous proof**: `TestBrokerdNetworkSubjectBoundToTransportIdentity` proves all three cases — valid certificate + matching subject → allow; matching subject with no registered `transport_identity` → deny; valid certificate but a DIFFERENT agent's subject → deny (the exact impersonation vector this catalog described).
+
+**Nuance kept**: the Unix socket retains its coarser-grained boundary (0660 permissions, §7.1) — a documented choice, not an oversight (see #163/PR #164).
+
+---
+
+## Summary
+
+**This catalog found a real, previously unnamed gap on code already in production** (#124/#125 both merged) — treated with more urgency than the recurring `SkillRegistry` gap, since it touched the live token-issuance path rather than a not-yet-built feature. Now fixed.
+
+**Rest of the catalog strongly positive**: 5 of 10 risks direct ✅ even before the fix, now 7/10 ✅ + 2 🟡 — consistent with the rest of the series: TBP is strong on strict input validation and functional separation.
