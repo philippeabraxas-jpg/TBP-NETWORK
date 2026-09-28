@@ -708,6 +708,15 @@ func (mutantAcceptGate) VerifyClassW(_ context.Context, _ []byte, _, _ string, _
 	return nil
 }
 
+// permissiveContractGate accepte tout binding non vide sans consulter de
+// plan réel — ce scénario teste le quorum (§7.5), pas ContractStore ; #177
+// exige désormais un plan_binding pour toute action classe W, y compris ici.
+type permissiveContractGate struct{}
+
+func (permissiveContractGate) VerifyStep(_ context.Context, _ []byte, _, _ string) ([32]byte, error) {
+	return [32]byte{}, nil
+}
+
 // mintQuorumProof frappe une preuve k-of-n liée à (action, resource,
 // policyID, epoch) — motif de cluster/quorum_test.go.
 func mintQuorumProof(privs map[int]ed25519.PrivateKey, action, resource string, policyID [32]byte, epoch uint64, expiry time.Time, signers ...int) ([]byte, error) {
@@ -783,6 +792,7 @@ func scenarioTelemetryCut(ctx context.Context, cfg Config, sink *countingSink, s
 		// précisément la coupure classe W (défaut §5.3 avant #125,
 		// désormais l'assignation explicite du registre).
 		Registry: broker.StaticAgentRegistry{"admin-sous-pression": broker.AgentRecord{Class: pep.ClassW}},
+		Contract: permissiveContractGate{}, // #177 : classe W exige aussi un plan_binding
 	})
 	if err != nil {
 		return false, "", fmt.Errorf("broker: %w", err)
@@ -790,10 +800,14 @@ func scenarioTelemetryCut(ctx context.Context, cfg Config, sink *countingSink, s
 
 	const action, resource = "telemetry.disable", "telemetry/exporter"
 	intent := func(proof []byte) string {
+		// #177 : plan_binding attaché systématiquement — sans effet sur les
+		// deux tentatives refusées avant d'atteindre ce contrôle (le quorum,
+		// étape 6, refuse en premier), nécessaire pour le contrôle gouverné
+		// (preuve 2-of-3 valide) qui doit désormais l'atteindre.
 		if len(proof) == 0 {
-			return fmt.Sprintf(`{"action":%q,"resource":%q}`, action, resource) // classe absente ⇒ W (§5.3)
+			return fmt.Sprintf(`{"action":%q,"resource":%q,"plan_binding":"01"}`, action, resource) // classe absente ⇒ W (§5.3)
 		}
-		return fmt.Sprintf(`{"action":%q,"resource":%q,"quorum_proof":%q}`, action, resource, hex.EncodeToString(proof))
+		return fmt.Sprintf(`{"action":%q,"resource":%q,"quorum_proof":%q,"plan_binding":"01"}`, action, resource, hex.EncodeToString(proof))
 	}
 	expiry := time.Now().Add(2 * time.Minute)
 

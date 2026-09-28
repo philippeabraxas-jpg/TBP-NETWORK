@@ -155,7 +155,11 @@ func TestPlanBindingWithoutGateDenied(t *testing.T) {
 		Resource:    "https://api.example.com/v1/messages",
 		PlanBinding: binding,
 	}}
-	b, _, _, _ := newTestBroker(t, srv.URL, tr)
+	// newContractBroker avec gate=nil : c'est très exactement le scénario
+	// testé ici (gate non câblé) — newTestBroker câble désormais un
+	// ContractStore réel (#177 : plan_binding obligatoire dès la classe
+	// I/W exige un chemin nominal fonctionnel pour ses autres tests).
+	b, _, _, _ := newContractBroker(t, srv.URL, tr, nil)
 
 	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))

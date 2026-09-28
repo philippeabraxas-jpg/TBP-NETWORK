@@ -39,6 +39,7 @@ import (
 	"golang.org/x/mod/sumdb/note"
 
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
+	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
@@ -194,6 +195,13 @@ type daemonActionResponse struct {
 	Allow  bool   `json:"allow"`
 	Reason string `json:"reason"`
 	Token  string `json:"token,omitempty"`
+}
+
+// daemonPlanSubmitResponse est la réponse de POST
+// /v1/supervision/plan/submit (#177) — canal d'opérateur du contrat de
+// plan, socket admin.
+type daemonPlanSubmitResponse struct {
+	PlanHash string `json:"plan_hash"`
 }
 
 // runDaemons exécute la phase daemons. Les échecs sont enregistrés dans
@@ -594,14 +602,56 @@ func runDaemons(s *suite, cfg config) {
 	s.add(phaseDaemons, "brokerd: doctrine GET-only — POST sur une vue de supervision → 405",
 		status == http.StatusMethodNotAllowed, fmt.Sprintf("status=%d", status))
 
+	// --- Contrat de plan (#177) : plan_binding désormais obligatoire pour
+	// toute action de classe I/W (§5.3) — "agent-1" est résolu classe W
+	// par le registre (agents.json ci-dessus). Le canal d'opérateur ouvert
+	// par #177 (socket admin, POST /v1/supervision/plan/{submit,approve})
+	// est exercé ici pour de vrai contre le brokerd réellement lancé —
+	// pas un raccourci de fixture : c'est exactement le canal qu'un
+	// opérateur emprunterait avant d'autoriser "agent-1" à exécuter
+	// "read"/"doc-1".
+	submitStatus, raw, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
+		"steps": []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
+	})
+	var planSub daemonPlanSubmitResponse
+	if submitStatus == http.StatusOK {
+		err = json.Unmarshal(raw, &planSub)
+	}
+	s.add(phaseDaemons, "brokerd: plan soumis (canal opérateur, socket admin — #177)",
+		submitStatus == http.StatusOK && err == nil && planSub.PlanHash != "",
+		fmt.Sprintf("status=%d plan_hash=%s", submitStatus, planSub.PlanHash))
+
+	planHashBytes, err := hex.DecodeString(planSub.PlanHash)
+	if err != nil || len(planHashBytes) != 32 {
+		s.fail(phaseDaemons, "plan_hash reçu illisible", fmt.Errorf("hash=%q err=%v", planSub.PlanHash, err))
+		return
+	}
+	var planHash [32]byte
+	copy(planHash[:], planHashBytes)
+	approvalExpiry := time.Now().Add(5 * time.Minute)
+	approvalSig := ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(planHash, approvalExpiry))
+	approveStatus, _, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
+		"plan_hash":  planSub.PlanHash,
+		"expires_at": approvalExpiry.UTC().Format(time.RFC3339),
+		"signature":  hex.EncodeToString(approvalSig),
+	})
+	s.add(phaseDaemons, "brokerd: plan approuvé (signature opérateur Ed25519 — #177)",
+		approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
+
+	planBinding, err := pep.BuildBinding(planHash, nil)
+	if err != nil {
+		s.fail(phaseDaemons, "construction du plan_binding", err)
+		return
+	}
+
 	// --- Action réelle de bout en bout (chaîne §5.1 complète) ----------------
 	proof, err := mintProof(privs, "read", "doc-1", policyID, 0, time.Now().Add(2*time.Minute), 1, 2)
 	if err != nil {
 		s.fail(phaseDaemons, "menthe preuve de quorum", err)
 		return
 	}
-	intent := fmt.Sprintf(`{"action":"read","resource":"doc-1","class":2,"quorum_proof":"%s"}`,
-		hex.EncodeToString(proof))
+	intent := fmt.Sprintf(`{"action":"read","resource":"doc-1","class":2,"quorum_proof":"%s","plan_binding":"%s"}`,
+		hex.EncodeToString(proof), hex.EncodeToString(planBinding))
 	status, raw, err = postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{
 		"subject": "agent-1", "intent": intent,
 	})
