@@ -1,0 +1,85 @@
+name: release
+
+# Provenance de build SLSA v1.0 (catalogue de conformité #156) pour les
+# trois binaires démons du dépôt — pepd/brokerd/supervisord. TBP y est
+# évalué comme PRODUCTEUR d'artefacts, jamais comme consommateur de
+# skills tiers (angle distinct du trou SkillRegistry, #165).
+#
+# Niveau 3 SLSA exige que la provenance soit produite PAR LA PLATEFORME
+# à propos du build, jamais PAR le script de build lui-même — c'est
+# exactement ce que fait le générateur réutilisable officiel
+# slsa-framework/slsa-github-generator : il tourne dans un environnement
+# GitHub Actions ISOLÉ du job `build` (jobs séparés, `needs:`), signe la
+# provenance via OIDC (id-token: write) plutôt qu'avec une clé que ce
+# dépôt détiendrait — une provenance non-falsifiable par construction.
+#
+# Déclenché par un tag de version (vX.Y.Z) OU manuellement
+# (workflow_dispatch, pour vérifier le pipeline sans publier de
+# release) — le job `release` (téléversement des binaires sur la
+# Release GitHub) ne tourne QUE si déclenché par un tag ; le build et la
+# provenance tournent dans les deux cas.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: "build pepd/brokerd/supervisord"
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/pepd ./src/pep/cmd/pepd
+          go build -trimpath -ldflags="-s -w" -o dist/brokerd ./src/broker/cmd/brokerd
+          go build -trimpath -ldflags="-s -w" -o dist/supervisord ./src/supervision/cmd/supervisord
+      - name: "sha256 des artefacts (sujets de la provenance SLSA)"
+        id: hash
+        run: |
+          cd dist
+          echo "hashes=$(sha256sum pepd brokerd supervisord | base64 -w0)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tbp-binaries
+          path: dist/
+
+  # Générateur officiel SLSA — jamais réimplémenté localement : une preuve
+  # de provenance vérifiable par un tiers perd sa valeur si l'auditeur
+  # doit relire le générateur maison plutôt qu'un outil publiquement audité
+  # (même doctrine que le choix de Tessera pour le chaînage Merkle, §6).
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read # détecte l'environnement GitHub Actions
+      id-token: write # signe la provenance (OIDC), jamais une clé du dépôt
+      contents: write # téléverse la provenance sur la release (si tag)
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: ${{ startsWith(github.ref, 'refs/tags/') }}
+
+  release:
+    needs: [build, provenance]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tbp-binaries
+          path: dist/
+      - name: "publier les binaires sur la release"
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
