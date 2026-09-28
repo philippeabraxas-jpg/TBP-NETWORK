@@ -7,6 +7,7 @@ package broker
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -126,6 +127,26 @@ func (permissiveAgentRegistry) Resolve(_ string) (AgentRecord, bool) {
 	}, true
 }
 
+// permissiveContractGate accepte tout binding non vide sans jamais consulter
+// un plan réel — fixture de test pour les chemins existants qui exercent la
+// chaîne OPA/quorum/enveloppe, pas ContractStore lui-même (#177 : classe W
+// par défaut de permissiveAgentRegistry exige désormais un plan_binding ;
+// voir plan_contract_test.go pour les tests dédiés au contrat de plan réel,
+// avec un pep.ContractStore véritable et sa doctrine de séquence stricte).
+type permissiveContractGate struct{}
+
+func (permissiveContractGate) VerifyStep(_ context.Context, binding []byte, _, _ string) ([32]byte, error) {
+	return sha256.Sum256(binding), nil
+}
+
+// testPlanBinding est le binding non vide et fixe attaché par défaut aux
+// demandes de test qui n'en portent pas déjà un — accepté sans condition
+// par permissiveContractGate, réutilisable sur un nombre arbitraire
+// d'appels (contrairement à un plan ContractStore réel, à consommation
+// unique par étape).
+var testPlanBinding = []byte{0x01}
+var testPlanBindingHex = hex.EncodeToString(testPlanBinding)
+
 // opaServer simule un sidecar OPA : allow selon allowFn, délai selon delay.
 func opaServer(t *testing.T, allowFn func(input map[string]any) bool, delay time.Duration) *httptest.Server {
 	t.Helper()
@@ -193,6 +214,20 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 		st.tr.QuorumProof = mintTestProof(t, st.tr.Action, st.tr.Resource, 7)
 		tr = st
 	}
+	// permissiveAgentRegistry résout toujours en classe W — depuis #177,
+	// une action W exige aussi un plan_binding (composition non bornée par
+	// un plan échappait entièrement à ContractStore). Même convention que
+	// la preuve de quorum ci-dessus : un binding fixe, accepté sans
+	// condition par permissiveContractGate (pas un pep.ContractStore réel
+	// — un plan réel serait à consommation unique par étape, incompatible
+	// avec les tests qui répètent le même appel N fois, ex.
+	// TestDeterministicVerdicts). Les refus dédiés au binding et le
+	// contrat de plan réel ont leurs propres tests (broker_test.go pour
+	// #177 ; plan_contract_test.go pour ContractStore).
+	if st, ok := tr.(staticTranslator); ok && st.err == nil && len(st.tr.PlanBinding) == 0 {
+		st.tr.PlanBinding = testPlanBinding
+		tr = st
+	}
 	b, err := NewBroker(BrokerOptions{
 		CellID:     "tbp/registry/cell-test-01",
 		Salt:       testSalt,
@@ -203,6 +238,7 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 		Epochs:     StaticEpoch(7),
 		Registry:   permissiveAgentRegistry{},
 		Quorum:     newTestQuorumGate(t, leaves),
+		Contract:   permissiveContractGate{},
 		OnTrip:     trips.trip,
 	})
 	if err != nil {
@@ -240,18 +276,23 @@ func newTestValidator(t *testing.T, issuer *Issuer, signer *DevSigner, leaves *l
 
 // simpleIntent est une demande structurée minimale (action + resource) —
 // avec preuve de quorum valide : la classe par défaut est W (§5.3) et le
-// chemin d'allow passe donc le QuorumGate (§7.5, T29).
+// chemin d'allow passe donc le QuorumGate (§7.5, T29). Depuis #177, la
+// classe W exige aussi un plan_binding — testPlanBindingHex est accepté
+// sans condition par permissiveContractGate (voir les constructions
+// manuelles de broker qui câblent Contract: permissiveContractGate{}).
 func simpleIntent(t *testing.T, action, resource string) string {
 	t.Helper()
-	return fmt.Sprintf(`{"action":%q,"resource":%q,"quorum_proof":%q}`, action, resource, mintTestProofHex(t, action, resource, 7))
+	return fmt.Sprintf(`{"action":%q,"resource":%q,"quorum_proof":%q,"plan_binding":%q}`,
+		action, resource, mintTestProofHex(t, action, resource, 7), testPlanBindingHex)
 }
 
 // passportIntent est une demande structurée avec passeport (§4.1-bis) —
-// même remarque : preuve de quorum valide attachée (classe W par défaut).
+// même remarque : preuve de quorum et binding de plan valides attachés
+// (classe W par défaut, #177).
 func passportIntent(t *testing.T, resource string, volumeMax, windowS uint64) string {
 	t.Helper()
-	return fmt.Sprintf(`{"action":"http.send","resource":%[1]q,"quota":{"resource":%[1]q,"operation":"POST","volume_max":%[2]d,"window_s":%[3]d},"quorum_proof":%[4]q}`,
-		resource, volumeMax, windowS, mintTestProofHex(t, "http.send", resource, 7))
+	return fmt.Sprintf(`{"action":"http.send","resource":%[1]q,"quota":{"resource":%[1]q,"operation":"POST","volume_max":%[2]d,"window_s":%[3]d},"quorum_proof":%[4]q,"plan_binding":%[5]q}`,
+		resource, volumeMax, windowS, mintTestProofHex(t, "http.send", resource, 7), testPlanBindingHex)
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +415,7 @@ func TestBrokerOptionsFailClosed(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: tr, Issuer: issuer, Epochs: StaticEpoch(1),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Envelope: env, Ledger: ledger,
 	}
 	if _, err := NewBroker(full); err != nil {
@@ -518,6 +560,7 @@ func TestPassportOpensQuotaCounter(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -694,6 +737,7 @@ func TestSigningFailureDenies(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -750,6 +794,7 @@ func TestEnvelopeExceededDenies(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -819,6 +864,7 @@ func TestEnvelopeSaturationTrips(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -862,6 +908,7 @@ func TestEnvelopeFaultDeniesWithAlarm(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger, OnTrip: trips.trip,
 	})
@@ -974,6 +1021,79 @@ func TestDeterministicVerdicts(t *testing.T) {
 	}
 }
 
+// TestPlanBindingRequiredForClassIW (#177) : au-delà de la classe F, une
+// action sans plan_binding est refusée fail-closed AVANT même la
+// consultation du contrat de plan — la composition d'actions sans plan
+// (ex. write→chmod→execute, chacune classée I/W) ne peut plus échapper à
+// ContractStore en omettant simplement ce champ. Classe F et hors F/I/W
+// (Out, §5.3 : « reading, internet ») restent inchangées : aucune
+// régression pour les déploiements qui n'utilisent pas encore de plan sur
+// ces classes de moindre enjeu.
+func TestPlanBindingRequiredForClassIW(t *testing.T) {
+	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name       string
+		class      pep.Class
+		bindingReq bool
+	}{
+		{"classe F — non exigé", pep.ClassF, false},
+		{"classe I — exigé", pep.ClassI, true},
+		{"classe W — exigé", pep.ClassW, true},
+		{"hors F/I/W — non exigé", pep.ClassOut, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leaves := &leafRecorder{}
+			signer, err := NewDevSigner(testSeed)
+			if err != nil {
+				t.Fatalf("NewDevSigner: %v", err)
+			}
+			issuer, err := NewIssuer(IssuerOptions{CellID: "c", Signer: signer, PolicyID: testPolicyID})
+			if err != nil {
+				t.Fatalf("NewIssuer: %v", err)
+			}
+			opa, err := pep.NewOPAClient(pep.OPAOptions{Endpoint: srv.URL, Timeout: 500 * time.Millisecond, CellID: "c", Salt: testSalt, Leaves: leaves})
+			if err != nil {
+				t.Fatalf("NewOPAClient: %v", err)
+			}
+			b, err := NewBroker(BrokerOptions{
+				CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
+				Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
+				Registry: StaticAgentRegistry{"agent-1": AgentRecord{
+					Class: tc.class,
+					Quota: &AgentQuotaPolicy{MaxVolume: 1 << 40, MaxWindowS: 1 << 32},
+				}},
+				Quorum:   newTestQuorumGate(t, leaves),
+				Contract: permissiveContractGate{},
+			})
+			if err != nil {
+				t.Fatalf("NewBroker: %v", err)
+			}
+
+			noBinding := fmt.Sprintf(`{"action":"a","resource":"r","quorum_proof":%q}`, mintTestProofHex(t, "a", "r", 7))
+			res := b.HandleAction(context.Background(), "agent-1", noBinding)
+			if tc.bindingReq {
+				if res.Allow || res.Reason != ReasonPlanBindingRequired {
+					t.Fatalf("sans binding : allow=%v reason=%q, veut deny/%s", res.Allow, res.Reason, ReasonPlanBindingRequired)
+				}
+				if got := statsOf(t, b).PlanDenies; got != 1 {
+					t.Fatalf("PlanDenies=%d, veut 1", got)
+				}
+			} else if !res.Allow {
+				t.Fatalf("sans binding (classe non concernée par #177) : deny inattendu %q", res.Reason)
+			}
+
+			withBinding := fmt.Sprintf(`{"action":"a","resource":"r","quorum_proof":%q,"plan_binding":%q}`,
+				mintTestProofHex(t, "a", "r", 7), testPlanBindingHex)
+			res = b.HandleAction(context.Background(), "agent-1", withBinding)
+			if !res.Allow {
+				t.Fatalf("avec binding : deny inattendu %q", res.Reason)
+			}
+		})
+	}
+}
+
 func TestConcurrentBrokerNoOverIssue(t *testing.T) {
 	// Course concurrente sur l'enveloppe : 64 demandes de passeport de
 	// 1000 octets, règle allow si agrégat ≤ 10000. Jamais plus de 10
@@ -998,6 +1118,7 @@ func TestConcurrentBrokerNoOverIssue(t *testing.T) {
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: issuer, Epochs: StaticEpoch(7),
 		Registry: permissiveAgentRegistry{},
+		Contract: permissiveContractGate{}, // #177 : classe W par défaut exige un plan_binding
 		Quorum:   newTestQuorumGate(t, leaves),
 		Envelope: env, Ledger: ledger,
 	})
