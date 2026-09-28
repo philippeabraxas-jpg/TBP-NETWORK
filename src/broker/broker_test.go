@@ -1151,6 +1151,50 @@ func TestStructuredTranslatorBounds(t *testing.T) {
 	}
 }
 
+// TestStructuredTranslatorRejectsSmugglingUnicode : LLM01.5 (catalogue de
+// conformité #143) — un caractère Unicode invisible dans action/resource
+// ou dans quota.resource/operation est un refus fail-closed, jamais un
+// nettoyage silencieux. Chaque cas couvre une plage distincte de
+// smugglingRanges ; un dernier cas confirme qu'une chaîne propre contenant
+// un caractère Unicode ORDINAIRE (pas dans les plages interdites) continue
+// de passer — la mutation « refuser tout Unicode non-ASCII » serait prise.
+func TestStructuredTranslatorRejectsSmugglingUnicode(t *testing.T) {
+	tr := StructuredTranslator{}
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		intent string
+	}{
+		{"zero-width space dans resource", "{\"action\":\"a\",\"resource\":\"doc-1​secret\"}"},
+		{"word joiner dans action", "{\"action\":\"http⁠.send\",\"resource\":\"r\"}"},
+		{"sélecteur de variation dans resource", "{\"action\":\"a\",\"resource\":\"doc-1️\"}"},
+		{"BOM dans action", "{\"action\":\"\ufeffa\",\"resource\":\"r\"}"},
+		{"caractère de balise (ASCII smuggling) dans resource", "{\"action\":\"a\",\"resource\":\"doc-1\U000E0041\"}"},
+		{"formatage directionnel dans action", "{\"action\":\"a‮\",\"resource\":\"r\"}"},
+		{"zero-width dans quota.resource", "{\"action\":\"http.send\",\"resource\":\"r\",\"quota\":{\"resource\":\"https://x​\",\"operation\":\"POST\",\"volume_max\":1,\"window_s\":1}}"},
+		{"zero-width dans quota.operation", "{\"action\":\"http.send\",\"resource\":\"r\",\"quota\":{\"resource\":\"https://x\",\"operation\":\"POST​\",\"volume_max\":1,\"window_s\":1}}"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := tr.Translate(ctx, "agent-1", c.intent); err == nil {
+				t.Fatalf("%s : accepté, devrait être refusé (LLM01.5, #143)", c.name)
+			}
+		})
+	}
+
+	// Contrôle négatif : de l'Unicode ORDINAIRE (accentué, non-latin) n'est
+	// pas dans smugglingRanges et doit continuer à passer — la mutation
+	// « refuser tout ce qui n'est pas ASCII » serait prise ici.
+	out, err := tr.Translate(ctx, "agent-1", `{"action":"a","resource":"café-日本語"}`)
+	if err != nil {
+		t.Fatalf("Unicode ordinaire refusé à tort : %v", err)
+	}
+	if out.Resource != "café-日本語" {
+		t.Fatalf("resource altérée silencieusement : %q", out.Resource)
+	}
+}
+
 // TestLeafFailureFailsClosed vérifie la doctrine « pas de preuve, pas
 // d'accès » sur les deux chemins de feuille :
 //   - stade OPA (T11) : un allow sans feuille re-bascule en deny
