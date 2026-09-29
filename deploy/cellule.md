@@ -428,7 +428,21 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # notion of an installable "skill".
 #                                      # JSON {"<action>": {"provenance":
 #                                      # "<publisher/source>", "scope":
-#                                      # ["<resource>", …]}, …}. Absent ⇒ no
+#                                      # ["<resource>", …], "risk_tier":
+#                                      # "low|medium|high|critical"}, …}.
+#                                      # risk_tier is REQUIRED (no default
+#                                      # tier) and cross-checked against the
+#                                      # scope size at startup (low ≤ 8
+#                                      # resources, medium ≤ 32, high ≤ 128,
+#                                      # critical unbounded — a consistency
+#                                      # guard, not a security boundary);
+#                                      # brokerd refuses to start otherwise.
+#                                      # It is passed to OPA as input.skill
+#                                      # {risk_tier, scope_size}; the rule
+#                                      # pack policies/rego/pack_skill_tier
+#                                      # .rego turns it into gating: high ⇒
+#                                      # class I/W (plan), critical ⇒ class W
+#                                      # (plan + quorum). Absent ⇒ no
 #                                      # skill concept at all — historical
 #                                      # behavior unchanged, NOT a hidden
 #                                      # regression, a deliberate

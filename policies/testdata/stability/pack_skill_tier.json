@@ -1,0 +1,10 @@
+{
+  "comment": "Fixture de stabilité (§12) pour policies/rego/pack_skill_tier.rego — niveau invalide ET classe insuffisante : la sortie (ensemble, raisons triées) doit être identique d'une évaluation à l'autre.",
+  "query": "data.tbp.pack.skill_tier",
+  "input": {
+    "action": "wire.transfer",
+    "resource": "acct-1",
+    "class": 0,
+    "skill": {"risk_tier": "critical", "scope_size": 2}
+  }
+}

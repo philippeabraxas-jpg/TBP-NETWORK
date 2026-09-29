@@ -47,6 +47,63 @@ package broker
 // fermée pour la query string et le corps du proxy. No-DPI, comparaison
 // exacte uniquement.
 
+import (
+	"errors"
+	"fmt"
+)
+
+// RiskTier est le niveau de risque DÉCLARÉ d'un skill, provisionné hors-bande
+// avec le reste de son enregistrement (catalogue OWASP AST 4.5 / 9.2). Il est
+// transmis à OPA (pep.SkillInput) : c'est la règle Rego (policies/rego/
+// pack_skill_tier.rego) qui en tire les conséquences — ce paquet-ci ne fait
+// que le valider et le recouper avec le périmètre.
+type RiskTier string
+
+const (
+	TierLow      RiskTier = "low"
+	TierMedium   RiskTier = "medium"
+	TierHigh     RiskTier = "high"
+	TierCritical RiskTier = "critical"
+)
+
+// tierMaxScope : nombre maximal de ressources qu'un skill peut déclarer à un
+// niveau donné (critical : illimité). Recoupement de COHÉRENCE à la genèse —
+// pas une frontière de sécurité : un périmètre large déclaré « low » est un
+// défaut de déclaration, pas une preuve de faible risque. L'opérateur qui
+// élargit le périmètre doit monter le niveau, donc soumettre le skill aux
+// exigences de plan et de quorum correspondantes.
+var tierMaxScope = map[RiskTier]int{
+	TierLow:    8,
+	TierMedium: 32,
+	TierHigh:   128,
+}
+
+// Valid rend vrai pour les quatre niveaux connus — tout autre texte (dont le
+// vide) est invalide : pas de niveau par défaut (§1).
+func (t RiskTier) Valid() bool {
+	switch t {
+	case TierLow, TierMedium, TierHigh, TierCritical:
+		return true
+	}
+	return false
+}
+
+// Validate vérifie l'enregistrement à la genèse : provenance non vide,
+// niveau connu, périmètre compatible avec le niveau. Toute faute est fatale
+// au démarrage de brokerd (fail-closed, jamais de valeur corrigée en silence).
+func (r SkillRecord) Validate() error {
+	if r.Provenance == "" {
+		return errors.New("provenance déclarée requise (§1)")
+	}
+	if !r.RiskTier.Valid() {
+		return fmt.Errorf("risk_tier %q invalide : attendu low, medium, high ou critical (aucun niveau par défaut)", string(r.RiskTier))
+	}
+	if max, capped := tierMaxScope[r.RiskTier]; capped && len(r.Scope) > max {
+		return fmt.Errorf("scope de %d ressources incohérent avec risk_tier %q (max %d) : monter le niveau ou réduire le périmètre", len(r.Scope), string(r.RiskTier), max)
+	}
+	return nil
+}
+
 // SkillRecord est l'identité résolue d'un skill.
 type SkillRecord struct {
 	// Provenance identifie la source du skill (éditeur, dépôt, hash de
@@ -62,6 +119,9 @@ type SkillRecord struct {
 	// cibler AUCUNE ressource : déclaré mais non provisionné pour agir,
 	// jamais un accès total par omission (§1).
 	Scope []string
+	// RiskTier : niveau de risque déclaré (voir RiskTier). Obligatoire —
+	// un skill sans niveau n'est pas provisionnable.
+	RiskTier RiskTier
 }
 
 // allows rend vrai si resource figure EXACTEMENT dans le scope déclaré.

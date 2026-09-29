@@ -17,6 +17,7 @@
 package tbp.example.action
 
 import data.tbp.pack.agent_hardening as hardening
+import data.tbp.pack.skill_tier as skill_tier
 import rego.v1
 
 # Défaut-deny explicite (doctrine §1 : "jamais par oui, toujours par
@@ -27,12 +28,15 @@ default allow := false
 
 # Le paquet de durcissement (policies/rego/pack_agent_hardening.rego) est une
 # GARDE commune : fichiers de mémoire d'agent, magasins d'identifiants et
-# sortie réseau. Aucune règle d'autorisation ci-dessous ne l'écarte.
+# sortie réseau. Le paquet de niveaux de skills (pack_skill_tier.rego) en est
+# une seconde : un skill high/critical exige la classe I/W ou W. Aucune règle
+# d'autorisation ci-dessous n'écarte ces gardes.
 
 # Classe "inoffensive" (§4.1) : lecture seule, exécution directe.
 allow if {
 	input.action == "read"
 	hardening.ok
+	skill_tier.ok
 }
 
 # Ouverture de chemin lourd : n'autorise QUE si un passeport valide et non
@@ -41,6 +45,7 @@ allow if {
 allow if {
 	input.action == "open_tunnel"
 	hardening.ok
+	skill_tier.ok
 	input.passeport != null
 	input.passeport.volume_used < input.passeport.volume_max
 	input.passeport.ttl_remaining_s > 0
@@ -51,6 +56,8 @@ allow if {
 # "deny" sans raison ne sert à rien pour l'investigation).
 reason := concat(", ", sort(hardening.violation)) if {
 	not hardening.ok
+} else := concat(", ", sort(skill_tier.violation)) if {
+	not skill_tier.ok
 } else := "action inconnue ou hors classification" if {
 	not allow
 	not input.passeport

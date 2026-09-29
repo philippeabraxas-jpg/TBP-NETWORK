@@ -124,8 +124,9 @@
 //	                        réseau est refusé (agent-transport-unbound),
 //	                        quel que soit le certificat présenté.
 //	TBP_SKILL_REGISTRY_FILE optionnel — JSON {"<action>": {"provenance":
-//	                        "<éditeur/source>", "scope": ["<ressource>", …]},
-//	                        …} (catalogue de conformité #142-#161 : « aucune
+//	                        "<éditeur/source>", "scope": ["<ressource>", …],
+//	                        "risk_tier": "low|medium|high|critical"},
+//	                        …} (risk_tier obligatoire, transmis à OPA) (catalogue de conformité #142-#161 : « aucune
 //	                        notion de skill installable », confirmé sept fois
 //	                        par des référentiels indépendants). Absent ⇒
 //	                        aucune notion de skill, comportement historique
@@ -1306,10 +1307,12 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 type skillRegistryEntry struct {
 	Provenance string   `json:"provenance"`
 	Scope      []string `json:"scope"`
+	RiskTier   string   `json:"risk_tier"`
 }
 
 // loadSkillRegistry charge le registre de skills : JSON
-// {"<action>": {"provenance": "<éditeur/source>", "scope": ["<ressource>", …]}, …},
+// {"<action>": {"provenance": "<éditeur/source>", "scope": ["<ressource>", …],
+// "risk_tier": "low|medium|high|critical"}, …},
 // ≥ 1 skill — même doctrine hors-bande que loadAgentRegistry ci-dessus :
 // provisionné à la genèse, jamais résolu dynamiquement, jamais accepté
 // depuis la demande elle-même. Provenance vide refusée : un skill de
@@ -1331,10 +1334,11 @@ func loadSkillRegistry(path string) (broker.StaticSkillRegistry, error) {
 		if action == "" {
 			return nil, errors.New("registre de skills : action vide refusée")
 		}
-		if entry.Provenance == "" {
-			return nil, fmt.Errorf("registre de skills : skill %q sans provenance déclarée refusé (§1)", action)
+		rec := broker.SkillRecord{Provenance: entry.Provenance, Scope: entry.Scope, RiskTier: broker.RiskTier(entry.RiskTier)}
+		if err := rec.Validate(); err != nil {
+			return nil, fmt.Errorf("registre de skills : skill %q refusé : %w", action, err)
 		}
-		reg[action] = broker.SkillRecord{Provenance: entry.Provenance, Scope: entry.Scope}
+		reg[action] = rec
 	}
 	return reg, nil
 }

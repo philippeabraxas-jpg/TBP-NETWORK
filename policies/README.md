@@ -121,3 +121,29 @@ bundle as data, including in the deployment selftest.
 - **`exempt_resources` is an exception, not a fix.** It is exact-match, comes
   from the signed bundle, and should be reviewed like any other policy change.
 
+### `tbp.pack.skill_tier` — `policies/rego/pack_skill_tier.rego`
+
+The broker's skill registry (`TBP_SKILL_REGISTRY_FILE`, out-of-band) gives each
+skill a **required** `risk_tier` (`low`, `medium`, `high`, `critical`), checked
+at startup against the size of its declared scope, and passes it to OPA as
+`input.skill = {risk_tier, scope_size}`. The value comes from the registry,
+never from the request. The pack turns it into gating:
+
+| Skill tier | Violation code | Rule |
+|---|---|---|
+| `low`, `medium` | — | no extra constraint |
+| `high` | `skill-high-requires-class-i-or-w` | only an agent registered as class I or W (so under an approved plan, #177) |
+| `critical` | `skill-critical-requires-class-w` | only class W (approved plan **and** quorum, §7.5) |
+| absent / unknown tier while `input.skill` is present | `skill-tier-invalid` | never a default tier |
+| no registry configured but the bundle demands one | `skill-registry-required` | see below |
+
+Bundle data (optional): `{"tbp": {"hardening": {"require_skill_registry": true}}}`
+makes a missing `input.skill` a violation, so a deployment that relies on tiers
+cannot lose them by forgetting to configure the registry. Without it, no
+registry means no opinion (historical behaviour).
+
+**Before enabling:** the declared tier is an operator statement. The pack
+enforces its consequences but cannot judge whether a tier is too low; review the
+registry file like a policy change. The scope-size check at load time
+(low ≤ 8, medium ≤ 32, high ≤ 128, critical unbounded) only catches an obvious
+mismatch.
