@@ -146,6 +146,25 @@ func contractRecord(event byte, planHash [32]byte, step uint16, verdict byte, re
 	return append(r, reason...)
 }
 
+// approvalRecord reconstitue le record « TBPL2 » d'une approbation réussie :
+// le test verrouille l'attribution (kid de l'opérateur, expiration, signature).
+func approvalRecord(planHash [32]byte, priv ed25519.PrivateKey, expiry time.Time) []byte {
+	kid := KeyIDFromPublicKey(priv.Public().(ed25519.PublicKey))
+	r := contractRecord(planEventApprove, planHash, planStepNA, 1, "ok")
+	copy(r, "TBPL2")
+	r = append(r, kid[:]...)
+	r = binary.BigEndian.AppendUint64(r, uint64(expiry.Unix()))
+	return append(r, signApproval(priv, planHash, expiry)...)
+}
+
+func expectApprovalLeaf(t *testing.T, l registry.Leaf, planHash [32]byte, priv ed25519.PrivateKey, expiry time.Time) {
+	t.Helper()
+	want := registry.HashPayload(contractSalt, approvalRecord(planHash, priv, expiry))
+	if l.PayloadHash != want {
+		t.Fatal("feuille d'approbation : hash inattendu — l'attribution (kid, expiration, signature) n'est pas celle attendue")
+	}
+}
+
 func expectLeafHash(t *testing.T, l registry.Leaf, event byte, planHash [32]byte, step uint16, verdict byte, reason string) {
 	t.Helper()
 	want := registry.HashPayload(contractSalt, contractRecord(event, planHash, step, verdict, reason))
@@ -429,7 +448,7 @@ func TestConformantExecutionConsumesSteps(t *testing.T) {
 	if len(leaves) != 6 {
 		t.Fatalf("%d feuilles, attendu 6", len(leaves))
 	}
-	expectLeafHash(t, leaves[1], planEventApprove, hash, planStepNA, 1, "ok")
+	expectApprovalLeaf(t, leaves[1], hash, opKey1(), contractEpochT0.Add(30*time.Minute))
 	for i := range steps {
 		expectLeafHash(t, leaves[2+i], planEventConsume, hash, uint16(i), 1, "ok")
 	}
@@ -913,5 +932,44 @@ func TestContractStoreSnapshot(t *testing.T) {
 	clock.advance(DefaultPendingTTL) // submitted2 + 15 min pile
 	if got := snapshotOf(t, s); len(got) != 0 {
 		t.Fatalf("snapshot après expiration : %d plans — attendu 0 (expiresAt atteint)", len(got))
+	}
+}
+
+// TestApprovalLeafAttributesTheApprover : la feuille d'approbation dit QUEL
+// opérateur a approuvé (§1 : « une décision reste attribuable »). Deux
+// opérateurs approuvent chacun un plan : les feuilles correspondent chacune à
+// SON record, et diffèrent l'une de l'autre — un hash qui ne dépendrait pas de
+// l'approbateur passerait le test de forme sans rien attribuer.
+func TestApprovalLeafAttributesTheApprover(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	trips := &contractTrips{}
+	s := newContractStore(t, sink, clock, trips, func(o *ContractOptions) {
+		o.OperatorKeys = []ed25519.PublicKey{opKey1().Public().(ed25519.PublicKey), opKey2().Public().(ed25519.PublicKey)}
+	})
+	h1, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/1", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/2", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := clock.now().Add(30 * time.Minute)
+	if err := s.Approve(context.Background(), h1, expiry, signApproval(opKey1(), h1, expiry)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Approve(context.Background(), h2, expiry, signApproval(opKey2(), h2, expiry)); err != nil {
+		t.Fatal(err)
+	}
+	leaves := contractLeaves(sink)
+	// 2 submit puis 2 approve
+	expectApprovalLeaf(t, leaves[2], h1, opKey1(), expiry)
+	expectApprovalLeaf(t, leaves[3], h2, opKey2(), expiry)
+	// L'attribution est discriminante : le même plan approuvé par l'AUTRE
+	// opérateur donnerait une autre feuille.
+	other := registry.HashPayload(contractSalt, approvalRecord(h1, opKey2(), expiry))
+	if leaves[2].PayloadHash == other {
+		t.Fatal("la feuille d'approbation ne dépend pas de l'opérateur : rien n'est attribué")
 	}
 }
