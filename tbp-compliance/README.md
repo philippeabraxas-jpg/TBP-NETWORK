@@ -129,7 +129,7 @@ move to ✅ in the same pull request.
 | [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | [143](143-owasp-llm-top10.md) LLM06 human confirmation |
 | [#192](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/192) | Measured boot does not cover the provisioning files (agents, operators, skills, keyrings, ano rules) | [152](152-iso-iec-27001-27002.md) configuration management, [159](159-nist-800-207-zero-trust.md) tenet 5 |
 | [#195](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/195) | The class that triggers quorum and plan is the agent's (registry), not the action's | [143](143-owasp-llm-top10.md) and [146](146-eu-ai-act.md) art. 14, [151](151-us-federal-ai-directives.md), [162](162-owasp-api-security-top10.md) API6 |
-| [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) | Plan approval takes a single operator signature, not a quorum | same rows as #195 |
+| [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) | Quorum for plan approval at larger scales (scale 1: the admin alone signs, by design) — a security-profile brick, defined with the full-scale handshake | same rows as #195 |
 | [#193](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/193) | GitHub Actions referenced by tag, not by commit SHA | [157](157-owasp-scvs.md) build environment |
 
 ## Rule packs that close catalogue rows
