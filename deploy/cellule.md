@@ -287,6 +287,18 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # proof (same TBP_QUORUM_KEYRING_FILE as
 #                                  # POST /v1/mode, §89/§105), never a plain
 #                                  # environment flag alone
+#   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/pepd-provisioning-witness.json
+#                                  # issue #192: pepd measures the two pinned
+#                                  # keyrings it trusts (TBP_KEYRING_FILE,
+#                                  # TBP_QUORUM_KEYRING_FILE — derived, not
+#                                  # listed here) at every start; a changed
+#                                  # file refuses to start. REQUIRED, outside
+#                                  # TBP_REGISTRY_DIR (same reason as the
+#                                  # measured-boot manifest, #111). Only
+#                                  # TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1
+#                                  # (dev/lab, needs the DEV_ENVIRONMENT
+#                                  # sentinel, never production) may stand in.
+#                                  # See "Provisioning files" after step 7.
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
@@ -473,6 +485,22 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # remove a skill entry; only an
 #                                      # operator editing this file and
 #                                      # restarting brokerd can.
+#   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/broker-provisioning-witness.json
+#                                      # issue #192: brokerd measures, at every
+#                                      # start, the files that carry the cell's
+#                                      # trust — operator keys, agent registry,
+#                                      # genesis manifest (controllers), skill
+#                                      # registry and the mTLS client CA when
+#                                      # set. The list is DERIVED from this
+#                                      # configuration; the variable
+#                                      # TBP_PROVISIONING_EXTRA_FILES holding
+#                                      # "name=path,…" adds to it. A changed
+#                                      # file refuses to start and names it.
+#                                      # REQUIRED, outside TBP_REGISTRY_DIR, a
+#                                      # different file from pepd's. Opt-out
+#                                      # (dev/lab only, needs the sentinel):
+#                                      # TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1.
+#                                      # See "Provisioning files".
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
 #                                      # (security review #95, finding
@@ -554,6 +582,44 @@ genesis, without OPA or without operator keys is fail-open: fix the
 cause, never work around it. A refused `epoch0` means a genesis that
 does not match the manifest: redo the distribution (step 1),
 never hand-tinker the token.
+
+## Provisioning files — measured at every start (issue #192)
+
+The measured boot of `pepd` attests four artefacts (bundle, OPA config, `brokerd`
+binary, AI container). The files that carry the cell's TRUST are measured by the
+daemon that loads them: editing `agents.json` (class W → F, which removes plan and
+quorum), adding a key to an operator or controller keyring, or widening a skill's
+scope used to pass without any alarm.
+
+- **What is measured.** `brokerd`: operator keys, agent registry, genesis manifest,
+  skill registry, mTLS client CA. `pepd`: issuer keyring, quorum keyring. Both accept
+  `TBP_PROVISIONING_EXTRA_FILES` (for example the `anod` rules file).
+- **How.** A digest over the sorted (name, SHA-256) list is committed at the first start
+  in a witness signed by the cell key, outside `TBP_REGISTRY_DIR`. At each later start the
+  digest must match; otherwise the daemon refuses to start, writes a refusal leaf, raises
+  the alarm, and names the changed file (never its content).
+- **Legitimate change** (new agent, rotated key). Edit the file, then have the
+  controllers sign a proof — the same k as class W (`TBP_QUORUM_MIN`): at scale 1 the
+  administrator alone signs, k = 1; above that a k-of-n quorum:
+
+  ```bash
+  go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
+  quorumproof sign -condition provisioning-transition-brokerd -cell cell-a \
+    -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
+  # then in brokerd.env: TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
+  # restart, check it started, and REMOVE the line (the proof lives 4 minutes by default)
+  ```
+
+  Conditions: `provisioning-transition-brokerd` and `provisioning-transition-pepd` (a
+  proof for one never works for the other, nor for a posture switch). Controllers whose
+  keys live in an HSM use `quorumproof message` (what to sign) and `quorumproof assemble`.
+- **Adopting this on a cell that already ran.** With no witness and a registry that has
+  already lived, the daemon refuses to start (an edited file would otherwise be adopted as
+  a "first start", §111): provide one transition proof as above, once.
+- **Limits.** Files are loaded once at start (there is no hot reload): a change is caught at
+  the next start, not while running. An attacker who holds the cell key AND can write the
+  witness can forge it (same trust as the measured-boot manifest). Scale is a setting of
+  the proof, not of the mechanism: the same brick runs at every scale.
 
 #### Step 8 — §9.1 measurement points BEFORE any switch (D100)
 

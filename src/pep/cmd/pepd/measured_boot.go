@@ -46,12 +46,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"golang.org/x/mod/sumdb/note"
 
@@ -177,14 +174,9 @@ func envRequiredFrom(getenv func(string) string, name string) (string, error) {
 	return v, nil
 }
 
-// measuredBootTransitionProofFile est la forme JSON du fichier de preuve
-// pointé par TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE — MÊME forme que le
-// corps de POST /v1/mode (ModeChangeRequest, listener.go) : k signatures
-// Ed25519 distinctes du trousseau de contrôleurs épinglé (§12,
-// TBP_QUORUM_KEYRING_FILE), sur pep.QuorumMessage("measured-boot-
-// transition", cellID, expiry). Un fichier, pas un POST HTTP : la
-// transition se décide AU DÉMARRAGE, avant que le listener HTTP
-// n'existe.
+// measuredBootTransitionProofFile / measuredBootTransitionSigWire : forme JSON du
+// fichier de preuve (TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE), identique à celle
+// que lit pep.VerifyQuorumProofFile — les tests de ce paquet la fabriquent avec.
 type measuredBootTransitionProofFile struct {
 	Expiry     int64                           `json:"expiry"`
 	Signatures []measuredBootTransitionSigWire `json:"signatures"`
@@ -208,35 +200,8 @@ const reasonMeasuredBootTransition = "measured-boot-transition"
 // simple accès en écriture à l'environnement du process (l'ancien
 // TBP_MEASURED_BOOT_TRANSITION=1) ne suffit plus.
 func verifyMeasuredBootTransitionProof(path, cellID string, quorumKeyring map[[16]byte]ed25519.PublicKey, quorumMin int) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("preuve de transition illisible (%s): %w", path, err)
-	}
-	var pf measuredBootTransitionProofFile
-	if err := json.Unmarshal(data, &pf); err != nil {
-		return fmt.Errorf("preuve de transition (%s) mal formée: %w", path, err)
-	}
-	sigs := make([]pep.QuorumSignature, 0, len(pf.Signatures))
-	for _, s := range pf.Signatures {
-		kid, err := hex.DecodeString(s.KeyID)
-		if err != nil || len(kid) != 16 {
-			return fmt.Errorf("preuve de transition: key_id illisible (hex 16 octets)")
-		}
-		sig, err := hex.DecodeString(s.Signature)
-		if err != nil || len(sig) != ed25519.SignatureSize {
-			return fmt.Errorf("preuve de transition: signature illisible (hex 64 octets Ed25519)")
-		}
-		var kidArr [16]byte
-		copy(kidArr[:], kid)
-		sigs = append(sigs, pep.QuorumSignature{KeyID: kidArr, Signature: sig})
-	}
-	verify, err := pep.NewSignatureQuorumVerifier(cellID, quorumKeyring, quorumMin, pep.DefaultQuorumProofTTL, nil)
-	if err != nil {
-		return fmt.Errorf("quorum: %w", err)
-	}
-	proof := pep.QuorumProof{Expiry: time.Unix(pf.Expiry, 0), Signatures: sigs}
-	if !verify(reasonMeasuredBootTransition, proof) {
-		return errors.New("preuve de quorum rejetée (signatures insuffisantes, invalides, ou expirées — §112)")
+	if err := pep.VerifyQuorumProofFile(path, reasonMeasuredBootTransition, cellID, quorumKeyring, quorumMin); err != nil {
+		return fmt.Errorf("preuve de transition : %w", err)
 	}
 	return nil
 }

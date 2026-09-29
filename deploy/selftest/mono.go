@@ -282,6 +282,10 @@ func runMono(s *suite, cfg config) {
 		// Le désactiver ici EXPLICITEMENT est dev/lab uniquement, jamais en
 		// production — même doctrine que TBP_OPA_INSECURE_TCP_DEV ci-dessus.
 		"TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE=1",
+		// Mesure des trousseaux épinglés (issue #192) : le témoin vit hors de
+		// TBP_REGISTRY_DIR. L'édition d'un fichier de confiance entre deux
+		// démarrages est exercée de bout en bout par la phase daemons (brokerd).
+		"TBP_PROVISIONING_WITNESS_FILE="+filepath.Join(cfg.out, "pepd-provisioning-witness.json"),
 	)
 
 	// --- Étape : démarrage pepd — TOUJOURS monitor au boot (§5.3) -----------
