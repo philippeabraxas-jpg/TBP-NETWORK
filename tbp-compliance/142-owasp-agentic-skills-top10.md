@@ -3,7 +3,7 @@
 **Status: Partial**
 **Source**: [issue #142](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/142) (analysis) · [issue #165 / PR #166](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) (SkillRegistry fix)
 **Reference**: [OWASP Agentic Skills Top 10](https://github.com/OWASP/www-project-agentic-skills-top-10) (AST01–AST10, 2026 checklist)
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -20,7 +20,7 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 | 1.3 | Ed25519 signature + manifest `content_hash` | 🟡 | The crypto mechanism exists (`Issuer`/`DevSigner`/`PKCS11Signer`, `ContractStore` already verifies Ed25519 operator signatures on plans) — never yet applied to a skill manifest. |
 | 1.4 | Manual code review | ⚪ | Human process, not runtime. |
 | 1.5 | Isolated canary rollout | ⚪ | CI/deployment concern. |
-| 1.6 | Forbid writes to `SOUL.md`/`MEMORY.md`/`AGENTS.md` without explicit justification | 🟢 | **Implementable today**: a `deny` rule matching `resource` against these names — `Resource` is already a free string carried by `StructuredTranslator`, no new plumbing. Not yet written. |
+| 1.6 | Forbid writes to `SOUL.md`/`MEMORY.md`/`AGENTS.md` without explicit justification | ✅ | Rule pack `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violation `protected-agent-file`: a write/delete on these files is refused below **class W**. Class W *is* the explicit justification — an approved plan (#177) plus a k-of-n quorum (§7.5) — and the class comes from `AgentRegistry` (#125), never from the agent. More names via bundle data `extra_protected_files`. Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
 
 ## AST02 — Supply Chain Compromise (CRITICAL)
 
@@ -39,12 +39,12 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 | # | Control | Status | Detail |
 |---|---|---|---|
 | 3.1 / 3.2 | Explicit, bounded permission manifest; minimize to real needs | ✅ | `SkillRecord.Scope` — exact literal comparison, never a prefix; an unregistered action carries zero privilege. |
-| 3.3 | `shell:false` or command allowlist | 🟢/🟡 | Implementable as a Rego rule if `Action`/`Resource` already encode the command — otherwise 🟡 (a dedicated field is missing). Not yet written. |
-| 3.4 | Explicit file paths, never broad globs | 🟢/🟡 | Same remark as 3.3. |
+| 3.3 | `shell:false` or command allowlist | ✅ | `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violations `command-not-allowlisted` and `shell-metacharacter`: for actions named `exec`/`run`/`shell`/`execute`/`spawn` (extendable via `extra_command_actions`) the resource is the command line — its **first word must be allowlisted exactly** (`ls` does not allow `/tmp/ls`) and it may carry no shell metacharacter. Default-deny: with no `allowed_commands` nothing runs. `shell:false` itself is the *executor's* setting, since TBP never executes (see #180). Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
+| 3.4 | Explicit file paths, never broad globs | ✅ | `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violation `glob-in-resource`: a `*` in a resource is refused. Confining paths to a set of roots is not shipped — TBP cannot tell a path from an identifier — and is written as a deployment-specific Rego prefix rule when needed. Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
 | 3.5 | Isolate credentials per skill, scheduled rotation | 🔴 | `Scope` bounds targeted *resources*, not per-skill credentials — TBP has no per-skill credential concept at all; not covered by SkillRegistry. |
-| 3.6 | Flag `SOUL.md`/`MEMORY.md` writes for elevated review | 🟢 | Duplicate of 1.6 — same quick-win. |
-| 3.7 | Network permissions as a domain allowlist, default-deny egress | 🟢 | Implementable today: a Rego rule parsing the domain from `Resource` (already a URL in HTTP cases) against a configurable allowlist. Not yet written. |
-| 3.8 | Block access to credential stores/`.env`/wallets/SSH/browser data | 🟢 | Same family as 1.6/3.6 — quick-win Rego rule on known `resource` patterns. Not yet written. |
+| 3.6 | Flag `SOUL.md`/`MEMORY.md` writes for elevated review | ✅ | Same mechanism as 1.6: the write is refused below class W, and class W means plan approval + quorum, i.e. the elevated review. |
+| 3.7 | Network permissions as a domain allowlist, default-deny egress | ✅ | `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violations `egress-not-allowlisted`, `malformed-authority`, `opaque-uri`: a URL resource must target a host in bundle data `allowed_domains` (exact, or `*.example.org` for subdomains). Default-deny. Handles the `user@host` trick, ports, trailing dots, case, `\\` and scheme-relative forms. **Two layers:** this is the policy layer; the network layer is the firewall (#186). Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
+| 3.8 | Block access to credential stores/`.env`/wallets/SSH/browser data | ✅ | `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violation `credential-store`: refused for **every** action and class, reads included (`.env*`, `~/.ssh`, `.aws`, `.gnupg`, `.kube`, private keys/certs, wallets, browser data, `/etc/shadow`). Only the names it knows: extend via `extra_credential_files`/`extra_credential_dirs`. Also confirmed end to end through the real OPA in `deploy/selftest`. Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
 
 ## AST04 — Insecure Metadata (HIGH)
 
@@ -68,7 +68,7 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 | 5.1 | Inventory of referenced external URLs/docs | ✅ | `TBP_SKILL_REGISTRY_FILE` is this out-of-band inventory. |
 | 5.2 | Pin each reference to a content hash | 🟡 | Same pattern as 2.2, not yet applied to external references specifically. |
 | 5.3 | Prefer signed inlining over runtime fetch | 🔴 | Design decision for a future SkillRegistry extension. |
-| 5.4 | Restrict runtime fetches to a domain allowlist | 🟢/🟡 | Same remark as 3.7. |
+| 5.4 | Restrict runtime fetches to a domain allowlist | ✅ | Same mechanism as 3.7 (`egress-not-allowlisted`): a runtime fetch whose resource is a canonical URL must target an allowed host. |
 | 5.5 | Transitive review of the reference graph | ⚪ | Static analysis. |
 | 5.6 | Fleet-wide visibility (which skill fetched which source) | 🟡 | Close to what the leaf registry already does (every decision traced, hash-only, §6.2) — a `KindSkillFetch` leaf type would be consistent with the 12 existing `Kind`s. |
 
@@ -121,7 +121,7 @@ Almost entirely ⚪: TBP is a closed, single-architecture system by construction
 
 **Closed by SkillRegistry (#165, PR #166)**: publisher identity/provenance (1.1), version pinning pattern (2.2), permission scope (3.1/3.2), manifest schema validation (4.4/4.9/4.11), skill inventory (5.1), third-party supplier relationship gaps confirmed independently by [#144](144-csa-maestro.md), [#145](145-mitre-atlas.md), [#148](148-iso-iec-42001.md), [#152](152-iso-iec-27001-27002.md), [#153](153-nist-csf-800-53.md).
 
-**Still open — Rego quick-wins, no new Go code needed**: 1.6/3.6 (forbid `SOUL.md`/`MEMORY.md`/`AGENTS.md` writes), 3.7/5.4 (network domain allowlist from `Resource`), 3.8 (block known credential-store paths), 3.3/3.4 (command/path allowlists, where the action already encodes them). None of these rules have been written yet.
+**Closed by the agent-hardening rule pack** (`tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`)): 1.6/3.6 (agent identity/memory files need class W), 3.3 (command allowlist, no shell metacharacters), 3.4 (no broad globs), 3.7/5.4 (egress domain allowlist, default-deny), 3.8 (credential stores refused for every action). Configuration is bundle data, documented in [`policies/README.md`](../policies/README.md).
 
 **Still open — needs a `SkillRecord` extension**: per-skill credential isolation (3.5), `risk_tier` field (4.5, 9.2), scheduled credential rotation (9.7).
 
