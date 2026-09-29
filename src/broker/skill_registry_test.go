@@ -13,6 +13,8 @@ package broker
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -154,5 +156,98 @@ func TestSkillRecordEmptyScopeAllowsNothing(t *testing.T) {
 	rec := SkillRecord{Provenance: "vendor-x"} // Scope nil
 	if rec.allows("anything") {
 		t.Fatal("scope vide a autorisé une ressource — devrait tout refuser (§1)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// risk_tier (catalogue OWASP AST 4.5 / 9.2).
+
+func TestSkillRecordValidate(t *testing.T) {
+	scope := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("r-%d", i)
+		}
+		return out
+	}
+	cases := []struct {
+		name string
+		rec  SkillRecord
+		ok   bool
+	}{
+		{"low, petit périmètre", SkillRecord{Provenance: "v", RiskTier: TierLow, Scope: scope(8)}, true},
+		{"low, périmètre trop large", SkillRecord{Provenance: "v", RiskTier: TierLow, Scope: scope(9)}, false},
+		{"medium à la borne", SkillRecord{Provenance: "v", RiskTier: TierMedium, Scope: scope(32)}, true},
+		{"medium au-delà", SkillRecord{Provenance: "v", RiskTier: TierMedium, Scope: scope(33)}, false},
+		{"high à la borne", SkillRecord{Provenance: "v", RiskTier: TierHigh, Scope: scope(128)}, true},
+		{"high au-delà", SkillRecord{Provenance: "v", RiskTier: TierHigh, Scope: scope(129)}, false},
+		{"critical illimité", SkillRecord{Provenance: "v", RiskTier: TierCritical, Scope: scope(1000)}, true},
+		{"niveau absent", SkillRecord{Provenance: "v", Scope: scope(1)}, false},
+		{"niveau inconnu", SkillRecord{Provenance: "v", RiskTier: "Low", Scope: scope(1)}, false},
+		{"niveau en majuscules", SkillRecord{Provenance: "v", RiskTier: "HIGH"}, false},
+		{"provenance absente", SkillRecord{RiskTier: TierLow}, false},
+		{"périmètre vide accepté", SkillRecord{Provenance: "v", RiskTier: TierLow}, true},
+	}
+	for _, c := range cases {
+		if err := c.rec.Validate(); (err == nil) != c.ok {
+			t.Errorf("%s : Validate() = %v, ok attendu = %v", c.name, err, c.ok)
+		}
+	}
+}
+
+// Le broker transmet à OPA le niveau et la taille du périmètre du skill
+// RÉSOLU (registre hors-bande) — jamais rien de la demande — et rien du tout
+// quand aucun registre n'est configuré.
+func TestBrokerPassesSkillFactsToOPA(t *testing.T) {
+	var mu sync.Mutex
+	var seen []map[string]any
+	leaves := &leafRecorder{}
+	srv := opaServer(t, func(in map[string]any) bool {
+		mu.Lock()
+		seen = append(seen, in)
+		mu.Unlock()
+		return true
+	}, 0)
+	t.Cleanup(srv.Close)
+	opa, err := pep.NewOPAClient(pep.OPAOptions{Endpoint: srv.URL, CellID: "c", Salt: testSalt, Leaves: leaves})
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := func(skills SkillRegistry) *Broker {
+		b, err := NewBroker(BrokerOptions{
+			CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
+			Translator: StructuredTranslator{}, Issuer: mustTestIssuer(t),
+			Epochs:   StaticEpoch(7),
+			Registry: StaticAgentRegistry{"agent-1": {Class: pep.ClassF}},
+			Skills:   skills,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	b := build(StaticSkillRegistry{"wire.transfer": {Provenance: "v", RiskTier: TierCritical, Scope: []string{"acct-1", "acct-2"}}})
+	// L'intention tente de se déclarer « low » : sans effet, seul le registre compte.
+	res := b.HandleAction(context.Background(), "agent-1", `{"action":"wire.transfer","resource":"acct-1","risk_tier":"low"}`)
+	if !res.Allow {
+		t.Fatalf("refusé : %q", res.Reason)
+	}
+	mu.Lock()
+	skill, _ := seen[len(seen)-1]["skill"].(map[string]any)
+	mu.Unlock()
+	if skill["risk_tier"] != "critical" || skill["scope_size"] != float64(2) {
+		t.Fatalf("skill transmis à OPA = %v", skill)
+	}
+
+	b = build(nil)
+	if res := b.HandleAction(context.Background(), "agent-1", `{"action":"anything","resource":"x"}`); !res.Allow {
+		t.Fatalf("refusé : %q", res.Reason)
+	}
+	mu.Lock()
+	_, present := seen[len(seen)-1]["skill"]
+	mu.Unlock()
+	if present {
+		t.Fatal("sans registre de skills, l'entrée OPA ne doit porter aucun champ skill")
 	}
 }

@@ -78,6 +78,18 @@ type OPAInput struct {
 	Class    Class
 	Epoch    uint64
 	DryRun   *DryRunInput
+	// Skill : faits du skill résolu par le broker (registre hors-bande) —
+	// nil quand aucun registre de skills n'est configuré. Jamais fourni par
+	// l'agent : omitempty, les politiques écrites avant sont inchangées.
+	Skill *SkillInput
+}
+
+// SkillInput expose à OPA le niveau de risque déclaré du skill et la taille
+// de son périmètre (catalogue OWASP AST 4.5/9.2) : de quoi écrire « un skill
+// high/critical n'est invocable que sous plan (I) ou quorum (W) » en Rego.
+type SkillInput struct {
+	RiskTier  string `json:"risk_tier"`
+	ScopeSize int    `json:"scope_size"`
 }
 
 // opaRequest est le corps POST /v1/data/... : {"input": {...}}.
@@ -90,6 +102,7 @@ type opaRequest struct {
 		Class    int          `json:"class"`
 		Epoch    uint64       `json:"epoch"`
 		DryRun   *DryRunInput `json:"dry_run,omitempty"` // §4.4(1), T36
+		Skill    *SkillInput  `json:"skill,omitempty"`   // registre de skills, résolu par le broker
 	} `json:"input"`
 }
 
@@ -222,6 +235,7 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 	reqBody.Input.Class = int(in.Class)
 	reqBody.Input.Epoch = in.Epoch
 	reqBody.Input.DryRun = in.DryRun
+	reqBody.Input.Skill = in.Skill
 	raw, err := json.Marshal(reqBody)
 	if err != nil { // inatteignable (types fixes) — fail-closed quand même
 		return c.finish(ctx, in, OPADecision{Reason: ReasonOPABadResponse, Err: err}, start)

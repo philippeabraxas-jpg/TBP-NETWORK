@@ -54,7 +54,7 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 | 4.2 | ASCII-smuggling / zero-width / base64 scanning | ⚪ | Scanner concern — note the related but distinct fix in [OWASP LLM Top 10 LLM01.5](143-owasp-llm-top10.md) (Unicode instruction-smuggling on `Action`/`Resource`, already fixed). |
 | 4.3 | Safe defaults, explicit opt-in for dangerous capabilities | 🟡 | Principle already applied everywhere (devmode #113: nothing dangerous is active without a flag + independent sentinel) — not yet replicated for a future skill manifest. |
 | 4.4 / 4.9 / 4.11 | Schema validation, strict JSON-key allowlist, pre-deserialization validation | ✅ | `loadSkillRegistry` (brokerd/main.go) rejects any empty action, empty provenance, or empty table — same fail-closed discipline as the rest of the repo. |
-| 4.5 | Cross-reference declared `risk_tier` against permission scope | 🔴 | `Scope` exists; `SkillRecord` has no `risk_tier` field yet. |
+| 4.5 | Cross-reference declared `risk_tier` against permission scope | ✅ | `risk_tier` (`low`/`medium`/`high`/`critical`) is a required field of `SkillRecord`; `brokerd` refuses to start on a missing or unknown tier and on a scope wider than the tier allows (low ≤ 8 resources, medium ≤ 32, high ≤ 128, critical unbounded — a consistency guard, not a security boundary). Rule pack `tbp.pack.skill_tier` then gates invocation: `high` ⇒ class I/W (plan), `critical` ⇒ class W (plan + quorum). **Limit**: the tier is an operator declaration; a tier set too low is a provisioning fault only the out-of-band review of the registry file catches. |
 | 4.6 | Block brand impersonation | ⚪ | Process/branding, not runtime. |
 | 4.7 | Safe YAML parser (`safe_load`) | ⚪ N/A | TBP is Go, no PyYAML — but the principle is present: `dec.DisallowUnknownFields()` in `server.go:handleAction` rejects any JSON smuggling. |
 | 4.8 | Parse in an isolated subprocess | ⚪ | OS-level. |
@@ -104,7 +104,7 @@ Almost entirely ⚪ out of TBP's scope — behavioral/semantic analysis, secret 
 | # | Control | Status | Detail |
 |---|---|---|---|
 | 9.1 | Centralized inventory (name, version, hash, date, installer, scan status) | 🟡 | TBP already has this reflex for other domains (`agents.json`/`operators.json`/`cells.json`) — replicate the pattern for skills, don't invent a new one. |
-| 9.2 | Assign `risk_tier` consistent with scope | 🔴 | No `risk_tier` field in `SkillRecord` yet. |
+| 9.2 | Assign `risk_tier` consistent with scope | ✅ | Same mechanism as 4.5: required tier, cross-checked with the scope size at load, exposed to OPA as `input.skill` and enforced by `tbp.pack.skill_tier`. Reviewing the tier remains an organizational step (9.5). |
 | 9.3 | Approval registry (workflow, approver, date) | 🟡 | Close to `ContractStore` (T30): a signed Ed25519 operator approval, hash-sealed — exists for plans, not for skill admission. |
 | 9.4 | Log invocations with sufficient audit detail | ✅ | Every decision already leaves a `KindDecision` leaf (§4.1), hash-only. |
 | 9.5 | Review cadence based on risk_tier | ⚪ | Organizational process. |
@@ -123,6 +123,8 @@ Almost entirely ⚪: TBP is a closed, single-architecture system by construction
 
 **Closed by the agent-hardening rule pack** (`tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`)): 1.6/3.6 (agent identity/memory files need class W), 3.3 (command allowlist, no shell metacharacters), 3.4 (no broad globs), 3.7/5.4 (egress domain allowlist, default-deny), 3.8 (credential stores refused for every action). Configuration is bundle data, documented in [`policies/README.md`](../policies/README.md).
 
-**Still open — needs a `SkillRecord` extension**: per-skill credential isolation (3.5), `risk_tier` field (4.5, 9.2), scheduled credential rotation (9.7).
+**Closed by the skill-tier rule pack** (`tbp.pack.skill_tier`, `policies/rego/pack_skill_tier.rego`): 4.5 and 9.2 — required `risk_tier` in the registry, consistency with scope checked at startup, gating by agent class in Rego.
+
+**Still open**: per-skill credential isolation (3.5), scheduled credential rotation (9.7).
 
 **Design note — can a SkillRegistry entry be modified?** No runtime mutation path exists for either an agent or a hot-reload; only an operator editing the out-of-band file and restarting `brokerd` can change a skill record. See [#165](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) for the full design rationale.

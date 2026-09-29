@@ -575,6 +575,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 	// simplement dans son intention, ni élargir le périmètre d'un skill
 	// existant — le registre est hors-bande, jamais résolu depuis la
 	// demande (voir skill_registry.go).
+	var skillInput *pep.SkillInput
 	if b.skills != nil {
 		skill, known := b.skills.Resolve(tr.Action)
 		if !known {
@@ -589,6 +590,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 			b.mu.Unlock()
 			return b.deny(ctx, jti, ReasonSkillScopeViolation, nil)
 		}
+		skillInput = &pep.SkillInput{RiskTier: string(skill.RiskTier), ScopeSize: len(skill.Scope)}
 	}
 
 	// Étape 5 — évaluation OPA via le client T11 : fail-closed,
@@ -608,6 +610,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 		Resource: tr.Resource,
 		Class:    class,
 		Epoch:    epoch,
+		Skill:    skillInput,
 	})
 	if !dec.Allow {
 		b.mu.Lock()
