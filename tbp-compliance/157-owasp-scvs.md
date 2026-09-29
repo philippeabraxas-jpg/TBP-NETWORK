@@ -9,7 +9,7 @@
 
 Like [SLSA (#156)](156-slsa.md), SCVS evaluates TBP's OWN dependency chain (the Go module and its dependencies), not the skills TBP would authorize — complementary to, not redundant with, the `SkillRegistry` gap.
 
-Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## The 6 families vs. TBP
 

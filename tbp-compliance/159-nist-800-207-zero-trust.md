@@ -1,6 +1,6 @@
 # NIST SP 800-207 (Zero Trust Architecture, 7 tenets)
 
-**Status: Partial** (strongest showing in the whole series — 5 of 7 tenets direct ✅)
+**Status: Partial** (strongest showing in the whole series — 6 of 7 tenets direct ✅)
 **Source**: [issue #159](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/159)
 **Reference**: NIST SP 800-207 — 7 foundational tenets replacing perimeter trust with three pillars: verify explicitly, enforce least privilege, assume breach.
 **Last verified**: 2026-09-29
@@ -9,7 +9,7 @@
 
 First of four frameworks added after the initial 17-standard list closed ([#142](142-owasp-agentic-skills-top10.md)–[#158](158-cis-benchmarks.md)) — identified as directly relevant to TBP's actual architecture rather than AI in general. Unlike most AI-generic frameworks catalogued earlier, this one describes almost verbatim the architecture TBP ALREADY has, designed independently of any Zero Trust compliance goal.
 
-Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## The 7 tenets vs. TBP
 
@@ -27,7 +27,7 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 
 ## Summary
 
-**Best score of the whole series**: 5 tenets out of 7 direct ✅, the remaining 2 solid 🟡. Not a coincidence — TBP's "no direct client → server path" doctrine and Zero Trust start from the same premise (never trust a network path or an unverified identity), without either having been written with the other in mind.
+**Best score of the whole series**: 6 tenets out of 7 direct ✅; the remaining one (tenet 5, posture of all assets) is 🔴 only for the provisioning files that measured boot does not cover ([#192](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/192)). Not a coincidence — TBP's "no direct client → server path" doctrine and Zero Trust start from the same premise (never trust a network path or an unverified identity), without either having been written with the other in mind.
 
 **Strong recommendation**: this catalog should be the first cited in any TBP security/sales documentation — "Zero Trust architecture aligned with NIST SP 800-207" is a verifiable, largely-already-true claim, unlike several other frameworks in this series where TBP is only partial evidence in a larger file.
 

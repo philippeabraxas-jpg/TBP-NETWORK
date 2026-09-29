@@ -9,7 +9,7 @@
 
 Like MAESTRO ([#144](144-csa-maestro.md)), ATLAS is not a checklist of controls but an ATTACK model — each tactic is a step an adversary follows, not a requirement to satisfy. The mapping below answers "what in TBP prevents or limits an adversary from reaching this step?" rather than "does TBP implement this control?"
 
-Legend: ✅ Structurally covered/mitigated · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope (the step happens before any contact with TBP, or outside its layer)
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## The 16 tactics vs. TBP
 

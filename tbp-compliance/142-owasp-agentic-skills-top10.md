@@ -9,7 +9,7 @@
 
 AST10 describes a **supply chain problem for installable skills** (packages distributed via registries like ClawHub/skills.sh). Before this analysis, TBP had no notion of "skill" at all — its scope was authorizing an *action* of an already-equipped agent (`broker.HandleAction`), not admitting a new capability into that agent. Most of the gaps below trace back to that one missing layer, closed (in part) by `SkillRegistry` (#165, PR #166) on the same pattern as `AgentRegistry` (#125).
 
-Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs replicating) · 🔴 Real gap requiring new broker plumbing · 🟢 Real gap, implementable as a Rego rule today, no new Go code · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 **How to read ⚪.** A grey row is not "ignored": it is a control that belongs to another layer (the executor, the OS, the deployer's PKI, the change process). Every grey row that concerns a deployment says *why* it is grey and **what the deployer or operator does to close it** (prefixed **To close:**), so the catalogue stays usable as a deployment checklist. Rows that are grey only because they are a scanner or organizational concern carry a one-line reason.
 

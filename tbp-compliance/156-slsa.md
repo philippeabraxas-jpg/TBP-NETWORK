@@ -9,7 +9,7 @@
 
 Earlier catalogs in this series ([#142](142-owasp-agentic-skills-top10.md)–[#155](155-gdpr.md)) evaluated the supply chain of SKILLS/TOOLS that TBP would authorize (the recurring `SkillRegistry` gap). SLSA asks a different, complementary question: does **TBP's own build** (`pepd`/`brokerd`/`supervisord` binaries, OPA policy bundles) have verifiable provenance? This catalog evaluates TBP as a PRODUCER of artifacts, not a consumer of third-party skills.
 
-Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## The levels vs. TBP's build
 

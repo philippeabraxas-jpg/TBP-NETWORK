@@ -9,7 +9,7 @@
 
 MAESTRO is not a numbered checklist like AST10 or the LLM Top 10 — it's a layered reference architecture, where each layer has "traditional" threats (inherent to the tech, agent-independent) and "agentic" threats (new or worsened by non-determinism, autonomy, absent trust boundaries). Table below: one row per layer, not per control. Sources: the original CSA paper was unreachable during research (cloudsecurityalliance.org / labs.snyk.io blocked); layer names/definitions confirmed via a web-research synthesis citing the CSA blog — worth revalidating against the full paper if direct access becomes available.
 
-Legend: ✅ Covered · 🟡 Partial · 🔴 Real gap, new broker plumbing · 🟢 Real gap, implementable in Rego · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## The 7 layers vs. TBP
 
