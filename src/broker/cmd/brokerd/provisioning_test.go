@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,5 +302,87 @@ func TestBrokerdDevEscapeHatchDisablesTheCheck(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(fx.agentsFile), "provisioning-witness.json")); err == nil {
 		t.Fatal("un témoin a été écrit alors que la mesure est désactivée")
+	}
+}
+
+// TestBrokerdRefusesToStartOnOneByteChangeInEachMeasuredFile : critère de #192 —
+// « éditer un octet de CHAQUE fichier ⇒ démarrage refusé ». Un seul octet (un retour
+// à la ligne, qui laisse chaque fichier syntaxiquement valide) sur chacun des cinq
+// fichiers que brokerd dérive de sa configuration, avec toutes les briques
+// optionnelles actives (registre de skills, écoute mTLS). Chaque refus nomme SON
+// fichier et aucun autre ; le cas voisin (état restauré) repart.
+func TestBrokerdRefusesToStartOnOneByteChangeInEachMeasuredFile(t *testing.T) {
+	files := []struct {
+		name string
+		path func(fx *runFixture, tls *brokerTLSFixture, skills string) string
+	}{
+		{"operator-keys", func(fx *runFixture, _ *brokerTLSFixture, _ string) string { return fx.opsFile }},
+		{"agent-registry", func(fx *runFixture, _ *brokerTLSFixture, _ string) string { return fx.agentsFile }},
+		{"genesis-manifest", func(fx *runFixture, _ *brokerTLSFixture, _ string) string {
+			return filepath.Join(fx.genDir, "manifest.json")
+		}},
+		{"skill-registry", func(_ *runFixture, _ *brokerTLSFixture, skills string) string { return skills }},
+		{"tls-client-ca", func(_ *runFixture, tls *brokerTLSFixture, _ string) string { return tls.caFile }},
+	}
+	all := []string{"operator-keys", "agent-registry", "genesis-manifest", "skill-registry", "tls-client-ca"}
+
+	for i, tc := range files {
+		// nom court : le chemin des sockets Unix est borné (≈108 octets) et
+		// t.TempDir() y met le nom du sous-test
+		t.Run(fmt.Sprintf("f%d", i), func(t *testing.T) {
+			t.Logf("fichier mesuré : %s", tc.name)
+			sock := filepath.Join(t.TempDir(), "broker.sock")
+			fx := newRunFixture(t, sock)
+			tlsFx := newBrokerTLSFixture(t)
+			fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+
+			skills := filepath.Join(t.TempDir(), "skills.json")
+			if err := os.WriteFile(skills, []byte(`{"read":{"provenance":"vendor-x","scope":["doc-1"],"risk_tier":"low"}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fx.env["TBP_SKILL_REGISTRY_FILE"] = skills
+			fx.env["TBP_BROKER_LISTEN_ADDR"] = "127.0.0.1:0"
+			fx.env["TBP_BROKER_TLS_CERT_FILE"] = tlsFx.serverCertFile
+			fx.env["TBP_BROKER_TLS_KEY_FILE"] = tlsFx.serverKeyFile
+			fx.env["TBP_BROKER_TLS_CLIENT_CA_FILE"] = tlsFx.caFile
+
+			target := tc.path(fx, tlsFx, skills)
+			original, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("premier démarrage : %v", err)
+			}
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("redémarrage sans modification refusé : %v", err)
+			}
+
+			// UN octet de plus
+			if err := os.WriteFile(target, append(append([]byte{}, original...), '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = boot(t, fx, sock)
+			if err == nil {
+				t.Fatalf("brokerd a démarré alors que %s a changé d'un octet", tc.name)
+			}
+			if !strings.Contains(err.Error(), "modifié(s) : "+tc.name) {
+				t.Fatalf("le refus ne nomme pas %s : %v", tc.name, err)
+			}
+			for _, other := range all {
+				if other != tc.name && strings.Contains(err.Error(), other) {
+					t.Fatalf("le refus accuse aussi %s, inchangé : %v", other, err)
+				}
+			}
+
+			// cas voisin : l'état d'origine, octet pour octet, repart
+			if err := os.WriteFile(target, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("état d'origine restauré mais démarrage refusé : %v", err)
+			}
+		})
 	}
 }
