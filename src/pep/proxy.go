@@ -85,6 +85,7 @@ package pep
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -150,6 +151,16 @@ type ProxyOptions struct {
 	// (Validate/Eval, indépendamment de cette option). À réserver au
 	// débogage en lab/dev — jamais activé par défaut en déploiement réel.
 	ExposeDecisionHeaders bool
+	// Rewriter anonymise ce qui sort et reconstitue ce qui revient (#178).
+	// Nil ⇒ comportement historique (trafic transmis tel quel : destination
+	// DANS la cellule). Non nil ⇒ destination hors cellule : la réécriture
+	// est obligatoire, un échec est un refus (voir rewriter.go).
+	Rewriter Rewriter
+	// OnRewrite reçoit un événement par réécriture (masquage, reconstitution)
+	// pour écrire une feuille d'audit hash-only. Une erreur est un refus :
+	// la requête ne sort pas / la réponse n'est pas rendue. Nil ⇒ pas de
+	// feuille (déconseillé hors tests).
+	OnRewrite func(ctx context.Context, ev RewriteEvent) error
 }
 
 // BlockingProxy est le proxy bloquant. Sûr pour un usage concurrent
@@ -163,6 +174,8 @@ type BlockingProxy struct {
 	tokenFrom             func(*http.Request) (string, error)
 	tokenHeader           string
 	exposeDecisionHeaders bool
+	rewriter              Rewriter
+	onRewrite             func(ctx context.Context, ev RewriteEvent) error
 }
 
 // NewBlockingProxy construit le proxy. Fail-closed : listener et backend
@@ -197,7 +210,7 @@ func NewBlockingProxy(opts ProxyOptions) (*BlockingProxy, error) {
 		onProxyError(err, r)
 		w.WriteHeader(http.StatusBadGateway)
 	}
-	return &BlockingProxy{
+	p := &BlockingProxy{
 		listener:              opts.Listener,
 		backend:               opts.Backend,
 		rp:                    rp,
@@ -205,7 +218,34 @@ func NewBlockingProxy(opts ProxyOptions) (*BlockingProxy, error) {
 		tokenFrom:             tokenFrom,
 		tokenHeader:           tokenHeader,
 		exposeDecisionHeaders: opts.ExposeDecisionHeaders,
-	}, nil
+		rewriter:              opts.Rewriter,
+		onRewrite:             opts.OnRewrite,
+	}
+	if p.rewriter != nil {
+		// Reconstitution de la réponse (#178) : une erreur ici passe par
+		// ErrorHandler (502) — la réponse non reconstituée n'est jamais rendue.
+		rp.ModifyResponse = func(resp *http.Response) error {
+			rc, ok := resp.Request.Context().Value(rewriteCtxKey{}).(rewriteCtx)
+			if !ok {
+				return errors.New("pep: contexte de réécriture absent")
+			}
+			rep, err := p.rewriter.RewriteResponse(resp.Request.Context(), rc.wire, resp)
+			return p.audited(resp.Request.Context(), RewriteEvent{Op: RewriteOpUnmask, JTI: rc.jti, Report: rep, Err: err})
+		}
+	}
+	return p, nil
+}
+
+// audited inscrit la trace d'une réécriture et rend l'erreur à appliquer : celle
+// de la réécriture si elle a échoué, sinon celle de l'audit (une sortie
+// non auditable est refusée).
+func (p *BlockingProxy) audited(ctx context.Context, ev RewriteEvent) error {
+	if p.onRewrite != nil {
+		if aerr := p.onRewrite(ctx, ev); aerr != nil && ev.Err == nil {
+			return fmt.Errorf("pep: audit de la réécriture impossible: %w", aerr)
+		}
+	}
+	return ev.Err
 }
 
 // ServeHTTP : dérive {action, resource, sceau} de la VRAIE requête
@@ -262,6 +302,23 @@ func (p *BlockingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if p.rewriter != nil {
+		// #178 : la destination est hors cellule. Ce qui sort est anonymisé
+		// APRÈS l'évaluation (faite sur le clair, sceau d'objet compris) et
+		// AVANT la transmission ; un échec ne laisse RIEN sortir.
+		rep, err := p.rewriter.RewriteRequest(r.Context(), wire, r)
+		err = p.audited(r.Context(), RewriteEvent{Op: RewriteOpMask, JTI: out.Decision.JTI, Report: rep, Err: err})
+		if err != nil {
+			p.rewriter.Done(context.WithoutCancel(r.Context()), wire)
+			http.Error(w, "anonymisation impossible — la requête ne sort pas (fail-closed)", http.StatusBadGateway)
+			return
+		}
+		defer p.rewriter.Done(context.WithoutCancel(r.Context()), wire)
+		// pas de compression en retour : une réponse compressée ne pourrait
+		// pas être reconstituée (le client d'ano la refuse de toute façon)
+		r.Header.Set("Accept-Encoding", "identity")
+		r = r.WithContext(context.WithValue(r.Context(), rewriteCtxKey{}, rewriteCtx{wire: wire, jti: out.Decision.JTI}))
 	}
 	p.rp.ServeHTTP(w, r)
 }

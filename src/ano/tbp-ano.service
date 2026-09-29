@@ -1,0 +1,88 @@
+# tbp-ano.service — unit systemd durcie d'ano (issue #178).
+#
+# ano détient la table jeton ↔ valeur réelle : c'est le composant le plus
+# sensible de la cellule côté données. Il n'a donc AUCUN accès réseau
+# (PrivateNetwork + AF_UNIX seulement), aucune capacité, pas de fichier
+# d'échange, pas de core dump (un core contiendrait la table), et un jeu
+# d'appels système restreint. Ses seuls canaux sont le socket Unix qu'il sert
+# et, si configuré, le socket Unix d'un classifieur local.
+#
+# RAPPEL D'HONNÊTETÉ : ce fichier confine le PROCESSUS ; il ne prouve pas que
+# le reste de la cellule est fermé (voir #186). Il n'a pas été audité par un
+# script équivalent à src/translator/audit_confinement.sh — à ajouter avec #186.
+#
+# Installation :
+#   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin tbp-ano
+#   install -m 0644 tbp-ano.service /etc/systemd/system/
+#   # le groupe « tbp » doit pouvoir joindre le socket (pepd en fait partie)
+#   systemctl daemon-reload && systemctl enable --now tbp-ano
+
+[Unit]
+Description=TBP ano (anonymisation à la sortie de la cellule, issue #178)
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=tbp-ano
+Group=tbp
+ExecStart=/usr/local/bin/anod
+EnvironmentFile=/etc/tbp/ano.env
+UMask=0007
+
+# Le socket vit dans /run/tbp (partagé avec brokerd/pepd, groupe tbp).
+RuntimeDirectory=tbp
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+
+# --- Réseau : aucun -------------------------------------------------------
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# --- Capacités et appels système -----------------------------------------
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# --- Système de fichiers --------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ReadOnlyPaths=/etc/tbp
+
+# --- Noyau et isolation ---------------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+MemoryDenyWriteExecute=yes
+
+# --- Secrets en mémoire : jamais sur disque -------------------------------
+# Un core dump contiendrait la table jeton ↔ valeur.
+LimitCORE=0
+
+# --- Cycle de vie ---------------------------------------------------------
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tbp-ano
+
+[Install]
+WantedBy=multi-user.target
