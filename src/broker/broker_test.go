@@ -1021,15 +1021,14 @@ func TestDeterministicVerdicts(t *testing.T) {
 	}
 }
 
-// TestPlanBindingRequiredForClassIW (#177) : au-delà de la classe F, une
-// action sans plan_binding est refusée fail-closed AVANT même la
+// TestPlanBindingRequiredForClassFIW (#177) : pour F (financière), I et W,
+// une action sans plan_binding est refusée fail-closed AVANT même la
 // consultation du contrat de plan — la composition d'actions sans plan
-// (ex. write→chmod→execute, chacune classée I/W) ne peut plus échapper à
-// ContractStore en omettant simplement ce champ. Classe F et hors F/I/W
-// (Out, §5.3 : « reading, internet ») restent inchangées : aucune
-// régression pour les déploiements qui n'utilisent pas encore de plan sur
-// ces classes de moindre enjeu.
-func TestPlanBindingRequiredForClassIW(t *testing.T) {
+// (ex. write→chmod→execute classées I/W, ou un virement fractionné en
+// plusieurs virements F) ne peut plus échapper à ContractStore en omettant
+// simplement ce champ. Seule la classe hors F/I/W (Out, §5.3 : « reading,
+// internet ») reste sans plan obligatoire.
+func TestPlanBindingRequiredForClassFIW(t *testing.T) {
 	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
 	defer srv.Close()
 
@@ -1038,7 +1037,7 @@ func TestPlanBindingRequiredForClassIW(t *testing.T) {
 		class      pep.Class
 		bindingReq bool
 	}{
-		{"classe F — non exigé", pep.ClassF, false},
+		{"classe F (financière) — exigé", pep.ClassF, true},
 		{"classe I — exigé", pep.ClassI, true},
 		{"classe W — exigé", pep.ClassW, true},
 		{"hors F/I/W — non exigé", pep.ClassOut, false},
