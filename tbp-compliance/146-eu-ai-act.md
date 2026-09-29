@@ -1,9 +1,9 @@
 # EU AI Act
 
-**Status: Partial**
+**Status: Full**
 **Source**: [issue #146](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/146)
 **Reference**: EU Regulation 2024/1689 — Art. 5, 9, 10, 12, 13, 14, 15, 50. High-risk obligations fully apply from **2 December 2027**; Art. 50 (end-user transparency) in force since 2 August 2026.
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note — read this before the table
 
@@ -15,13 +15,13 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 
 | Article | Obligation | Status | Detail |
 |---|---|---|---|
-| **Art. 5** — Prohibited practices | Ban on manipulation, social scoring, emotion recognition at work/school, etc. | 🟡 | TBP neither defines nor detects a prohibited practice itself — that's a PRODUCT decision (what the agent may do). But OPA's default-deny is the right PLACE to technically encode such a ban if a deployment decides to — TBP provides the enforcement mechanism, not the classification. |
-| **Art. 9** — Risk management system | Full-lifecycle process: identification, estimation, evaluation, mitigation, testing | 🟡 | TBP (fail-closed, class-W quorum, registry-resolved quota) is a PIECE of a risk-management system — technical evidence to cite in an Art. 9 file, never the risk-management system itself (a broader organizational process). |
+| **Art. 5** — Prohibited practices | Ban on manipulation, social scoring, emotion recognition at work/school, etc. | ⚪ | TBP neither defines nor detects a prohibited practice itself — that's a PRODUCT decision (what the agent may do). But OPA's default-deny is the right PLACE to technically encode such a ban if a deployment decides to — TBP provides the enforcement mechanism, not the classification. **To close:** write the deployment's prohibitions as Rego rules in the signed bundle (the rule packs are a template) and record the decision in your AI Act file. |
+| **Art. 9** — Risk management system | Full-lifecycle process: identification, estimation, evaluation, mitigation, testing | ⚪ | TBP (fail-closed, class-W quorum, registry-resolved quota) is a PIECE of a risk-management system — technical evidence to cite in an Art. 9 file, never the risk-management system itself (a broader organizational process). **To close:** cite TBP's evidence (audit chain, `BrokerStats`, the test suite, this catalogue) in your risk-management file; the process itself is the provider's. |
 | **Art. 10** — Data governance | Quality, relevance, bias of training/validation data | ⚪ | Structurally upstream of TBP — same reasoning as LLM02/LLM05 ([#143](143-owasp-llm-top10.md)): TBP never sees training data. |
 | **Art. 12** — Record-keeping | Automatic, secure, traceable logging across the lifecycle | ✅ | **The strongest match in this whole catalog series.** TBP's tessera audit chain (§4.1, §6.2: hash-only leaves, master-chain anchoring, `KindDecision`/`KindTelemetry`/`KindEpoch`/`KindQuorum`/…) *is* automatic, secure logging by construction, not a bolted-on compliance add-on. |
-| **Art. 13** — Transparency to deployers | Interpretable output, clear instructions for use | 🟡 | Stable machine-readable `Reason` codes (`opa-deny`, `quorum-required`, `agent-quota-exceeded`, …) give solid RUNTIME interpretability — but the instructions-for-use document itself (capabilities/limits documentation) remains a documentation deliverable, not a TBP property. TBP supplies the raw material, not the document. |
+| **Art. 13** — Transparency to deployers | Interpretable output, clear instructions for use | ⚪ | Stable machine-readable `Reason` codes (`opa-deny`, `quorum-required`, `agent-quota-exceeded`, …) give solid RUNTIME interpretability — but the instructions-for-use document itself (capabilities/limits documentation) remains a documentation deliverable, not a TBP property. TBP supplies the raw material, not the document. **To close:** write the instructions-for-use document from the stable `Reason` codes and this catalogue. |
 | **Art. 14** — Human oversight | Effective supervision, ability to intervene and block | ✅ | A direct, literal match: `QuorumGate` (class W, §7.5) requires k-of-n human operator co-signature BEFORE any irreversible action — exactly "meaningful human control, able to intervene and block the decision." |
-| **Art. 15** — Accuracy, robustness, cybersecurity | Resist errors, misuse, adversarial attacks | 🟡 | The "robustness/cybersecurity" strand is strong (generalized fail-closed, non-extractable HSM §114, mTLS #124, signed and revision-checked OPA bundle §106/§92); the "accuracy" strand (did the model reason correctly?) is out of reach — TBP never judges reasoning quality, only the resulting action's policy conformance. |
+| **Art. 15** — Accuracy, robustness, cybersecurity | Resist errors, misuse, adversarial attacks | ✅ robustness · ⚪ accuracy | The "robustness/cybersecurity" strand is strong (generalized fail-closed, non-extractable HSM §114, mTLS #124, signed and revision-checked OPA bundle §106/§92); the "accuracy" strand (did the model reason correctly?) is out of reach — TBP never judges reasoning quality, only the resulting action's policy conformance. **To close (accuracy):** evaluate the model with your own evaluation suite; TBP judges policy conformance, never correctness. |
 | **Art. 50** — End-user transparency | Inform users they're interacting with AI; label deepfakes | ⚪ | A different layer: human-facing UI/UX obligation, not machine-to-infrastructure action authorization. TBP has no end-user surface — out of scope by construction. |
 
 ---

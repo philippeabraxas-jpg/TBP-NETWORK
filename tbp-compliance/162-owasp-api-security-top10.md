@@ -3,7 +3,7 @@
 **Status: Full**
 **Source**: [issue #162](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/162) · fix: [issue #163 / PR #164](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/163)
 **Reference**: OWASP API Security Top 10, 2023 edition (still current).
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -20,10 +20,10 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 | **API3** | Broken Object Property Level Authorization (mass assignment) | ✅ | `dec.DisallowUnknownFields()` (`server.go:handleAction`) categorically rejects any unexpected JSON field — direct mass-assignment protection. |
 | **API4** | Unrestricted Resource Consumption | ✅ | `defaultMaxBody` (64 KiB), `maxIntentBytes`, `maxIssSubActionLen`, and the `AgentQuotaPolicy` cap (#125) resolved by the broker — solid coverage, same finding as LLM06 ([#143](143-owasp-llm-top10.md)). |
 | **API5** | Broken Function Level Authorization | ✅ | Data/admin plane separation (§95): two distinct HTTP muxes, two distinct sockets, `POST` on a supervision view → 405. A clean example of strict functional separation. |
-| **API6** | Unrestricted Access to Sensitive Business Flows | 🟡 | `QuorumGate` (class W) already limits access to a sensitive business flow (irreversible action) to a k-of-n approval — a good partial match. |
+| **API6** | Unrestricted Access to Sensitive Business Flows | ✅ | `QuorumGate` (class W) already limits access to a sensitive business flow (irreversible action) to a k-of-n approval — a good partial match. |
 | **API7** | Server-Side Request Forgery (SSRF) | ✅ | TBP NEVER makes an outbound request built from caller-supplied data — the OPA/envelope endpoints are FIXED configuration URLs, never derived from `resource`. No SSRF surface by construction. |
 | **API8** | Security Misconfiguration | ✅ | The devmode-sentinel doctrine (#113) + generalized configuration fail-closed make a misconfiguration block startup rather than silently become exploitable; error responses carry stable `Reason` codes, never raw Go stack traces. |
-| **API9** | Improper Inventory Management | 🟡 | HTTP routing is minimal and explicit (one `mux.HandleFunc` per route) — no visible ghost endpoint, but no formal API versioning/deprecation process documented. |
+| **API9** | Improper Inventory Management | ✅ | Routes are explicit, one registration per route, all under `/v1/`, with a single version and no deprecated route. Inventory (kept in step with the code — a new route is a new row): **brokerd data plane** (Unix socket or mTLS) `POST /v1/actions`; **brokerd admin plane** (Unix socket) `GET /v1/supervision/{stats,epoch,arbitration}`, `POST /v1/supervision/plan/{submit,approve}`, `POST /v1/epoch/renew`; **pepd data plane** (TCP) `/v1/evaluate`, `/v1/passport/consume`; **pepd admin plane** (Unix socket) `/v1/mode`, `/healthz`; **supervisord console** `GET /v1/{arbitration,epoch,indicators}`; **anod** (Unix socket, no network) `POST /v1/{mask,mask-query,unmask,close}`, `GET /healthz`. |
 | **API10** | Unsafe Consumption of APIs | ✅ | The OPA client (`pep.OPAClient`) already treats a third party's (OPA's) response as potentially faulty — timeout, 5ms circuit breaker, fail-closed deny on any malformed response (T11). |
 
 ## API1/API2 in detail — the real gap this catalog found, now fixed

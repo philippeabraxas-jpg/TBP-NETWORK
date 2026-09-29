@@ -1,9 +1,9 @@
 # OWASP SCVS (6 control families)
 
-**Status: Full**
+**Status: Partial**
 **Source**: [issue #157](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/157) · fix: [issue #170 / PR #171](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/170)
 **Reference**: OWASP Software Component Verification Standard (SCVS) — 6 control families (Inventory, SBOM, Build Environment, Package Management, Component Analysis, Pedigree & Provenance), 3 increasing rigor levels.
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -15,9 +15,9 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 
 | Family | Content | Status | Detail |
 |---|---|---|---|
-| **Inventory** | Tracking of all components/dependencies | 🟡 | `go.mod` provides a trivial direct/indirect dependency inventory via standard Go tooling — no FORMAL inventory process documented beyond that. |
+| **Inventory** | Tracking of all components/dependencies | ✅ | `go.mod`/`go.sum` list every direct and indirect dependency with its hash, and the `sbom` CI job publishes a CycloneDX SBOM of them on each build (#170, PR #171) — that SBOM is the formal inventory. |
 | **SBOM** | Published software bill of materials | ✅ | **Fixed** — the `sbom` CI job (`lint.yml`) generates a CycloneDX SBOM via `cyclonedx-gomod` (pinned `v1.12.0`) and publishes it as a build artifact (#170, PR #171). |
-| **Build environment** | Securing where/how the build runs | 🟡 | Same as SLSA L1/L2 ([#156](156-slsa.md)): hosted GitHub Actions, no additional hardening. |
+| **Build environment** | Securing where/how the build runs | 🔴 | Hosted GitHub Actions with OIDC-signed provenance (SLSA, [#156](156-slsa.md)), but the actions themselves are referenced by movable **tag**, not by commit SHA, and no Dependabot keeps them current. Tracked by [#193](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/193). |
 | **Package management** | Registry vetting, dependency-resolution policy | ✅ | **Underrated strength**: `go.sum` pins the cryptographic hash of EVERY dependency, verified on every build against the module checksum database — a real supply-chain integrity control, already active just from correct use of Go modules, no extra configuration. |
 | **Component analysis** | Dependency vulnerability scanning (SCA) | ✅ | **Fixed** — the `govulncheck` CI job (`lint.yml`) runs `govulncheck ./...` (pinned `v1.8.0`, same doctrine as the OPA version pin) (#170, PR #171). |
 | **Pedigree & provenance** | Traceability of each component's origin | ✅ | Directly overlaps [SLSA (#156)](156-slsa.md), now resolved (L3 reached via `slsa-github-generator`, #174/PR #175) — same status here. |

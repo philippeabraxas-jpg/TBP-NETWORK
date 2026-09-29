@@ -34,6 +34,16 @@ jobs:
       - name: gen_capabilities.sh (fails if a forbidden built-in vanishes from a newer OPA release)
         run: policies/gen_capabilities.sh
 
+  # Le catalogue de conformité (tbp-compliance/) est un actif vivant : ce job
+  # échoue s'il dérive (ligne partielle, 🔴 sans issue, ⚪ sans motif, état de
+  # fiche ou du README qui ne découle pas des lignes).
+  compliance-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cohérence du catalogue de conformité
+        run: python3 tbp-compliance/check_catalog.py
+
   nftables-syntax:
     runs-on: ubuntu-latest
     steps:

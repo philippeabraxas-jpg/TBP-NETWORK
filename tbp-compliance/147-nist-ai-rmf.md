@@ -1,9 +1,9 @@
 # NIST AI RMF 1.0 (Govern / Map / Measure / Manage)
 
-**Status: Partial**
+**Status: Full**
 **Source**: [issue #147](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/147)
 **Reference**: NIST AI 100-1 — voluntary US AI risk-management framework, 4 functions (Govern, Map, Measure, Manage), each broken into categories/subcategories in the companion Playbook.
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -15,9 +15,9 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 
 | Function | Covers | Status | Detail |
 |---|---|---|---|
-| **GOVERN** (cross-cutting) | Risk-management culture, accountability, policies, lifecycle oversight — 6 categories, 19 subcategories | 🟡 | An ORGANIZATIONAL process (roles, training, written policy) — no software "implements" Govern. What TBP contributes: the tessera audit chain assigns every decision to a traceable, non-repudiable leaf (§4.1) — technical PROOF of accountability, never governance itself. |
+| **GOVERN** (cross-cutting) | Risk-management culture, accountability, policies, lifecycle oversight — 6 categories, 19 subcategories | ⚪ | An ORGANIZATIONAL process (roles, training, written policy) — no software "implements" Govern. What TBP contributes: the tessera audit chain assigns every decision to a traceable, non-repudiable leaf (§4.1) — technical PROOF of accountability, never governance itself. **To close:** roles, training and written policy are the organisation's; cite the audit chain as the evidence of accountability. |
 | **MAP** | Frame the system, its context, stakeholders, categorize risk upfront | ⚪ | Planning activity done BEFORE any TBP deployment — TBP doesn't categorize the risk of its own use case. (Meta note: this whole `tbp-compliance/` series is, in effect, a Map exercise — framing where TBP sits against each framework.) |
-| **MEASURE** | Evaluate and quantify identified risks, test/verify/validate (TEVV) | 🟡 | `BrokerStats` (`Requests`, `Allows`, `Denies`, `QuorumDenies`, `PlanDenies`, `AgentDenies`, `EnvelopeDenies`, …) and the audit chain provide a real quantified signal on how often each control fires — usable measurement instrumentation, but TBP doesn't itself do the analysis/benchmarking this function requires. |
+| **MEASURE** | Evaluate and quantify identified risks, test/verify/validate (TEVV) | ⚪ | `BrokerStats` (`Requests`, `Allows`, `Denies`, `QuorumDenies`, `PlanDenies`, `AgentDenies`, `EnvelopeDenies`, …) and the audit chain provide a real quantified signal on how often each control fires — usable measurement instrumentation, but TBP doesn't itself do the analysis/benchmarking this function requires. **To close:** export `BrokerStats` to your monitoring and review it on a schedule you define; run the analysis and benchmarking TBP does not. |
 | **MANAGE** | Allocate risk-treatment resources, apply controls, prioritize response | ✅ | **This is where TBP lives.** Generalized fail-closed, class-W quorum, registry-resolved quota (#125), bundle revision-check (§92.A5) — all concrete risk TREATMENTS, not measurement or planning. TBP is an almost pure `Manage` component. |
 
 ---

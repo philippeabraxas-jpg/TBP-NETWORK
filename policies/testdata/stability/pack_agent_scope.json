@@ -1,0 +1,9 @@
+{
+  "comment": "Fixture de stabilité (§12) pour policies/rego/pack_agent_scope.rego — sans données de bundle, le paquet ne dit rien : la sortie doit être identique d'une évaluation à l'autre.",
+  "query": "data.tbp.pack.agent_scope",
+  "input": {
+    "subject": "agent-1",
+    "action": "read",
+    "resource": "doc-1"
+  }
+}

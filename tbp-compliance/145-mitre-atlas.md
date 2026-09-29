@@ -1,9 +1,9 @@
 # MITRE ATLAS (16 tactics)
 
-**Status: Full**
+**Status: Partial**
 **Source**: [issue #145](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/145) · fix: [issue #165 / PR #166](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) (SkillRegistry)
 **Reference**: [MITRE ATLAS](https://github.com/mitre-atlas/atlas-data) — [`ATLAS.yaml`](https://github.com/mitre-atlas/atlas-data/blob/main/dist/ATLAS.yaml), an ATT&CK-style kill-chain for attacks against AI systems (16 `AML.TA####` tactics)
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -22,15 +22,15 @@ Legend: ✅ Structurally covered/mitigated · 🟡 Partial · 🔴 Real gap · �
 | **Execution** (TA0005) | Trigger execution of malicious code/artifact | ✅ | The core of TBP's doctrine: "the action executed is the translated action" (§4.5) — model output never directly triggers execution, it passes through translator→OPA→quorum→contract before token emission. |
 | **Persistence** (TA0006) | Maintain a foothold via AI artifacts | ✅ | Closed by `SkillRegistry` (#165, PR #166): an agent can no longer make an action/artifact exist merely by naming it — it must match a registered skill with an explicit resource scope. |
 | **Privilege Escalation** (TA0012) | Obtain higher permissions | ✅ | Named-closed by #125: class/quota resolved by the broker's registry, never accepted as declared by the caller — an agent cannot self-promote. |
-| **Defense Evasion** (TA0007) | Evade detection by AI security software | 🟡 | TBP isn't a detector to quietly bypass — it's an enforcement point: bypassing it means being refused (fail-closed), not going unnoticed. Systematic alarm doctrine (`OnTrip`, T14) makes a refusal always loud, never silent — but TBP doesn't claim to DETECT an evasion attempt upstream of itself. |
+| **Defense Evasion** (TA0007) | Evade detection by AI security software | ✅ | TBP isn't a detector to quietly bypass — it's an enforcement point: bypassing it means being refused (fail-closed), not going unnoticed. Systematic alarm doctrine (`OnTrip`, T14) makes a refusal always loud, never silent — but TBP doesn't claim to DETECT an evasion attempt upstream of itself. TBP does not *detect* an evasion attempt upstream of itself — that is a detector's job. **To close:** feed your detector with the `OnTrip` alarms and the audit chain. |
 | **Credential Access** (TA0013) | Steal credentials | ✅ | Private key never extractable from the HSM (review #114, `CKA_EXTRACTABLE=false` check), issuer seed at 0600, devmode doctrine (#113) against custody escape hatches. |
-| **Discovery** (TA0008) | Map the target AI environment | 🟡 | Hash-only leaves (§6.2) limit what a read of the registry actually reveals — even a full audit-chain read doesn't expose the business content of decisions. |
-| **Lateral Movement** (TA0015) | Move within the AI environment | 🟡 | Inter-cell fencing (T29, epoch authority, quarantine §7.3) bounds the blast radius of a compromised cell; VLAN segmentation (`deploy/router-debian.md`) does the same at the network level. |
-| **Collection** (TA0009) | Gather AI artifacts and related information | 🟡 | Same logic as Discovery — hash-only structurally limits the value of any registry collection. |
+| **Discovery** (TA0008) | Map the target AI environment | ✅ | Hash-only leaves (§6.2) limit what a read of the registry actually reveals — even a full audit-chain read doesn't expose the business content of decisions. |
+| **Lateral Movement** (TA0015) | Move within the AI environment | ✅ | Inter-cell fencing (T29, epoch authority, quarantine §7.3) bounds the blast radius of a compromised cell; VLAN segmentation (`deploy/router-debian.md`) does the same at the network level. **To close (network layer):** verify with the cell-isolation script ([#186](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/186)) that no route leaves a cell except through TBP. |
+| **Collection** (TA0009) | Gather AI artifacts and related information | ✅ | Same logic as Discovery — hash-only structurally limits the value of any registry collection. |
 | **AI Attack Staging** (TA0001) | Leverage knowledge/access already gained | ⚪ | A consequence of prior steps, not a step TBP specifically intercepts. |
 | **Command and Control** (TA0014) | Communicate with a compromised AI system to direct it | ✅ | "No direct client → server path" plus authenticated transport (see Initial Access) structurally prevent an unauthorized C2 channel to the broker. |
 | **Exfiltration** (TA0010) | Steal AI artifacts or system information | ✅ | **The strongest answer in this whole catalog series**: even a total read compromise of the registry yields only salted hashes (§6.2) — no business content was ever written there to begin with. |
-| **Impact** (TA0011) | Manipulate, disrupt, erode trust in, or destroy the AI system | 🟡 | Generalized fail-closed bounds the worst case to a denial of service, never silent corruption — but TBP can do nothing for an upstream-compromised agent whose individual actions remain, each, policy-compliant. |
+| **Impact** (TA0011) | Manipulate, disrupt, erode trust in, or destroy the AI system | ✅ bounded · 🔴 sequences | Generalized fail-closed bounds the worst case to a denial of service, never silent corruption — but TBP can do nothing for an upstream-compromised agent whose individual actions remain, each, policy-compliant. The sequence case (each action policy-compliant, the series harmful) is tracked by [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181). |
 
 ---
 

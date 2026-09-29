@@ -3,7 +3,7 @@
 **Status: Partial** (strongest showing in the whole series — 5 of 7 tenets direct ✅)
 **Source**: [issue #159](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/159)
 **Reference**: NIST SP 800-207 — 7 foundational tenets replacing perimeter trust with three pillars: verify explicitly, enforce least privilege, assume breach.
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -17,9 +17,9 @@ Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap �
 |---|---|---|---|
 | 1 | All data sources and computing services are resources | ✅ | The broker/OPA/registry are themselves treated as protected resources, never implicitly trusted — 0660 Unix-socket permissions, mTLS (#124): no internal component is "trusted because internal." |
 | 2 | All communication is secured regardless of network location | ✅ | Direct, total match: mandatory mTLS for any network exposure (#124, `RequireAndVerifyClientCert`), Unix socket + `SO_PEERCRED` locally — no unauthenticated communication path exists, "internal" or not. |
-| 3 | Access is granted per-session, never persistent | 🟡 / ✅ | TBP goes further than required: every `HandleAction` is re-authorized INDIVIDUALLY (no reusable session concept), and the issued token has a short TTL (30–60s, Issuer-bounded) — stricter than the tenet itself asks. |
+| 3 | Access is granted per-session, never persistent | ✅ | TBP goes further than required: every `HandleAction` is re-authorized INDIVIDUALLY (no reusable session concept), and the issued token has a short TTL (30–60s, Issuer-bounded) — stricter than the tenet itself asks. |
 | 4 | Access is determined by dynamic policy (identity, app/service state, behavioral/environmental attributes) | ✅ | Exactly the OPA evaluation with identity resolved by `AgentRegistry` (#125) + epoch/quorum state — never cached, re-evaluated on every request. |
-| 5 | The enterprise monitors and measures the integrity/security posture of all assets | 🟡 | Measured boot (T31, §6.3, `KindManifest` leaves) and the OPA bundle revision-check (§92.A5) cover the posture of ONE CELL's components; no fleet-wide posture monitoring across a larger deployment. |
+| 5 | The enterprise monitors and measures the integrity/security posture of all assets | 🔴 provisioning files · ✅ rest · ⚪ fleet policy | Measured boot (T31, §6.3, `KindManifest` leaves) and the OPA bundle revision-check (§92.A5) cover the posture of one cell's components; the supervisor's independent monitor and console (T34/T37; `cells.json` lists each cell's log and manifest directory) read every declared cell. **Not covered:** provisioning files are not measured ([#192](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/192)). **To close (fleet policy):** set your own alerting thresholds on the console's indicators. |
 | 6 | Authentication/authorization are dynamic and strictly enforced BEFORE any access | ✅ | The broker's entire chain — nothing executes without passing through translator→OPA→quorum→contract, fail-closed at every step. |
 | 7 | The enterprise collects information on asset/network/communication state for security posture improvement | ✅ | The tessera audit chain — already the most-cited strength across this whole series (Art. 12 in [#146](146-eu-ai-act.md), Art. 5(2) in [#155](155-gdpr.md)). |
 
