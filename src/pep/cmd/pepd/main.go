@@ -281,6 +281,17 @@ func run() error {
 		}
 	}()
 
+	// Mesure des trousseaux épinglés (issue #192) : AVANT le démarrage mesuré,
+	// dont la genèse écrit des feuilles (la taille du journal distingue ici un
+	// premier démarrage d'un témoin effacé).
+	if err := setupProvisioning(ctx, provisioningInputs{
+		cellID: cellID, regDir: regDir, salt: salt,
+		keyringFile: os.Getenv("TBP_KEYRING_FILE"), quorumKeyringFile: os.Getenv("TBP_QUORUM_KEYRING_FILE"),
+		quorumKeyring: quorumKeyring, quorumMin: quorumMin,
+	}, signer, verifier, cellLog, os.Getenv); err != nil {
+		return fmt.Errorf("provisionnement: %w", err)
+	}
+
 	// Measured boot (T31, issue #32) — revue de sécurité #96 : AVANT
 	// d'ouvrir le service de la cellule (point d'intégration documenté,
 	// src/registry/README.md). Actif PAR DÉFAUT depuis la revue de
@@ -693,6 +704,9 @@ func checkDevEscapeHatches(getenv func(string) string, stat func(string) (os.Fil
 	}
 	if getenv("TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE") == "1" {
 		active = append(active, "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE")
+	}
+	if getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1" {
+		active = append(active, "TBP_PROVISIONING_DISABLED_DEV_UNSAFE")
 	}
 	return devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, active)
 }

@@ -538,3 +538,23 @@ func TestGuardOnARealCellLog(t *testing.T) {
 		t.Fatalf("modification non détectée sur un vrai journal : %v", err)
 	}
 }
+
+func TestParseProvisioningExtra(t *testing.T) {
+	got, err := ParseProvisioningExtra("/a/rules.json, r=/b/x.json ,,")
+	if err != nil || len(got) != 2 ||
+		got[0] != (ProvisioningFile{Name: "extra:/a/rules.json", Path: "/a/rules.json"}) ||
+		got[1] != (ProvisioningFile{Name: "extra:r", Path: "/b/x.json"}) {
+		t.Fatalf("extras = %+v (%v)", got, err)
+	}
+	if got, err := ParseProvisioningExtra(""); err != nil || got != nil {
+		t.Fatalf("liste vide = %+v (%v)", got, err)
+	}
+	if _, err := ParseProvisioningExtra("nom="); err == nil {
+		t.Fatal("entrée sans chemin acceptée")
+	}
+	// le préfixe empêche d'usurper le nom d'un fichier dérivé par le démon
+	got, _ = ParseProvisioningExtra("agent-registry=/x")
+	if got[0].Name == "agent-registry" {
+		t.Fatal("un extra peut usurper le nom « agent-registry »")
+	}
+}

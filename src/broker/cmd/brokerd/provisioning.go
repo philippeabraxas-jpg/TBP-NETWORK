@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/mod/sumdb/note"
 
@@ -51,19 +50,9 @@ func loadProvisioningConfig(getenv func(string) string, disabled bool) (witness,
 	case witness == "":
 		return "", "", nil, errors.New("TBP_PROVISIONING_WITNESS_FILE requis (issue #192 : les fichiers de confiance sont mesurés au démarrage) — ou déclarer EXPLICITEMENT TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1 (dev/labo uniquement, jamais en production)")
 	}
-	for _, item := range strings.Split(getenv("TBP_PROVISIONING_EXTRA_FILES"), ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		name, path := item, item
-		if i := strings.Index(item, "="); i > 0 {
-			name, path = item[:i], item[i+1:]
-		}
-		if path == "" {
-			return "", "", nil, fmt.Errorf("TBP_PROVISIONING_EXTRA_FILES : entrée %q sans chemin", item)
-		}
-		extra = append(extra, registry.ProvisioningFile{Name: "extra:" + name, Path: path})
+	extra, err = registry.ParseProvisioningExtra(getenv("TBP_PROVISIONING_EXTRA_FILES"))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("TBP_PROVISIONING_EXTRA_FILES : %w", err)
 	}
 	return witness, proof, extra, nil
 }

@@ -285,6 +285,29 @@ type witnessFile struct {
 // Garde
 // ---------------------------------------------------------------------------
 
+// ParseProvisioningExtra lit la liste « nom=chemin,chemin,… » de
+// TBP_PROVISIONING_EXTRA_FILES (une entrée sans « = » a pour nom son chemin). Les
+// noms sont préfixés « extra: » : un fichier ajouté à la main ne peut jamais usurper
+// le nom d'un fichier que le démon dérive lui-même. Mutualisé par pepd et brokerd.
+func ParseProvisioningExtra(list string) ([]ProvisioningFile, error) {
+	var out []ProvisioningFile
+	for _, item := range strings.Split(list, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		name, path := item, item
+		if i := strings.Index(item, "="); i > 0 {
+			name, path = item[:i], item[i+1:]
+		}
+		if path == "" {
+			return nil, fmt.Errorf("%w : entrée %q sans chemin", ErrProvisioningConfig, item)
+		}
+		out = append(out, ProvisioningFile{Name: "extra:" + name, Path: path})
+	}
+	return out, nil
+}
+
 // LogHead est la couture de lecture de la taille du journal — implémentée par
 // CellLog. Elle distingue un PREMIER démarrage (journal vide) d'un redémarrage
 // dont le témoin a été effacé.
