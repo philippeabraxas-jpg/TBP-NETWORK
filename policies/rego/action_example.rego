@@ -17,6 +17,7 @@
 package tbp.example.action
 
 import data.tbp.pack.agent_hardening as hardening
+import data.tbp.pack.agent_scope as agent_scope
 import data.tbp.pack.skill_tier as skill_tier
 import rego.v1
 
@@ -29,14 +30,17 @@ default allow := false
 # Le paquet de durcissement (policies/rego/pack_agent_hardening.rego) est une
 # GARDE commune : fichiers de mémoire d'agent, magasins d'identifiants et
 # sortie réseau. Le paquet de niveaux de skills (pack_skill_tier.rego) en est
-# une seconde : un skill high/critical exige la classe I/W ou W. Aucune règle
-# d'autorisation ci-dessous n'écarte ces gardes.
+# une seconde : un skill high/critical exige la classe I/W ou W. Le paquet de
+# périmètre par agent (pack_agent_scope.rego) en est une troisième : liste
+# blanche d'actions et de ressources par agent. Aucune règle d'autorisation
+# ci-dessous n'écarte ces gardes.
 
 # Classe "inoffensive" (§4.1) : lecture seule, exécution directe.
 allow if {
 	input.action == "read"
 	hardening.ok
 	skill_tier.ok
+	agent_scope.ok
 }
 
 # Ouverture de chemin lourd : n'autorise QUE si un passeport valide et non
@@ -46,6 +50,7 @@ allow if {
 	input.action == "open_tunnel"
 	hardening.ok
 	skill_tier.ok
+	agent_scope.ok
 	input.passeport != null
 	input.passeport.volume_used < input.passeport.volume_max
 	input.passeport.ttl_remaining_s > 0
@@ -58,6 +63,8 @@ reason := concat(", ", sort(hardening.violation)) if {
 	not hardening.ok
 } else := concat(", ", sort(skill_tier.violation)) if {
 	not skill_tier.ok
+} else := concat(", ", sort(agent_scope.violation)) if {
+	not agent_scope.ok
 } else := "action inconnue ou hors classification" if {
 	not allow
 	not input.passeport

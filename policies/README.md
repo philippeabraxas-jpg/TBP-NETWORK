@@ -147,3 +147,36 @@ enforces its consequences but cannot judge whether a tier is too low; review the
 registry file like a policy change. The scope-size check at load time
 (low ≤ 8, medium ≤ 32, high ≤ 128, critical unbounded) only catches an obvious
 mismatch.
+
+### `tbp.pack.agent_scope` — `policies/rego/pack_agent_scope.rego`
+
+The agent registry (#125) fixes an agent's **class** and **quota**; it does not
+say which actions or resources the agent may ask for. This pack is a per-agent
+allowlist kept in the bundle's data document (signed, §12) — never in the request:
+
+```json
+{
+  "tbp": {
+    "agent_scope": {
+      "require_agent_scope": true,
+      "agents": {
+        "agent-1": {"actions": ["read", "search"], "resources": ["doc-1", "doc-2"]},
+        "agent-2": {"actions": ["read"]}
+      }
+    }
+  }
+}
+```
+
+| Check | Violation code | Rule |
+|---|---|---|
+| Action outside the agent's list | `action-not-in-agent-scope` | exact match, never a prefix; an empty list allows nothing; a missing key leaves that dimension unconstrained |
+| Resource outside the agent's list | `resource-not-in-agent-scope` | same |
+| Agent without an entry, `require_agent_scope` set | `agent-scope-missing` | default-deny per agent |
+
+**Before enabling:** without `require_agent_scope: true`, an agent with no entry
+is not constrained (the pack says nothing when it has no data). Set it in
+production. Matching is on the resource string as the broker resolved it; a
+resource the executor canonicalises differently (case, encoding, aliases) is a
+translator/integrator matter (#180), and the hardening pack already refuses
+non-canonical encodings.
