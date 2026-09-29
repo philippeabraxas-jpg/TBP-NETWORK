@@ -1,6 +1,6 @@
 # OWASP Agentic Skills Top 10 (AST10)
 
-**Status: Partial**
+**Status: Full**
 **Source**: [issue #142](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/142) (analysis) · [issue #165 / PR #166](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) (SkillRegistry fix)
 **Reference**: [OWASP Agentic Skills Top 10](https://github.com/OWASP/www-project-agentic-skills-top-10) (AST01–AST10, 2026 checklist)
 **Last verified**: 2026-09-29
@@ -17,9 +17,9 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 
 | # | Control | Status | Detail |
 |---|---|---|---|
-| 1.1 | Verify publisher identity, reject typosquatting | 🟡 | `SkillRecord.Provenance` documents the source, verified out-of-band at genesis (#165) — same pattern as `AgentRegistry`. |
+| 1.1 | Verify publisher identity, reject typosquatting | ✅ | `SkillRecord.Provenance` documents the source, verified out-of-band when the entry is written (#165) — same pattern as `AgentRegistry`. **Typosquatting:** matching is exact and literal, so a look-alike action name is simply unregistered (`skill-unknown`). **To close (deployer):** verify the publisher before adding an entry and write down how in the change record (see 2.7). |
 | 1.2 | Behavioral/intent scanning | ⚪ | External scanner/CI concern, not a policy-engine role. |
-| 1.3 | Ed25519 signature + manifest `content_hash` | 🟡 | The crypto mechanism exists (`Issuer`/`DevSigner`/`PKCS11Signer`, `ContractStore` already verifies Ed25519 operator signatures on plans) — never yet applied to a skill manifest. |
+| 1.3 | Ed25519 signature + manifest `content_hash` | ⚪ | **Why grey:** TBP never loads or runs skill code, so there is no manifest for it to verify; its signature primitives serve tokens, plans and quorum. **To close:** verify each skill's Ed25519 signature and `content_hash` in your installation pipeline *before* adding it to the registry, and record `publisher@sha256:<hash>` in `provenance` so the audit shows what was admitted. |
 | 1.4 | Manual code review | ⚪ | Human process, not runtime. |
 | 1.5 | Isolated canary rollout | ⚪ | CI/deployment concern. |
 | 1.6 | Forbid writes to `SOUL.md`/`MEMORY.md`/`AGENTS.md` without explicit justification | ✅ | Rule pack `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`), violation `protected-agent-file`: a write/delete on these files is refused below **class W**. Class W *is* the explicit justification — an approved plan (#177) plus a k-of-n quorum (§7.5) — and the class comes from `AgentRegistry` (#125), never from the agent. More names via bundle data `extra_protected_files`. Tested in `policies/tests/pack_agent_hardening_test.rego` (mutation-checked) and run in CI (`opa test`). |
@@ -28,11 +28,11 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 
 | # | Control | Status | Detail |
 |---|---|---|---|
-| 2.1 | Bind publisher to a verified signing key | 🟡 | Documentary provenance is real (`SkillRecord.Provenance`); no cryptographic per-skill signature yet. |
+| 2.1 | Bind publisher to a verified signing key | ⚪ | **Why grey:** same as 1.3 — a per-skill signature is checked where the skill is installed, not by TBP. Documentary provenance is real (`SkillRecord.Provenance`). **To close:** as 1.3, and keep the publisher's verification key in your own key inventory. |
 | 2.2 | Pin the version to an immutable SHA-256 hash, reject ranges | ✅ | Pattern replicated from `AgentRegistry`/`OperatorKeys`/genesis controllers: out-of-band table, never resolved dynamically, no runtime mutation path. |
 | 2.3 | Lock transitive dependencies to hashes | ⚪ | Build-time, outside TBP runtime. |
 | 2.4 | SBOM (CycloneDX/SPDX) | ⚪ | CI tooling — see [SCVS](157-owasp-scvs.md) for TBP's own SBOM. |
-| 2.5 | Treat repo config files (`hooks`, `.claude/settings.json`) as executable code | 🟡 | Same principle as the devmode doctrine (#113): a single file, without an independent second signal, must never be able to disarm a protection. Applies in theory; nothing enforces it for skill hooks yet. |
+| 2.5 | Treat repo config files (`hooks`, `.claude/settings.json`) as executable code | ⚪ | **Why grey:** TBP does not read the agent runtime's repo or config files; the principle applies to TBP itself and is enforced there (devmode #113: a single file, without an independent second signal, can never disarm a protection). **To close:** treat the runtime's hook and settings files as code — review, sign and deploy them like the registry (2.7), and mount them read-only for the agent. |
 | 2.6 | Recursive dependency-tree scanning | ⚪ | CI tooling. |
 | 2.7 | Pre-mutation receipt before any write | ⚪ | **Why grey:** TBP never installs anything. A skill "appears" only when an operator edits `TBP_SKILL_REGISTRY_FILE` out-of-band and restarts `brokerd` — there is no install path in the code to put a receipt in front of, and adding one would create the very runtime-mutation path the registry is designed not to have. The receipt for *actions* exists (`writeLeaf` before token emission, §4.1). **To close:** treat the registry file like a policy change: keep it in version control with signed commits, require a reviewed change record (who approved which skill, which `risk_tier`, which `scope`) before deploying it, and deploy it by the same signed pipeline as the other cell files. The change record is the pre-mutation receipt. |
 
@@ -54,7 +54,7 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 |---|---|---|---|
 | 4.1 | Description ↔ actual functionality match | ⚪ | Semantic analysis, not runtime. |
 | 4.2 | ASCII-smuggling / zero-width / base64 scanning | ⚪ | Scanner concern — note the related but distinct fix in [OWASP LLM Top 10 LLM01.5](143-owasp-llm-top10.md) (Unicode instruction-smuggling on `Action`/`Resource`, already fixed). |
-| 4.3 | Safe defaults, explicit opt-in for dangerous capabilities | 🟡 | Principle already applied everywhere (devmode #113: nothing dangerous is active without a flag + independent sentinel) — not yet replicated for a future skill manifest. |
+| 4.3 | Safe defaults, explicit opt-in for dangerous capabilities | ✅ | Applied: `risk_tier` is required, and a `high` or `critical` skill is invocable only under a plan (class I/W) or a plan plus quorum (class W) — see 4.5. No skill exists without an explicit registry entry, and devmode escape hatches need a flag plus an independent sentinel (#113). |
 | 4.4 / 4.9 / 4.11 | Schema validation, strict JSON-key allowlist, pre-deserialization validation | ✅ | `loadSkillRegistry` (brokerd/main.go) rejects any empty action, empty provenance, or empty table — same fail-closed discipline as the rest of the repo. |
 | 4.5 | Cross-reference declared `risk_tier` against permission scope | ✅ | `risk_tier` (`low`/`medium`/`high`/`critical`) is a required field of `SkillRecord`; `brokerd` refuses to start on a missing or unknown tier and on a scope wider than the tier allows (low ≤ 8 resources, medium ≤ 32, high ≤ 128, critical unbounded — a consistency guard, not a security boundary). Rule pack `tbp.pack.skill_tier` then gates invocation: `high` ⇒ class I/W (plan), `critical` ⇒ class W (plan + quorum). **Limit**: the tier is an operator declaration; a tier set too low is a provisioning fault only the out-of-band review of the registry file catches. |
 | 4.6 | Block brand impersonation | ⚪ | Process/branding, not runtime. |
@@ -68,11 +68,11 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 | # | Control | Status | Detail |
 |---|---|---|---|
 | 5.1 | Inventory of referenced external URLs/docs | ✅ | `TBP_SKILL_REGISTRY_FILE` is this out-of-band inventory. |
-| 5.2 | Pin each reference to a content hash | 🟡 | Same pattern as 2.2, not yet applied to external references specifically. |
+| 5.2 | Pin each reference to a content hash | ⚪ | **Why grey:** same as 5.3 — what a skill fetches is decided by the agent runtime. **To close:** as 5.3: vendor and hash-pin the documents in the build, and allowlist no hosting domain you have not reviewed. |
 | 5.3 | Prefer signed inlining over runtime fetch | ⚪ | **Why grey:** what a skill loads at run time is decided by the agent runtime, not by the broker. TBP's part is the egress rule (5.4): a runtime fetch is refused unless its host is allowlisted, so the choice is enforced by *what you allowlist*. **To close:** vendor each skill and its referenced documents into the build, pin them by hash (2.2, 5.2), and do **not** add skill-registry or document-hosting domains to `allowed_domains`. Where a runtime fetch is unavoidable, allowlist that one host explicitly and record the decision in the change record for the policy bundle. |
 | 5.4 | Restrict runtime fetches to a domain allowlist | ✅ | Same mechanism as 3.7 (`egress-not-allowlisted`): a runtime fetch whose resource is a canonical URL must target an allowed host. |
 | 5.5 | Transitive review of the reference graph | ⚪ | Static analysis. |
-| 5.6 | Fleet-wide visibility (which skill fetched which source) | 🟡 | Close to what the leaf registry already does (every decision traced, hash-only, §6.2) — a `KindSkillFetch` leaf type would be consistent with the 12 existing `Kind`s. |
+| 5.6 | Fleet-wide visibility (which skill fetched which source) | ✅ | Every decision leaves a `KindDecision` leaf (§4.1) carrying the hash of the action and resource — hash-only (§6.2), so an investigator confirms "did skill X fetch source Y" by hashing the candidates, not by reading the resource in clear. **Limit:** TBP sees the fetches that go through it; a fetch made by the executor outside TBP is not seen, which is why network isolation (#186) matters. |
 
 ## AST06 — Weak Isolation (HIGH)
 
@@ -90,7 +90,7 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 
 | # | Control | Status | Detail |
 |---|---|---|---|
-| 7.1 | Pin to an immutable hash in the inventory | 🟡 | Pattern identical to `AgentRegistry`/`OperatorKeys`. |
+| 7.1 | Pin to an immutable hash in the inventory | ⚪ | **Why grey:** the registry pins each skill by its exact action name and scope, and is itself changed only out-of-band; the hash of the skill's *content* is checked where the skill is installed (see 1.3). **To close:** record `publisher@sha256:<hash>` in `provenance` and re-check it in your pipeline at each version change. |
 | 7.2 | Disable auto-update / explicit re-approval in prod | ✅ | Exactly #92.A5 for the OPA bundle. |
 | 7.3 | Cryptographic signature on every update | ✅ | Already done for the OPA bundle (§106, RSA signature verified by OPA itself). |
 | 7.4 | Automatic re-scan on every version change | ⚪ | CI tooling. |
@@ -99,18 +99,18 @@ Legend: ✅ Covered · 🟡 Partial (mechanism exists elsewhere in TBP, needs re
 
 ## AST08 — Poor Scanning (MEDIUM)
 
-Almost entirely ⚪ out of TBP's scope — behavioral/semantic analysis, secret detection, multi-tool scan pipelines are CI/scanner territory; TBP must never claim to be a scanner. The one actionable point: require a `scan_status` field in a future skill manifest and `deny` if absent or stale (🟡, depends on SkillRegistry extension).
+Almost entirely ⚪ out of TBP's scope — behavioral/semantic analysis, secret detection, multi-tool scan pipelines are CI/scanner territory; TBP must never claim to be a scanner. **Why grey:** a scan result is produced by a scanner, and TBP has no skill content to scan. **To close:** run your scanner in CI, add a skill to the registry only when it passed, and keep the scan date and result in the change record (see 9.1) — a stale scan is then a review item on that record, not a runtime check TBP could perform.
 
 ## AST09 — No Governance (MEDIUM)
 
 | # | Control | Status | Detail |
 |---|---|---|---|
-| 9.1 | Centralized inventory (name, version, hash, date, installer, scan status) | 🟡 | TBP already has this reflex for other domains (`agents.json`/`operators.json`/`cells.json`) — replicate the pattern for skills, don't invent a new one. |
+| 9.1 | Centralized inventory (name, version, hash, date, installer, scan status) | ✅ · ⚪ (extra fields) | `TBP_SKILL_REGISTRY_FILE` is the inventory: action name, provenance, exact scope, `risk_tier`. Version, hash, date, installer and scan status are not fields of the record. **To close:** keep them in the change record next to the file (2.7) — one line per entry, reviewed with the file. |
 | 9.2 | Assign `risk_tier` consistent with scope | ✅ | Same mechanism as 4.5: required tier, cross-checked with the scope size at load, exposed to OPA as `input.skill` and enforced by `tbp.pack.skill_tier`. Reviewing the tier remains an organizational step (9.5). |
-| 9.3 | Approval registry (workflow, approver, date) | 🟡 | Close to `ContractStore` (T30): a signed Ed25519 operator approval, hash-sealed — exists for plans, not for skill admission. |
+| 9.3 | Approval registry (workflow, approver, date) | ⚪ | **Why grey:** the approval to admit a skill is an act of the operator's change process; TBP has no install path to gate (see 2.7). `ContractStore` seals *plans* with signed operator approval; skill admission is the registry-file change. **To close:** require two-person review and a signed commit on the registry file, and keep the approver and date in the change record. |
 | 9.4 | Log invocations with sufficient audit detail | ✅ | Every decision already leaves a `KindDecision` leaf (§4.1), hash-only. |
 | 9.5 | Review cadence based on risk_tier | ⚪ | Organizational process. |
-| 9.6 | Formal revocation process | 🟡 | The concept exists (cell quarantine §7.3, plan revocation in `ContractStore`) — not wired to skills. |
+| 9.6 | Formal revocation process | ✅ | Revoking a skill = removing its entry from the registry file and restarting `brokerd` (no hot-reload path exists, by design): from then on its actions are refused as `skill-unknown`. Cell quarantine (§7.3) and plan revocation in `ContractStore` cover the running-cell and plan cases. **To close (process):** write the revocation trigger and owner in your change process. |
 | 9.7 | Agent identities as NHI, IAM, scheduled rotation | ✅ identity · ⚪ agent credentials | `AgentRegistry` (#125) closes agent *identity* (class and quota resolved by the broker, never self-declared; `transport_identity` binds an agent to its mTLS certificate, #124). **Why the rest is grey:** the agent's own credential — the client certificate it presents — comes from the deployer's PKI, not from TBP. **To close:** issue short-lived agent client certificates from your CA, rotate them on a schedule shorter than the risk you accept, and update the agent's `transport_identity` only through the out-of-band registry file. For rotating *TBP's own* keys, see the next row. |
 | 9.7 (TBP's own keys) | Scheduled rotation of the keys TBP holds | ✅ procedure | The mechanism is already in the code: token signature keys are matched by `kid` (SHA-256 of the public key) in a pinned **keyring** that can hold several keys (`TBP_KEYRING_FILE`), and tokens live 30–60 s, so an overlap window is short. Procedure for the token-issuing key: (1) create the new key (HSM or seed) and note its `kid`; (2) add its public key to `TBP_KEYRING_FILE` next to the old one and restart `pepd` — it starts closed until the quorum reconfirms (#93); (3) point `brokerd` at the new key and restart it; (4) after at least one token lifetime (60 s), remove the old `kid` from the keyring and restart `pepd` again. Operator and quorum keys (`TBP_OPERATOR_KEYS_FILE`, `TBP_QUORUM_KEYRING_FILE`) rotate the same way — add, restart, verify, remove. **Limit:** this procedure is derived from the code and is not exercised by `deploy/selftest`. |
 
