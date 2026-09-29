@@ -139,6 +139,12 @@
 //	                   API de verdicts pure (comportement historique).
 //	TBP_PROXY_BACKEND  requis avec TBP_PROXY_ADDR — URL http(s) absolue du
 //	                   service RÉEL en amont.
+//	TBP_PROXY_ANO_SOCKET  optionnel (issue #178) — le backend est HORS cellule :
+//	                   ce qui sort est anonymisé par ano (socket Unix d'anod)
+//	                   et ce qui revient est reconstitué ; toute faute d'ano
+//	                   refuse la requête. Absent ⇒ trafic transmis tel quel
+//	                   (destination dans la cellule / liste blanche locale).
+//	                   TBP_PROXY_ANO_TIMEOUT_MS (100–30000, défaut 3000).
 //
 // Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
 // (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
@@ -541,7 +547,12 @@ func run() error {
 		if err != nil || backend.Scheme == "" || backend.Host == "" {
 			return fmt.Errorf("pepd: TBP_PROXY_BACKEND invalide %q (URL http(s) absolue requise)", backendRaw)
 		}
-		proxy, err := pep.NewBlockingProxy(pep.ProxyOptions{Listener: listener, Backend: backend})
+		proxyOpts := pep.ProxyOptions{Listener: listener, Backend: backend}
+		// #178 : destination hors cellule ⇒ anonymisation par ano (optionnel)
+		if err := applyAno(ctx, os.Getenv, &proxyOpts, cellLog, cellID, salt); err != nil {
+			return fmt.Errorf("pepd: anonymisation du proxy (#178): %w", err)
+		}
+		proxy, err := pep.NewBlockingProxy(proxyOpts)
 		if err != nil {
 			return fmt.Errorf("pepd: proxy bloquant (§94): %w", err)
 		}
