@@ -520,6 +520,8 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_CLUSTER_MEMBERS="+daemonsCellID+",cell-b",
 		"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
 		"TBP_AGENT_REGISTRY_FILE="+agentsPath,
+		// Mesure des fichiers de confiance (issue #192) : témoin hors du registre.
+		"TBP_PROVISIONING_WITNESS_FILE="+filepath.Join(base, "brokerd-provisioning-witness.json"),
 		"TBP_BROKER_SOCKET="+brokerSock,
 		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
 		// GET /v1/supervision/* n'est plus servi sur le plan de données
@@ -528,6 +530,33 @@ func runDaemons(s *suite, cfg config) {
 		// exécutable, pas seulement le code).
 		"TBP_BROKER_ADMIN_SOCKET="+brokerAdminSock,
 	)
+	// Adoption de #192 sur un registre qui a DÉJÀ vécu (ici : le harness y a écrit
+	// des feuilles avant le premier démarrage de brokerd, comme le ferait une cellule
+	// déployée avant cette brique) : sans témoin, brokerd refuse — un fichier édité
+	// serait sinon ré-engagé comme « premier démarrage » (§111). Le SEUL geste
+	// d'adoption est une preuve de quorum, bornée à CE démon et à cette condition ;
+	// elle ne sert qu'au premier démarrage (les suivants n'en ont plus besoin).
+	provProof := filepath.Join(base, "provisioning-proof.json")
+	{
+		expiry := time.Now().Add(4 * time.Minute)
+		msg := pep.QuorumMessage("provisioning-transition-brokerd", daemonsCellID, expiry)
+		type sigWire struct {
+			KeyID     string `json:"key_id"`
+			Signature string `json:"signature"`
+		}
+		var sigs []sigWire
+		for _, id := range []int{1, 2} { // k = TBP_QUORUM_MIN = 2
+			kid := pep.KeyIDFromPublicKey(pubs[id])
+			sigs = append(sigs, sigWire{KeyID: hex.EncodeToString(kid[:]), Signature: hex.EncodeToString(ed25519.Sign(privs[id], msg))})
+		}
+		proofJSON, _ := json.Marshal(map[string]any{"expiry": expiry.Unix(), "signatures": sigs})
+		if err := os.WriteFile(provProof, proofJSON, 0o600); err != nil {
+			s.fail(phaseDaemons, "preuve d'adoption du provisionnement", err)
+			return
+		}
+	}
+	brokerEnvFirst := append(append([]string{}, brokerEnv...), "TBP_PROVISIONING_TRANSITION_PROOF_FILE="+provProof)
+
 	supervisorEnv := append(os.Environ(),
 		"TBP_MONITOR_CELL_ID="+daemonsMonitorID,
 		"TBP_SALT="+hex.EncodeToString(monitorSalt),
@@ -557,7 +586,7 @@ func runDaemons(s *suite, cfg config) {
 		strings.TrimSpace(strings.SplitN(errB, "\n", 2)[0]))
 
 	// --- Étape : démarrage brokerd (deploy/cellule.md étape 7) --------------
-	brokerd, err := startDaemon(brokerdBin, brokerEnv, filepath.Join(base, "brokerd.log"))
+	brokerd, err := startDaemon(brokerdBin, brokerEnvFirst, filepath.Join(base, "brokerd.log"))
 	if err != nil {
 		s.fail(phaseDaemons, "brokerd démarrage", err)
 		return
@@ -813,4 +842,67 @@ func runDaemons(s *suite, cfg config) {
 	}
 	s.add(phaseDaemons, "reprise: brokerd relancé ⇒ console 200 à nouveau (lecture live, pas de cache figé)",
 		recovered, fmt.Sprintf("status=%d epoch=%d authority=%s", status, epochV.Epoch, epochV.Authority))
+
+	// --- Issue #192 : un fichier de confiance édité hors-bande refuse le démarrage ---
+	// Même binaire, même environnement, mêmes fichiers — sauf agents.json, dont la
+	// classe d'agent-1 (W, quorum + plan) passe à 3 (ni l'un ni l'autre). Avant #192
+	// cette édition passait sans alarme ; le témoin signé la détecte.
+	brokerd2.stop()
+	origAgents, err := os.ReadFile(agentsPath)
+	if err != nil {
+		s.fail(phaseDaemons, "lecture agents.json (issue #192)", err)
+		return
+	}
+	editedAgents, _ := json.Marshal(map[string]map[string]any{"agent-1": {"class": 3}})
+	if err := os.WriteFile(agentsPath, editedAgents, 0o600); err != nil {
+		s.fail(phaseDaemons, "édition agents.json (issue #192)", err)
+		return
+	}
+	if err := writeEpoch0(); err != nil {
+		s.fail(phaseDaemons, "epoch 0 (issue #192)", err)
+		return
+	}
+	refusedLog := filepath.Join(base, "brokerd-provisioning-refus.log")
+	refused, err := startDaemon(brokerdBin, brokerEnv, refusedLog)
+	if err != nil {
+		s.fail(phaseDaemons, "brokerd (agents.json édité)", err)
+		return
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- refused.cmd.Wait() }()
+	refusedOK := false
+	select {
+	case werr := <-exited:
+		refusedOK = werr != nil // sortie NON nulle : le démarrage est refusé
+	case <-time.After(15 * time.Second):
+		refused.stop()
+	}
+	logBytes, _ := os.ReadFile(refusedLog)
+	s.add(phaseDaemons, "issue #192 : agents.json édité hors-bande ⇒ brokerd REFUSE de démarrer, en nommant le fichier",
+		refusedOK && strings.Contains(string(logBytes), "agent-registry") && strings.Contains(string(logBytes), "divergents"),
+		fmt.Sprintf("sortie non nulle=%v journal=%s", refusedOK, strings.TrimSpace(string(logBytes))))
+
+	// Cas voisin : l'état d'origine restauré, brokerd repart.
+	if err := os.WriteFile(agentsPath, origAgents, 0o600); err != nil {
+		s.fail(phaseDaemons, "restauration agents.json (issue #192)", err)
+		return
+	}
+	if err := writeEpoch0(); err != nil {
+		s.fail(phaseDaemons, "epoch 0 (issue #192)", err)
+		return
+	}
+	brokerd3, err := startDaemon(brokerdBin, brokerEnv, filepath.Join(base, "brokerd-provisioning-restaure.log"))
+	if err != nil {
+		s.fail(phaseDaemons, "brokerd (agents.json restauré)", err)
+		return
+	}
+	defer brokerd3.stop()
+	restarted := false
+	for i := 0; i < 50 && !restarted; i++ {
+		time.Sleep(200 * time.Millisecond)
+		st, _, gerr := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/epoch")
+		restarted = gerr == nil && st == http.StatusOK
+	}
+	s.add(phaseDaemons, "issue #192 : état d'origine restauré ⇒ brokerd repart (le refus ne visait que la divergence)",
+		restarted, "")
 }
