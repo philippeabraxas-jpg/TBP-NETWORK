@@ -116,6 +116,7 @@ func validateBundle(opaBin, regoDir string) ([]finding, error) {
 	var findings []finding
 	findings = append(findings, checkCycles(modules)...)
 	findings = append(findings, checkOrderSensitivity(modules)...)
+	findings = append(findings, checkNondeterministicBuiltins(modules)...)
 	return findings, nil
 }
 
@@ -408,6 +409,67 @@ func checkOrderSensitivity(modules []module) []finding {
 	return findings
 }
 
+// nondeterministicBuiltins : built-ins dont le résultat peut varier d'une
+// évaluation à l'autre (aléa, horloge implicite, signature à nonce aléatoire).
+// Défense en profondeur : policies/gen_capabilities.sh les retire déjà du
+// document de capacités, mais un bundle validé SANS ce document (ou avec un
+// document périmé après une mise à jour d'OPA) doit être refusé ici aussi.
+// Les built-ins qui prennent l'instant en argument explicite (time.parse_*,
+// time.diff, time.add_date…) restent permis : ils sont déterministes.
+var nondeterministicBuiltins = map[string]string{
+	"rand.intn":    "aléa",
+	"uuid.rfc4122": "aléa",
+	"time.now_ns":  "horloge locale (le temps vient du broker, §6.2)",
+	"opa.runtime":  "environnement du processus OPA",
+	"http.send":    "appel réseau sortant",
+
+	"net.lookup_ip_addr":                                     "appel réseau (DNS)",
+	"io.jwt.decode_verify":                                   "lit l'heure courante pour exp/nbf",
+	"io.jwt.encode_sign":                                     "signature (nonce aléatoire pour ECDSA/PSS)",
+	"io.jwt.encode_sign_raw":                                 "signature (nonce aléatoire pour ECDSA/PSS)",
+	"crypto.x509.parse_and_verify_certificates":              "validité évaluée à l'heure courante",
+	"crypto.x509.parse_and_verify_certificates_with_options": "validité évaluée à l'heure courante",
+}
+
+// checkNondeterministicBuiltins refuse tout appel à un built-in non déterministe.
+func checkNondeterministicBuiltins(modules []module) []finding {
+	var findings []finding
+	for _, m := range modules {
+		for _, r := range m.rules {
+			seen := map[string]bool{}
+			for _, call := range findCalls(r.raw) {
+				name := callFullName(call)
+				why, bad := nondeterministicBuiltins[name]
+				if !bad || seen[name] {
+					continue
+				}
+				seen[name] = true
+				findings = append(findings, finding{
+					Section: "§12",
+					Rule:    r.node,
+					Message: fmt.Sprintf("%s() est non déterministe (%s) — interdit dans une règle de décision", name, why),
+				})
+			}
+		}
+	}
+	return findings
+}
+
+// callFullName rend le nom pointé complet d'un appel (« rand.intn »), là où
+// callOperator ne rend que le dernier segment (« intn »).
+func callFullName(call []any) string {
+	head, _ := call[0].(map[string]any)
+	elems, _ := head["value"].([]any)
+	parts := make([]string, 0, len(elems))
+	for _, e := range elems {
+		m, _ := e.(map[string]any)
+		if v, ok := m["value"].(string); ok {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
 // collectSortSafeVars repère les assignations `x := <terme order-safe>`
 // dans le corps d'une règle (y compris la chaîne else) et renvoie
 // l'ensemble des noms de variable dont on peut prouver, statiquement et
@@ -550,13 +612,41 @@ func checkStability(opaBin, regoDir, fixturesDir string, k int) ([]finding, erro
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
-		fmt.Printf("note: aucune fixture de stabilité dans %s — contrôle C sauté\n", fixturesDir)
-		return nil, nil
-	}
 	sort.Strings(files)
 
+	// Couverture (§12) : CHAQUE package du bundle doit être interrogé par au
+	// moins une fixture. Sans fixture, le contrôle de stabilité ne voit rien et
+	// « profil respecté » ne voudrait rien dire : une règle non déterministe
+	// (rand.intn, par exemple) passerait.
 	var findings []finding
+	modules, err := parseDir(opaBin, regoDir)
+	if err != nil {
+		return nil, err
+	}
+	queries := fixtureQueries(files)
+	covered := map[string]bool{}
+	for _, m := range modules {
+		pkg := "data." + strings.Join(m.pkgPath, ".")
+		if covered[pkg] {
+			continue
+		}
+		covered[pkg] = true
+		hit := false
+		for _, q := range queries {
+			q = strings.TrimSpace(q)
+			if q == pkg || strings.HasPrefix(q, pkg+".") {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			findings = append(findings, finding{
+				Section: "§12",
+				Rule:    pkg,
+				Message: fmt.Sprintf("package sans fixture de stabilité dans %s — ajouter une fixture dont la requête vise %s", fixturesDir, pkg),
+			})
+		}
+	}
 	for _, f := range files {
 		ok, detail := stabilityCheckOne(opaBin, regoDir, f, k)
 		if !ok {
@@ -564,6 +654,23 @@ func checkStability(opaBin, regoDir, fixturesDir string, k int) ([]finding, erro
 		}
 	}
 	return findings, nil
+}
+
+// fixtureQueries lit le champ « query » de chaque fixture (illisible : ignorée
+// ici ; stabilityCheckOne la refusera).
+func fixtureQueries(files []string) []string {
+	var out []string
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var fx fixture
+		if json.Unmarshal(data, &fx) == nil {
+			out = append(out, fx.Query)
+		}
+	}
+	return out
 }
 
 func stabilityCheckOne(opaBin, regoDir, fixturePath string, k int) (bool, string) {
@@ -636,6 +743,9 @@ func runSelfTest(opaBin, invalidDir string, k int) int {
 		{"ordre", filepath.Join(invalidDir, "order"), "", "concat"},
 		{"non-déterminisme", filepath.Join(invalidDir, "nondet"),
 			filepath.Join(invalidDir, "nondet", "stability"), "diverge"},
+		{"built-in interdit", filepath.Join(invalidDir, "forbidden"), "", "non déterministe"},
+		{"sans fixture", filepath.Join(invalidDir, "nofixture"),
+			filepath.Join(invalidDir, "nofixture", "stability"), "sans fixture"},
 	}
 
 	failures := 0

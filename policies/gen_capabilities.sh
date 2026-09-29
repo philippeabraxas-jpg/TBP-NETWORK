@@ -10,6 +10,19 @@
 #                        locale d'OPA (§6.2)
 #   - opa.runtime        sauf usage déjà audité et justifié (ex. lire un
 #                        token d'environnement) — jamais pour de l'I/O
+#   - rand.intn, uuid.rfc4122
+#                        aléa : deux évaluations de la même entrée divergent
+#   - io.jwt.decode_verify
+#                        lit l'heure courante (exp/nbf) sans qu'on la passe
+#   - io.jwt.encode_sign, io.jwt.encode_sign_raw
+#                        signature à nonce aléatoire (ECDSA/PSS) : une règle de
+#                        décision ne signe rien
+#   - crypto.x509.parse_and_verify_certificates(_with_options)
+#                        validité de la chaîne évaluée à l'heure courante
+# Les built-ins qui reçoivent l'instant en argument (time.parse_*, time.diff,
+# time.add_date…) restent permis : ils sont déterministes. La même liste est
+# refusée statiquement par policies/validate_determinism.go (défense en
+# profondeur : un bundle validé sans ce document reste refusé).
 #
 # Ne JAMAIS écrire capabilities.json à la main : la liste des built-ins
 # change entre versions d'OPA. Un fichier figé serait faux ou obsolète dès
@@ -26,7 +39,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT="${SCRIPT_DIR}/capabilities.json"
 NEG_RULE="${SCRIPT_DIR}/testdata/rule_http_send.rego"
 
-FORBIDDEN="http.send net.lookup_ip_addr time.now_ns opa.runtime"
+FORBIDDEN="http.send net.lookup_ip_addr time.now_ns opa.runtime rand.intn uuid.rfc4122 io.jwt.decode_verify io.jwt.encode_sign io.jwt.encode_sign_raw crypto.x509.parse_and_verify_certificates crypto.x509.parse_and_verify_certificates_with_options"
 
 # --- Pré-requis ------------------------------------------------------------
 command -v opa >/dev/null 2>&1 || { echo "erreur: binaire 'opa' introuvable" >&2; exit 1; }
@@ -85,6 +98,25 @@ if opa check --capabilities "$OUT_TMP" "$NEG_RULE" >/dev/null 2>&1; then
     exit 1
 fi
 echo "vérification négative OK: une règle appelant http.send est refusée au chargement"
+
+#    Même vérification pour un built-in d'ALÉA : la liste a grandi après la
+#    revue d'un contournement (rand.intn passait), on prouve qu'elle mord.
+NEG_RULE_RAND="${SCRIPT_DIR}/testdata/rule_rand_intn.rego"
+if opa check --capabilities "$OUT_TMP" "$NEG_RULE_RAND" >/dev/null 2>&1; then
+    echo "erreur: $NEG_RULE_RAND a été ACCEPTÉE alors qu'elle appelle rand.intn —" >&2
+    echo "        le filtrage de capabilities.json a échoué ; $OUT non modifié" >&2
+    exit 1
+fi
+echo "vérification négative OK: une règle appelant rand.intn est refusée au chargement"
+
+#    Aucun built-in interdit ne subsiste dans le document produit.
+for b in $FORBIDDEN; do
+    if jq -e --arg b "$b" '[.builtins[] | select(.name == $b)] | length > 0' "$OUT_TMP" >/dev/null; then
+        echo "erreur: '$b' subsiste dans le document généré ; $OUT non modifié" >&2
+        exit 1
+    fi
+done
+echo "vérification OK: aucun des built-ins interdits ne subsiste"
 
 mv -- "$OUT_TMP" "$OUT"
 echo "écrit: $OUT"
