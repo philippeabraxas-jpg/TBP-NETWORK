@@ -3,7 +3,7 @@
 **Status: Partial**
 **Source**: [issue #143](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/143) · fix: [issue #168 / PR #169](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/168) (Unicode instruction-smuggling)
 **Reference**: [OWASP GenAI LLM Top 10 2026](https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/tree/main/2026/final) (LLM01–LLM10)
-**Last verified**: 2026-09-28
+**Last verified**: 2026-09-29
 
 ## Scope note
 
@@ -23,7 +23,7 @@ Legend: ✅ Covered · 🟡 Partial · 🔴 Real gap, new broker plumbing needed
 | 6 | Structurally separate, provenance-labeled channels for data vs. instructions | ✅ | `Translation{Action, Resource, Class, …}` *is* that separate channel — raw intent never reaches OPA as-is. |
 | 7 | Explicit human confirmation before privileged/irreversible actions, showing the exact rendered action | 🟡 | The cryptographic mechanism exists (`QuorumGate`, class W, k-of-n); displaying "the exact rendered action" to the operator is console tooling not yet built. |
 | 8 | "Rule of Two": untrusted input + sensitive data + simultaneous state change = per-action review | 🟡 | Class W already triggers a per-action quorum, but the class is a static registry value (#125), not dynamically derived from this three-factor heuristic. |
-| 9 | Treat agent memory writes as privileged, log/classify, require approval before persistence | 🔴 | TBP has no concept of persistent agent memory — open gap, not covered by SkillRegistry (see [#142](142-owasp-agentic-skills-top10.md)). |
+| 9 | Treat agent memory writes as privileged, log/classify, require approval before persistence | 🟡 | **File-based agent memory is covered:** writes to `SOUL.md`/`MEMORY.md`/`AGENTS.md` are refused below class W (plan approval + quorum) by `tbp.pack.agent_hardening` (`policies/rego/pack_agent_hardening.rego`); see [#142](142-owasp-agentic-skills-top10.md) AST01.6. **Other memory backends** (vector stores, cloud memory services) are covered only if their resource names are added to `extra_protected_files` — TBP cannot know them. *Deployer action:* list every persistent-memory resource of your agents in that bundle-data key. |
 | 10 | Pin/sign/verify MCP servers and third-party tools, audit descriptions | 🟡 | `SkillRegistry` (#165, PR #166) now pins provenance/scope of each skill out-of-band — pinning satisfied; cryptographic signing and automated description auditing remain to be built. |
 | 11 | Test against adaptive attackers | ⚪ | Test process, not runtime. |
 
@@ -69,7 +69,7 @@ Entirely ⚪ out of scope: training/fine-tuning/RAG-pipeline poisoning — TBP h
 | Sandboxing of network/internal-service access | ⚪ | OS/network isolation, outside the execution policy layer. |
 | Graceful degradation under load | 🟡 | The OPA circuit-breaker degrades to a total refusal (fail-closed), not partial functionality — a deliberate security choice (§1), not a NOT "graceful" degradation in the OWASP sense. |
 | Queue limits, dynamic scaling | ⚪ | Infra/scaling, outside TBP. |
-| Detect abnormally costly tool-invocation patterns | 🔴 | No anomaly detection of this kind today. |
+| Detect abnormally costly tool-invocation patterns | 🔴 | No anomaly detection of this kind today. **Tracked by [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181)** — the by-sequence behavioural profile already *specified* in spec §4.4(5) (sliding windows, cumulative amounts, burst frequency, EMA drift), not yet implemented. Same work closes the salami / decomposition class. |
 | Agentic circuit breakers: step limits, recursion depth, time limit, per-run cost cap | 🟡 | `ContractStore.MaxPlanSteps=64` (T30) already bounds plan step count — a real step/recursion limit, just not named as such; no per-RUN cost cap (quota is per time window, not per plan execution). |
 | Inference-infrastructure hardening | ⚪ | That's the model server, not TBP. |
 
@@ -114,6 +114,8 @@ Largely ⚪ out of scope: TBP never renders or forwards LLM-generated free text 
 
 **Gap found here and fixed**: LLM01.5 — Unicode canonicalization (zero-width, variation selectors, BOM, tag characters) on `Action`/`Resource`/`Quota` before OPA evaluation, in `StructuredTranslator` (#168, PR #169).
 
-**Still open**: LLM01.9 (agent memory writes — TBP has no persistent-memory concept) and cost-anomaly detection (LLM06) — neither is covered by SkillRegistry nor the Unicode fix.
+**Narrowed by the agent-hardening rule pack**: LLM01.9 (agent memory writes) — file-based memory now needs class W; other backends need their names listed (see row 9).
+
+**Still open (needs code)**: cost-anomaly detection (LLM06/LLM10) — [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181).
 
 **Where TBP is already strong, unnamed**: LLM03 (Excessive Agency), LLM06 (Unbounded Consumption), LLM07 (Misinformation) and LLM08 (Hidden Context Exposure) — the translator→OPA→quorum→quota architecture *is* OWASP's recommended mitigation for half this top 10, designed independently of it.

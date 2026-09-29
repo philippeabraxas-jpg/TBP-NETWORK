@@ -16,6 +16,7 @@
 
 package tbp.example.action
 
+import data.tbp.pack.agent_hardening as hardening
 import rego.v1
 
 # Défaut-deny explicite (doctrine §1 : "jamais par oui, toujours par
@@ -24,28 +25,36 @@ import rego.v1
 # de ce comportement implicite.
 default allow := false
 
+# Le paquet de durcissement (policies/rego/pack_agent_hardening.rego) est une
+# GARDE commune : fichiers de mémoire d'agent, magasins d'identifiants et
+# sortie réseau. Aucune règle d'autorisation ci-dessous ne l'écarte.
+
 # Classe "inoffensive" (§4.1) : lecture seule, exécution directe.
 allow if {
-    input.action == "read"
+	input.action == "read"
+	hardening.ok
 }
 
 # Ouverture de chemin lourd : n'autorise QUE si un passeport valide et non
 # épuisé accompagne la requête (§4.1-bis) — jamais sur la seule classe de
 # l'action.
 allow if {
-    input.action == "open_tunnel"
-    input.passeport != null
-    input.passeport.volume_used < input.passeport.volume_max
-    input.passeport.ttl_remaining_s > 0
+	input.action == "open_tunnel"
+	hardening.ok
+	input.passeport != null
+	input.passeport.volume_used < input.passeport.volume_max
+	input.passeport.ttl_remaining_s > 0
 }
 
 # Motif de refus explicite pour l'observabilité (même principe que le
 # journal d'audit chaîné construit côté invarian-actuel/broker.py : un
 # "deny" sans raison ne sert à rien pour l'investigation).
-reason := "action inconnue ou hors classification" if {
-    not allow
-    not input.passeport
+reason := concat(", ", sort(hardening.violation)) if {
+	not hardening.ok
+} else := "action inconnue ou hors classification" if {
+	not allow
+	not input.passeport
 } else := "passeport absent, expiré ou quota épuisé" if {
-    not allow
-    input.action == "open_tunnel"
+	not allow
+	input.action == "open_tunnel"
 } else := "autorise"

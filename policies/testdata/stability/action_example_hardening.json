@@ -1,0 +1,11 @@
+{
+  "comment": "Fixture de stabilité (§12) : la politique d'exemple composée avec le paquet de durcissement, sur une entrée refusée par le paquet.",
+  "query": "data.tbp.example.action",
+  "input": {
+    "action": "read",
+    "resource": "workspace/.env",
+    "actor": {"cellule": "cell-a", "policy_id": "sha256:example"},
+    "passeport": null,
+    "class": 0
+  }
+}

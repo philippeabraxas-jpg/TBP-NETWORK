@@ -61,3 +61,63 @@ See [`rego/README.md`](./rego/) for starter skeletons (default-deny,
 minimal structure consistent with doctrine §1). These are **illustrative
 examples** to bootstrap the pilot's own rules (§14: "règles propres" /
 "own rules"), not a reference policy to deploy as-is.
+
+## Rule packs — named, tested, composable
+
+A **rule pack** is a Rego package under `policies/rego/` that exports a small
+API (`ok`, `violation`, `reasons`) and that a policy composes as a **guard**
+(`allow if { …; hardening.ok }`), so no allow rule can bypass it. Packs are
+configured **only** through the bundle's data document (signed with the bundle,
+§12) — never by a value the agent supplies, and never by editing the pack.
+Tests live in `policies/tests/` (outside the bundle and outside the determinism
+validator) and run in CI: `opa test policies/rego policies/tests`.
+
+### `tbp.pack.agent_hardening` — `policies/rego/pack_agent_hardening.rego`
+
+| Check | Violation code | Rule |
+|---|---|---|
+| Agent identity / memory files (`SOUL.md`, `MEMORY.md`, `AGENTS.md`) | `protected-agent-file` | any write/delete needs **class W** (approved plan + quorum) — reads stay free |
+| Credential stores (`.env*`, SSH/GPG/AWS/kube/docker dirs, private keys, wallets, browser data, `/etc/shadow`) | `credential-store` | denied for **every** action and class, reads included |
+| Network egress | `egress-not-allowlisted`, `malformed-authority`, `opaque-uri` | a URL resource must target an allowed host; default-deny |
+| Command execution (`exec`, `run`, `shell`, `execute`, `spawn`) | `command-not-allowlisted`, `shell-metacharacter` | first word must be allowlisted **exactly**; no shell metacharacters; default-deny |
+| Explicit paths, never broad globs | `glob-in-resource` | a `*` in a resource is refused |
+| Malformed input | `resource-invalid`, `action-invalid`, `malformed-resource` | absent, non-string, empty, invalid or double `%`-encoding is a violation — never a silently undefined rule |
+
+Bundle data (all optional; lists **extend** the defaults, they never replace them):
+
+```json
+{
+  "tbp": {
+    "hardening": {
+      "extra_protected_files": ["CLAUDE.md"],
+      "extra_credential_files": ["secrets.yaml"],
+      "extra_credential_dirs": ["vault"],
+      "allowed_domains": ["api.example.org", "*.cdn.example.net"],
+      "allowed_commands": ["ls", "/usr/bin/git"],
+      "extra_command_actions": ["invoke"],
+      "exempt_resources": ["public/server.pem"]
+    }
+  }
+}
+```
+
+Put this in a `data.json` **next to your own policy, outside `policies/rego/`**:
+anything with a `.json` extension inside `policies/rego/` is loaded into the
+bundle as data, including in the deployment selftest.
+
+**Before enabling in a deployment:**
+
+- **Egress is default-deny.** If your resources are URLs, list the hosts in
+  `allowed_domains` first, or every URL action is refused. `*.example.net`
+  covers subdomains only, not `example.net` itself.
+- **Commands are default-deny.** With no `allowed_commands`, no command action
+  passes. `ls` allows `ls …` and nothing else (not `/tmp/ls`, not `lsof`).
+- **The pack judges the canonical form** of the resource (§4.5). It normalises
+  case, `%`-encoding, `\`, `..`, trailing dots/spaces and `:stream` suffixes,
+  but does not resolve symlinks, 8.3 short names or filesystem aliases, and a
+  scheme-less string that merely looks like a host (`evil.example/x`) is not
+  recognised as a URL. Canonicalisation and containment of the executor are the
+  translator's and the integrator's job (see #180).
+- **`exempt_resources` is an exception, not a fix.** It is exact-match, comes
+  from the signed bundle, and should be reviewed like any other policy change.
+
