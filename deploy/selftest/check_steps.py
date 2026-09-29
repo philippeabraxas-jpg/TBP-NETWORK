@@ -31,6 +31,7 @@ Sortie : un verdict par fichier ; code de sortie 1 dès qu'une règle casse.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 
@@ -100,6 +101,35 @@ def check_file(path: str) -> list[str]:
     return errors
 
 
+FR_STEP_RE = re.compile(r"^#### (Step|Étape) \d+")
+ENV_VAR_RE = re.compile(r"TBP_[A-Z0-9_]+")
+
+
+def check_parity(en_path: str, fr_path: str) -> list[str]:
+    """Le guide FR suit le guide EN (revue de 30d45af : cellule.fr.md avait
+    27 variables d'environnement de retard, dont celles du registre d'agents et
+    du démarrage mesuré). Contrôles structurels, PAS une vérification de
+    traduction : même nombre d'étapes, même nombre de blocs de code, et chaque
+    variable TBP_* citée en anglais est citée en français."""
+    errors: list[str] = []
+    with open(en_path, encoding="utf-8") as fh:
+        en = fh.read()
+    with open(fr_path, encoding="utf-8") as fh:
+        fr = fh.read()
+    en_steps = sum(1 for l in structural_lines(en) if FR_STEP_RE.match(l))
+    fr_steps = sum(1 for l in structural_lines(fr) if FR_STEP_RE.match(l))
+    if en_steps != fr_steps:
+        errors.append(f"{fr_path}: {fr_steps} étape(s), {en_path} en a {en_steps}")
+    en_fences = len(re.findall(r"^```", en, re.M))
+    fr_fences = len(re.findall(r"^```", fr, re.M))
+    if en_fences != fr_fences:
+        errors.append(f"{fr_path}: {fr_fences} balise(s) de code, {en_path} en a {en_fences}")
+    missing = sorted(set(ENV_VAR_RE.findall(en)) - set(ENV_VAR_RE.findall(fr)))
+    if missing:
+        errors.append(f"{fr_path}: variable(s) absente(s) par rapport à {en_path} : {', '.join(missing)}")
+    return errors
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("usage: check_steps.py <guide.md> […]", file=sys.stderr)
@@ -107,6 +137,9 @@ def main(argv: list[str]) -> int:
     total = 0
     for path in argv[1:]:
         errors = check_file(path)
+        fr = path[:-3] + ".fr.md" if path.endswith(".md") and not path.endswith(".fr.md") else None
+        if fr and os.path.exists(fr):
+            errors += check_parity(path, fr)
         if errors:
             total += len(errors)
             for e in errors:

@@ -16,7 +16,7 @@ Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that t
 | # | Risk | Status | Detail |
 |---|---|---|---|
 | **API1** | Broken Object Level Authorization (BOLA) | ✅ | **Fixed** — see below. |
-| **API2** | Broken Authentication | ✅ | **Fixed** — see below. |
+| **API2** | Broken Authentication | ✅ · ⚪ certificate profile | **Fixed** — see below. **Identity is the certificate CN only** (bound to the subject's `transport_identity`); Go's TLS stack already requires the `clientAuth` extended key usage, but SAN and other profile fields are not checked. **Why grey:** the certificate profile is the deployer's PKI policy. **To close:** use a CA dedicated to agent client certificates (never one shared with the NAC or other services) as `TBP_BROKER_TLS_CLIENT_CA_FILE`, and issue short-lived certificates with EKU `clientAuth` only and CN = the agent's subject — see `deploy/cellule.md` step 7. |
 | **API3** | Broken Object Property Level Authorization (mass assignment) | ✅ | `dec.DisallowUnknownFields()` (`server.go:handleAction`) categorically rejects any unexpected JSON field — direct mass-assignment protection. |
 | **API4** | Unrestricted Resource Consumption | ✅ | `defaultMaxBody` (64 KiB), `maxIntentBytes`, `maxIssSubActionLen`, and the `AgentQuotaPolicy` cap (#125) resolved by the broker — solid coverage, same finding as LLM06 ([#143](143-owasp-llm-top10.md)). |
 | **API5** | Broken Function Level Authorization | ✅ | Data/admin plane separation (§95): two distinct HTTP muxes, two distinct sockets, `POST` on a supervision view → 405. A clean example of strict functional separation. |

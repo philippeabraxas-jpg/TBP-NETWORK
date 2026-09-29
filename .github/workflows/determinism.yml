@@ -16,7 +16,10 @@ jobs:
           version: 1.20.2
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
+          # Go différente à chaque exécution, y compris pour la release. La monter est
+          # une décision délibérée (govulncheck dit quand), jamais un effet de bord.
+          go-version: "1.27.1"
       - name: validate_determinism — bundle policies/rego
         run: go run policies/validate_determinism.go -rego-dir policies/rego -fixtures policies/testdata/stability
       - name: validate_determinism — selftest (fixtures invalides rejetées)

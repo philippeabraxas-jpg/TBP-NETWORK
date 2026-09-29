@@ -71,7 +71,9 @@ bash policies/gen_capabilities.sh
 
 **Observable success criterion**: `vérification négative OK` displayed;
 `capabilities.json` written; the forbidden built-ins (`http.send`,
-`net.lookup_ip_addr`, `time.now_ns`, `opa.runtime`) are absent from it.
+`net.lookup_ip_addr`, `time.now_ns`, `opa.runtime`, and the non-deterministic
+ones: `rand.intn`, `uuid.rfc4122`, `io.jwt.decode_verify`, `io.jwt.encode_sign*`,
+`crypto.x509.parse_and_verify_certificates*`) are absent from it.
 
 **On failure: STOP** — if a forbidden built-in is "absent from the
 generated list", the OPA version has changed: review FORBIDDEN before any
@@ -404,7 +406,15 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # — identity/class/quota resolved from
 #                                      # HERE, never from the agent's own
 #                                      # declaration in its issuance
-#                                      # request. Same out-of-band custody
+#                                      # request. Classes 0 (F, financial),
+#                                      # 1 (I) and 2 (W) REQUIRE a plan_binding
+#                                      # on every action (#177); class 2 also
+#                                      # a quorum proof. 3 = outside F/I/W
+#                                      # needs neither. The class is the
+#                                      # AGENT's (registry), not the action's
+#                                      # (issue #195): register every agent
+#                                      # that can do an irreversible act as 2.
+#                                      # Same out-of-band custody
 #                                      # doctrine as TBP_OPERATOR_KEYS_FILE
 #                                      # above — no dev escape hatch; a
 #                                      # subject absent from this table is
@@ -499,6 +509,20 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   #                                      # isn't registered for is refused
 #   #                                      # by the broker itself, not just by
 #   #                                      # the TLS handshake.
+#   #                                      # USE A CA DEDICATED TO AGENT CLIENT
+#   #                                      # CERTIFICATES here — never the CA
+#   #                                      # shared with other services or the
+#   #                                      # NAC (the spec allows one PKI for both): every certificate it
+#   #                                      # signs with a given CN can act as
+#   #                                      # that agent. Go's TLS stack already
+#   #                                      # requires the clientAuth extended key
+#   #                                      # usage; issue agent certificates with
+#   #                                      # that EKU only, CN = the agent's
+#   #                                      # subject, one per agent, short-lived.
+#   #                                      # Identity is the CN only: SAN and
+#   #                                      # other profile fields are not
+#   #                                      # checked (tracked in the compliance
+#   #                                      # catalogue, tbp-compliance/162).
 install -m 0644 src/broker/tbp-brokerd.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now tbp-brokerd
 curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/epoch
@@ -516,6 +540,14 @@ socket (`/run/tbp/broker.sock`) gets 404 — the two planes are on
 separate sockets (security review #95). On first startup,
 `cell_log.key` (0600) and `cell_log.vkey` are created in
 `TBP_REGISTRY_DIR` — the broker's chain is its own (§7.1).
+
+**Multi-cell epoch lease — known operational limit** (issue #197): with
+`TBP_TOPOLOGY=multi` the epoch lease must be renewed by an m-of-n signature
+BEFORE each expiry (`scripts/genesis renew`, then `POST /v1/epoch/renew` on the
+admin socket; TTL 60 s by default, 10–300 s). There is no automatic renewal by
+design — an unreachable quorum lets the lease lapse and the cell stops
+(fencing, §7). Plan for that cadence, or use `mono` for a single cell; a
+sustainable renewal scheme is the open decision in #197.
 
 **On failure: STOP** — a brokerd that starts without salt, without
 genesis, without OPA or without operator keys is fail-open: fix the
