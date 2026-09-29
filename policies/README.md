@@ -144,7 +144,13 @@ registry means no opinion (historical behaviour).
 
 **Before enabling:** the declared tier is an operator statement. The pack
 enforces its consequences but cannot judge whether a tier is too low; review the
-registry file like a policy change. The scope-size check at load time
+registry file like a policy change.
+
+**Known limit (#195):** an agent that does not go through `brokerd` has no skill
+registry, so this pack says nothing about it. `require_skill_registry` is an
+explicit per-scale setting ([deploy/scales.md](../deploy/scales.md)): turn it on
+wherever `brokerd` fronts the agents. There is no escalation beyond the
+`risk_tier` floor. The scope-size check at load time
 (low ≤ 8, medium ≤ 32, high ≤ 128, critical unbounded) only catches an obvious
 mismatch.
 

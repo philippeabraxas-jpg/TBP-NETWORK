@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -123,5 +124,68 @@ func TestBadInputsAreRefused(t *testing.T) {
 	}
 	if err := cmdAssemble([]string{"-expiry", "12", "-sig", "nokid", "-out", filepath.Join(dir, "p.json")}); err == nil {
 		t.Error("signature mal formée acceptée")
+	}
+}
+
+// keygen produit une clé et un trousseau que le VRAI vérificateur accepte (k = 1),
+// n'écrase jamais une clé existante, et complète un trousseau sans le réécrire à l'aveugle.
+func TestKeygenBuildsAKeyringTheVerifierAccepts(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, ringPath := filepath.Join(dir, "admin.key"), filepath.Join(dir, "quorum-keyring.json")
+	sink, err := os.Create(filepath.Join(dir, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close() }()
+
+	if err := cmdKeygen([]string{"-key", keyPath, "-keyring", ringPath}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(keyPath); st.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions de la clé = %v", st.Mode().Perm())
+	}
+	raw, _ := os.ReadFile(ringPath)
+	var wire map[string]string
+	if err := json.Unmarshal(raw, &wire); err != nil || len(wire) != 1 {
+		t.Fatalf("trousseau = %s (%v)", raw, err)
+	}
+	kr := map[[16]byte]ed25519.PublicKey{}
+	for kidHex, pubHex := range wire {
+		kid, _ := hex.DecodeString(kidHex)
+		pub, _ := hex.DecodeString(pubHex)
+		var k [16]byte
+		copy(k[:], kid)
+		kr[k] = ed25519.PublicKey(pub)
+	}
+	proof := filepath.Join(dir, "proof.json")
+	if err := cmdSign([]string{"-condition", "mode-closed", "-cell", "cell-a", "-key", keyPath, "-out", proof}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pep.VerifyQuorumProofFile(proof, "mode-closed", "cell-a", kr, 1); err != nil {
+		t.Fatalf("la clé générée n'ouvre pas le trousseau généré : %v", err)
+	}
+
+	// jamais d'écrasement d'une clé existante
+	if err := cmdKeygen([]string{"-key", keyPath, "-keyring", ringPath}, sink); err == nil {
+		t.Fatal("keygen a écrasé une clé existante")
+	}
+	// une seconde clé complète le trousseau (k-of-n pour les échelles supérieures)
+	if err := cmdKeygen([]string{"-key", filepath.Join(dir, "admin2.key"), "-keyring", ringPath}, sink); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(ringPath)
+	_ = json.Unmarshal(raw, &wire)
+	if len(wire) != 2 {
+		t.Fatalf("trousseau après 2 keygen = %d clé(s)", len(wire))
+	}
+	// un trousseau illisible n'est pas réécrit
+	if err := os.WriteFile(ringPath, []byte("pas du json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdKeygen([]string{"-key", filepath.Join(dir, "admin3.key"), "-keyring", ringPath}, sink); err == nil {
+		t.Fatal("trousseau corrompu réécrit à l'aveugle")
+	}
+	if got, _ := os.ReadFile(ringPath); string(got) != "pas du json" {
+		t.Fatal("trousseau corrompu modifié")
 	}
 }

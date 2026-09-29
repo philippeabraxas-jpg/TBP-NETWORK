@@ -9,7 +9,7 @@
 # tout test (fail-closed, pas de « skipped » silencieux).
 #
 # Effets :
-#   1. selftest Go (mono réel + fencing 2-cellules in-process + daemons
+#   1. selftest Go (mono réel + scale1 + fencing 2-cellules in-process + daemons
 #      brokerd/supervisord réels, T37) — rapport JSON dans
 #      deploy/selftest/out/selftest-report.json (gitignoré) ;
 #   2. vérification formelle des guides (D96/D99) par check_steps.py ;
@@ -33,6 +33,7 @@ echo "== 2/3 vérification formelle des guides (D96/D99) =="
 python3 deploy/selftest/check_steps.py \
     deploy/README.md \
     deploy/router-debian.md \
+    deploy/scale-1.md \
     deploy/cellule.md \
     deploy/serveur.md \
     deploy/superviseur.md \

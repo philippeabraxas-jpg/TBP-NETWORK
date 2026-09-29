@@ -21,6 +21,8 @@ custody and the common steps.
 | Server | application host (PostgreSQL, …) | PEP (pepd), acceptance via ITS OWN cell's broker only | [serveur.md](serveur.md) |
 | Supervisor | independent VM | master registry (master chain), independent monitor, console | [superviseur.md](superviseur.md) |
 
+Security bricks per scale: [scales.md](scales.md). One machine, the administrator alone: [scale-1.md](scale-1.md).
+
 Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md).
 Per-machine acceptance checklists: [checklists/](checklists/).
 
