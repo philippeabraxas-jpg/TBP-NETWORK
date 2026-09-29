@@ -9,6 +9,9 @@
 // dans un HSM signent le message avec leur outillage HSM (sous-commande message), puis
 // on assemble (sous-commande assemble) — la clé privée ne passe jamais ici.
 //
+//	quorumproof keygen   -key <fichier> -keyring <trousseau.json>
+//	    crée une clé LOGICIELLE d'administrateur (graine hex, 0600, jamais écrasée) et
+//	    l'ajoute au trousseau de quorum {kid: clé publique} — échelle 1 (dev/labo)
 //	quorumproof message  -condition C -cell ID [-ttl 240]
 //	    affiche l'expiration et le message à signer (hex)
 //	quorumproof sign     -condition C -cell ID [-ttl 240] -key <fichier> [-key <fichier>…] -out <preuve.json>
@@ -23,6 +26,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -59,6 +63,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "keygen":
+		err = cmdKeygen(os.Args[2:], os.Stdout)
 	case "message":
 		err = cmdMessage(os.Args[2:], os.Stdout)
 	case "sign":
@@ -76,7 +82,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: quorumproof <message|sign|assemble> [flags]
+	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble> [flags]
+  keygen   -key FILE -keyring TROUSSEAU.json
   message  -condition C -cell ID [-ttl 240]
   sign     -condition C -cell ID [-ttl 240] -key FILE [-key FILE …] -out PREUVE.json
   assemble -expiry UNIX -sig KID=SIGHEX [-sig …] -out PREUVE.json`)
@@ -212,4 +219,59 @@ func writeProof(path string, pf proofWire) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+// cmdKeygen crée une clé d'administrateur logicielle et l'inscrit au trousseau de quorum.
+// Refuse d'écraser une clé existante et d'inscrire deux fois la même clé publique :
+// une clé perdue ne se « régénère » pas sous le même nom, on en épingle une nouvelle.
+func cmdKeygen(args []string, out *os.File) error {
+	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
+	keyPath := fs.String("key", "", "fichier de la clé privée à créer (graine hex, 0600)")
+	ringPath := fs.String("keyring", "", "trousseau de quorum {kid: clé publique} à créer ou compléter")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *keyPath == "" || *ringPath == "" {
+		return errors.New("-key et -keyring requis")
+	}
+	ring := map[string]string{}
+	if data, err := os.ReadFile(*ringPath); err == nil {
+		if err := json.Unmarshal(data, &ring); err != nil {
+			return fmt.Errorf("%s : trousseau illisible (%v) — pas de réécriture à l'aveugle", *ringPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return err
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
+	kid := pep.KeyIDFromPublicKey(pub)
+	kidHex := hex.EncodeToString(kid[:])
+	if _, dup := ring[kidHex]; dup {
+		return fmt.Errorf("kid %s déjà dans le trousseau", kidHex)
+	}
+	f, err := os.OpenFile(*keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("%s : %v (une clé existante n'est jamais écrasée)", *keyPath, err)
+	}
+	if _, err := f.WriteString(hex.EncodeToString(seed) + "\n"); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	ring[kidHex] = hex.EncodeToString(pub)
+	data, err := json.MarshalIndent(ring, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*ringPath, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "kid=%s\npublic=%s\nkeyring=%s (%d clé(s))\n", kidHex, hex.EncodeToString(pub), *ringPath, len(ring))
+	return nil
 }

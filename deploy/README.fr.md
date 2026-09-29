@@ -21,6 +21,8 @@ custody des clés et les étapes communes.
 | Serveur | hôte applicatif (PostgreSQL, …) | PEP (pepd), acceptation via le broker de SA cellule uniquement | [serveur.md](serveur.fr.md) |
 | Superviseur | VM indépendante | registre maître (master chain), moniteur indépendant, console | [superviseur.md](superviseur.fr.md) |
 
+Briques de sécurité par échelle : [scales.fr.md](scales.fr.md). Une machine, l'administrateur seul : [scale-1.fr.md](scale-1.fr.md).
+
 Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.fr.md).
 Checklists de recette par machine : [checklists/](checklists/).
 

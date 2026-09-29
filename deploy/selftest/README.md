@@ -17,6 +17,12 @@ Code de sortie 1 dès qu'un contrôle échoue (fail-closed). Rapport JSON :
 
 ## Ce qui est exécuté pour de vrai
 
+**Phase `scale1`** (issue #86) : la séquence de `mono` sous le profil de
+l'échelle 1 — quorum `k = 1`, l'administrateur seul signe. Témoins en plus :
+bascule sans aucune signature → 403, bascule signée par une clé hors trousseau
+→ 403, une signature de l'administrateur → closed ; redémarrage = `refused`
+jusqu'à sa reconfirmation. Guide : [scale-1.md](../scale-1.md).
+
 **Phase `mono`** (une cellule, vrais binaires) :
 
 1. build de `pepd` depuis `src/pep/cmd/pepd` ;

@@ -7,8 +7,11 @@
 // sur registres tessera réels). Un guide qui dérive du code se voit
 // immédiatement : le selftest casse.
 //
-// Trois phases :
+// Phases :
 //
+//	scale1  — issue #86 : la même séquence que mono sous le profil de
+//	          sécurité de l'échelle 1 (quorum k=1 : l'admin seul signe ;
+//	          zéro signature et clé hors trousseau restent refusées).
 //	mono    — une cellule réelle : build pepd, capabilities OPA strippées,
 //	          pepd en monitor avec OPA, jetons valides/témoins, bascule
 //	          gouvernée monitor→closed (§5.3), scan vérifié du registre.
@@ -99,7 +102,7 @@ func main() {
 	log.SetPrefix("selftest: ")
 
 	var cfg config
-	flag.StringVar(&cfg.phase, "phase", "all", "phase à exécuter : all | mono | fencing | daemons")
+	flag.StringVar(&cfg.phase, "phase", "all", "phase à exécuter : all | mono | scale1 | fencing | daemons")
 	flag.StringVar(&cfg.out, "out", "", "répertoire de sortie (défaut : <repo>/deploy/selftest/out — gitignoré)")
 	flag.StringVar(&cfg.repo, "repo", ".", "racine du dépôt (cwd recommandé)")
 	flag.StringVar(&cfg.goBin, "go-bin", "go", "binaire go (phases mono et daemons)")
@@ -136,16 +139,19 @@ func main() {
 	switch cfg.phase {
 	case "all":
 		runMono(s, cfg)
+		runScale1(s, cfg)
 		runFencing(s, cfg)
 		runDaemons(s, cfg)
 	case "mono":
 		runMono(s, cfg)
+	case "scale1":
+		runScale1(s, cfg)
 	case "fencing":
 		runFencing(s, cfg)
 	case "daemons":
 		runDaemons(s, cfg)
 	default:
-		log.Fatalf("phase inconnue: %q (all|mono|fencing|daemons)", cfg.phase)
+		log.Fatalf("phase inconnue: %q (all|mono|scale1|fencing|daemons)", cfg.phase)
 	}
 
 	reportPath := filepath.Join(cfg.out, "selftest-report.json")
