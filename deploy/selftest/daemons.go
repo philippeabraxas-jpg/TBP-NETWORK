@@ -690,6 +690,29 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && !actV.Allow && statsV2.Requests == 2 && statsV2.Denies == 1 && statsV2.Allows == 1,
 		fmt.Sprintf("allow=%v reason=%s requests=%d denies=%d", actV.Allow, actV.Reason, statsV2.Requests, statsV2.Denies))
 
+	// --- Témoin : le paquet de durcissement refuse pour de vrai ---------------
+	// Même action « read » que l'action de bout en bout autorisée plus haut :
+	// seule la RESSOURCE change (un magasin d'identifiants). Le refus vient donc
+	// bien du paquet policies/rego/pack_agent_hardening.rego, chargé dans le
+	// bundle réel sous capacités restreintes — pas d'une règle d'action absente.
+	credIntent := `{"action":"read","resource":"workspace/.env","class":2}`
+	status, raw, err = postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{
+		"subject": "agent-1", "intent": credIntent,
+	})
+	actV = daemonActionResponse{}
+	if err == nil {
+		_ = json.Unmarshal(raw, &actV)
+	}
+	status3, raw3, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
+	statsV3 := daemonStatsView{}
+	if status3 == http.StatusOK {
+		_ = json.Unmarshal(raw3, &statsV3)
+	}
+	s.add(phaseDaemons, "témoin: read d'un magasin d'identifiants (.env) → deny OPA par le paquet de durcissement",
+		err == nil && status == http.StatusOK && !actV.Allow && actV.Reason == "opa-deny" &&
+			statsV3.Requests == 3 && statsV3.Denies == 2 && statsV3.Allows == 1,
+		fmt.Sprintf("allow=%v reason=%s requests=%d denies=%d allows=%d", actV.Allow, actV.Reason, statsV3.Requests, statsV3.Denies, statsV3.Allows))
+
 	// --- Étape : démarrage supervisord (deploy/superviseur.md étape 3) -------
 	supervisord, err := startDaemon(supervisordBin, supervisorEnv, filepath.Join(base, "supervisord.log"))
 	if err != nil {
