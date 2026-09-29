@@ -129,7 +129,7 @@ func TestAgentUnknownDeniesBeforeTranslation(t *testing.T) {
 // class=0, jamais 2.
 func TestAgentClassOverridesFavorableSelfDeclaration(t *testing.T) {
 	var lastInput map[string]any
-	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassF}}
+	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassOut}}
 	b, _ := newAgentTestBroker(t, reg, &lastInput)
 
 	intent := `{"action":"read","resource":"doc-1","class":2}` // déclaration : W, mais AUCUNE preuve de quorum
@@ -138,8 +138,8 @@ func TestAgentClassOverridesFavorableSelfDeclaration(t *testing.T) {
 		t.Fatalf("classe registre (F) ignorée au profit de la déclaration (W) : allow=%v reason=%q", res.Allow, res.Reason)
 	}
 	gotClass, _ := lastInput["class"].(float64)
-	if int(gotClass) != int(pep.ClassF) {
-		t.Fatalf("classe évaluée par OPA = %v, veut %d (registre) — la déclaration de l'agent (2) a fuité dans la décision (§125)", lastInput["class"], pep.ClassF)
+	if int(gotClass) != int(pep.ClassOut) {
+		t.Fatalf("classe évaluée par OPA = %v, veut %d (registre) — la déclaration de l'agent (2) a fuité dans la décision (§125)", lastInput["class"], pep.ClassOut)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestAgentClassOverridesUnfavorableSelfDeclaration(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAgentQuotaForbiddenWithoutPolicy(t *testing.T) {
-	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassF}} // Quota nil : aucun passeport permis
+	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassOut}} // Quota nil : aucun passeport permis
 	b, _ := newAgentTestBroker(t, reg, nil)
 
 	intent := `{"action":"http.send","resource":"https://x","quota":{"resource":"https://x","operation":"POST","volume_max":10,"window_s":60}}`
@@ -178,7 +178,7 @@ func TestAgentQuotaForbiddenWithoutPolicy(t *testing.T) {
 }
 
 func TestAgentQuotaExceedsCeiling(t *testing.T) {
-	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassF, Quota: &AgentQuotaPolicy{MaxVolume: 100, MaxWindowS: 3600}}}
+	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassOut, Quota: &AgentQuotaPolicy{MaxVolume: 100, MaxWindowS: 3600}}}
 	b, _ := newAgentTestBroker(t, reg, nil)
 
 	// Volume demandé (1000) très au-delà du plafond résolu (100).
@@ -193,7 +193,7 @@ func TestAgentQuotaExceedsCeiling(t *testing.T) {
 }
 
 func TestAgentQuotaWithinCeilingAllowed(t *testing.T) {
-	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassF, Quota: &AgentQuotaPolicy{MaxVolume: 1000, MaxWindowS: 120}}}
+	reg := StaticAgentRegistry{"agent-f": {Class: pep.ClassOut, Quota: &AgentQuotaPolicy{MaxVolume: 1000, MaxWindowS: 120}}}
 	b, _ := newAgentTestBroker(t, reg, nil)
 
 	intent := `{"action":"http.send","resource":"https://x","quota":{"resource":"https://x","operation":"POST","volume_max":500,"window_s":60}}`

@@ -43,12 +43,12 @@ There is no "partial" status: a partial control is split into its ✅ part and i
 
 | Standard | Status | File |
 |---|---|---|
-| EU AI Act | Full | [146-eu-ai-act.md](146-eu-ai-act.md) |
+| EU AI Act | Partial | [146-eu-ai-act.md](146-eu-ai-act.md) |
 | NIST AI RMF 1.0 (Govern/Map/Measure/Manage) | Full | [147-nist-ai-rmf.md](147-nist-ai-rmf.md) |
 | ISO/IEC 42001:2023 (AIMS) | Full | [148-iso-iec-42001.md](148-iso-iec-42001.md) |
 | ISO/IEC 22989:2022 (AI terminology) | Not applicable | [149-iso-iec-22989.md](149-iso-iec-22989.md) |
 | ISO/IEC 23894:2023 (AI risk management) | Full | [150-iso-iec-23894.md](150-iso-iec-23894.md) |
-| US federal AI directives (M-25-21 / M-25-22) | Full | [151-us-federal-ai-directives.md](151-us-federal-ai-directives.md) |
+| US federal AI directives (M-25-21 / M-25-22) | Partial | [151-us-federal-ai-directives.md](151-us-federal-ai-directives.md) |
 
 ## General cybersecurity & privacy frameworks
 
@@ -74,7 +74,7 @@ There is no "partial" status: a partial control is split into its ✅ part and i
 | NIST SP 800-207 (Zero Trust Architecture) | Partial (strongest match in the series) | [159-nist-800-207-zero-trust.md](159-nist-800-207-zero-trust.md) |
 | IEC 62443 (OT/industrial) | Full | [160-iec-62443.md](160-iec-62443.md) |
 | FIPS 140-3 (cryptographic module validation) | Full (documentary scoping only) | [161-fips-140-3.md](161-fips-140-3.md) |
-| OWASP API Security Top 10 (2023) | Full | [162-owasp-api-security-top10.md](162-owasp-api-security-top10.md) |
+| OWASP API Security Top 10 (2023) | Partial | [162-owasp-api-security-top10.md](162-owasp-api-security-top10.md) |
 
 ## Recurring threads across the whole series
 
@@ -114,7 +114,7 @@ There is no "partial" status: a partial control is split into its ✅ part and i
    the class-W quorum (§7.5) for human-oversight requirements (EU AI Act Art.
    14, M-25-21, NIST CSF PROTECT).
 7. **The single best framework match**: [NIST SP 800-207 Zero
-   Trust](159-nist-800-207-zero-trust.md) — 5 of 7 tenets direct ✅, designed
+   Trust](159-nist-800-207-zero-trust.md) — 6 of 7 tenets direct ✅, designed
    independently of any Zero Trust compliance goal.
 
 ## Open gaps that need code
@@ -128,6 +128,8 @@ move to ✅ in the same pull request.
 | [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181) | Behavioural profile by sequence (salami / decomposition, cost anomalies, per-run cost cap, downstream monitoring) | [143](143-owasp-llm-top10.md), [145](145-mitre-atlas.md) Impact, [153](153-nist-csf-800-53.md) DETECT |
 | [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | [143](143-owasp-llm-top10.md) LLM06 human confirmation |
 | [#192](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/192) | Measured boot does not cover the provisioning files (agents, operators, skills, keyrings, ano rules) | [152](152-iso-iec-27001-27002.md) configuration management, [159](159-nist-800-207-zero-trust.md) tenet 5 |
+| [#195](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/195) | The class that triggers quorum and plan is the agent's (registry), not the action's | [143](143-owasp-llm-top10.md) and [146](146-eu-ai-act.md) art. 14, [151](151-us-federal-ai-directives.md), [162](162-owasp-api-security-top10.md) API6 |
+| [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) | Quorum for plan approval at larger scales (scale 1: the admin alone signs, by design) — a security-profile brick, defined with the full-scale handshake | same rows as #195 |
 | [#193](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/193) | GitHub Actions referenced by tag, not by commit SHA | [157](157-owasp-scvs.md) build environment |
 
 ## Rule packs that close catalogue rows

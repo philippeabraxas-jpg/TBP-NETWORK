@@ -22,7 +22,7 @@ import (
 )
 
 // newSkillTestBroker assemble un broker de test minimal (OPA toujours allow,
-// agent de classe F — hors quorum, pour isoler le comportement du registre
+// agent hors F/I/W — ni quorum ni plan, pour isoler le comportement du registre
 // de skills lui-même) avec un SkillRegistry EXPLICITE (nil accepté : « pas
 // configuré », le cas historique). opaCalls, si non nil, compte les
 // évaluations OPA RÉELLEMENT atteintes — le témoin direct qu'un refus de
@@ -45,7 +45,7 @@ func newSkillTestBroker(t *testing.T, skills SkillRegistry, opaCalls *atomic.Int
 		CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 		Translator: StructuredTranslator{}, Issuer: mustTestIssuer(t),
 		Epochs:   StaticEpoch(7),
-		Registry: StaticAgentRegistry{"agent-1": {Class: pep.ClassF}}, // ClassF : hors quorum, isole le test
+		Registry: StaticAgentRegistry{"agent-1": {Class: pep.ClassOut}}, // hors F/I/W : ni quorum ni plan, isole le test
 		Skills:   skills,
 	})
 	if err != nil {
@@ -218,7 +218,7 @@ func TestBrokerPassesSkillFactsToOPA(t *testing.T) {
 			CellID: "c", Salt: testSalt, Leaves: leaves, OPA: opa,
 			Translator: StructuredTranslator{}, Issuer: mustTestIssuer(t),
 			Epochs:   StaticEpoch(7),
-			Registry: StaticAgentRegistry{"agent-1": {Class: pep.ClassF}},
+			Registry: StaticAgentRegistry{"agent-1": {Class: pep.ClassOut}},
 			Skills:   skills,
 		})
 		if err != nil {

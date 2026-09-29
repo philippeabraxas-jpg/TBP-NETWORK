@@ -79,7 +79,8 @@ const (
 	DefaultMaxTombstones = 128
 )
 
-// Événements de feuille KindContract (D64 — record « TBPL1 »).
+// Événements de feuille KindContract (D64 — record « TBPL1 » ; l'approbation
+// réussie porte « TBPL2 », avec l'attribution de l'opérateur).
 const (
 	planEventSubmit  byte = 1 // plan soumis, hash scellé, en attente
 	planEventApprove byte = 2 // approbation opérateur (signature vérifiée)
@@ -425,9 +426,11 @@ func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry t
 	}
 	msg := ApprovalMessage(planHash, expiry)
 	signed := false
+	var approver [16]byte // kid de l'opérateur dont la signature a vérifié
 	for _, pub := range s.operatorKeys {
 		if ed25519.Verify(pub, msg, sig) {
 			signed = true
+			approver = KeyIDFromPublicKey(pub)
 			break
 		}
 	}
@@ -440,7 +443,7 @@ func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry t
 		}
 		return s.refuseApprovalLocked(ctx, planHash, "plan-store-saturated", ErrPlanStoreSaturated, now)
 	}
-	if err := s.writeLeafLocked(ctx, planEventApprove, planHash, planStepNA, 1, "ok", now); err != nil {
+	if err := s.writeApprovalLeafLocked(ctx, planHash, approver, expiry, sig, now); err != nil {
 		s.tripStoreFault()
 		return ErrPlanStoreFault
 	}
@@ -734,6 +737,41 @@ func (s *ContractStore) writeLeafLocked(ctx context.Context, event byte, planHas
 	record = binary.BigEndian.AppendUint16(record, step)
 	record = append(record, verdict, byte(len(reason)))
 	record = append(record, reason...)
+	_, err := s.leaves.Append(ctx, registry.Leaf{
+		Kind:        registry.KindContract,
+		CellID:      s.cellID,
+		PayloadHash: registry.HashPayload(s.salt, record),
+		Timestamp:   now.UnixNano(),
+	})
+	return err
+}
+
+// writeApprovalLeafLocked inscrit la feuille d'une approbation RÉUSSIE avec son
+// attribution (§1 : « une décision reste attribuable ») — record « TBPL2 » :
+//
+//	record = "TBPL2" ‖ event(u8) ‖ planHash(32) ‖ step(u16 BE, 0xFFFF)
+//	         ‖ verdict(u8=1) ‖ u8 len(reason) ‖ reason
+//	         ‖ kid(16) ‖ expiry(u64 BE, unix s) ‖ signature(64)
+//
+// Le hash de feuille reste SALÉ (hash-only, §6.2) : ni l'identité ni la
+// signature n'apparaissent en clair dans le registre. Mais qui détient le sel
+// (l'auditeur habilité de la cellule) peut, après coup, reconstituer le record
+// et prouver QUEL opérateur a approuvé QUEL plan jusqu'à QUAND — la signature
+// Ed25519 vérifie contre la clé de cet opérateur et le message
+// ApprovalMessage(planHash, expiry). Un refus d'approbation (signature
+// invalide) reste en « TBPL1 » : il n'y a pas d'approbateur à attribuer.
+func (s *ContractStore) writeApprovalLeafLocked(ctx context.Context, planHash [32]byte, kid [16]byte, expiry time.Time, sig []byte, now time.Time) error {
+	const reason = "ok"
+	record := make([]byte, 0, 5+1+32+2+1+1+len(reason)+16+8+len(sig))
+	record = append(record, "TBPL2"...)
+	record = append(record, planEventApprove)
+	record = append(record, planHash[:]...)
+	record = binary.BigEndian.AppendUint16(record, planStepNA)
+	record = append(record, 1, byte(len(reason)))
+	record = append(record, reason...)
+	record = append(record, kid[:]...)
+	record = binary.BigEndian.AppendUint64(record, uint64(expiry.Unix()))
+	record = append(record, sig...)
 	_, err := s.leaves.Append(ctx, registry.Leaf{
 		Kind:        registry.KindContract,
 		CellID:      s.cellID,

@@ -63,7 +63,7 @@ const (
 	ReasonTranslationFailed     = "translation-failed"
 	ReasonQuorumRequired        = "quorum-required"
 	ReasonQuorumInsufficient    = "quorum-insufficient"
-	ReasonPlanBindingRequired   = "plan-binding-required" // classe I/W sans binding de plan (#177) — la composition non bornée par un plan échappait à ContractStore
+	ReasonPlanBindingRequired   = "plan-binding-required" // classe F/I/W sans binding de plan (#177) — la composition non bornée par un plan échappait à ContractStore
 	ReasonPlanUnverified        = "plan-unverified"       // binding présent, gate non câblé (même doctrine qu'envelope-unverified)
 	ReasonPlanBindingInvalid    = "plan-binding-invalid"
 	ReasonPlanUnknown           = "plan-unknown"
@@ -642,22 +642,23 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 		}
 	}
 
-	// Étape 6bis — binding de plan obligatoire au-delà de la classe F
-	// (#177) : ContractStore (§4.2, T30) ferme la composition d'actions
-	// QUAND un plan est soumis — séquence stricte, signature humaine sur
-	// le plan scellé. Mais tant que le rattachement restait optionnel PAR
-	// REQUÊTE, un agent (ou plus précisément le traducteur qui produit
-	// l'intention) n'avait qu'à omettre plan_binding pour qu'une chaîne
-	// d'actions classées I/W échappe entièrement à ce contrôle — chaque
-	// étape jugée seule par OPA, comme si elle n'appartenait à aucune
-	// séquence. §5.3 borne déjà les mitigations « by action »/« by
-	// sequence » de §4.4 aux classes F/I/W ; ici on ferme spécifiquement
-	// le trou d'opt-out PAR REQUÊTE pour I et W — la classe F (read-only/
-	// faible enjeu) reste inchangée, aucune régression pour les
-	// déploiements existants qui n'utilisent pas encore de plan.
+	// Étape 6bis — binding de plan obligatoire pour F, I et W (#177) :
+	// ContractStore (§4.2, T30) ferme la composition d'actions QUAND un plan
+	// est soumis — séquence stricte, signature humaine sur le plan scellé.
+	// Mais tant que le rattachement restait optionnel PAR REQUÊTE, un agent
+	// (ou plus précisément le traducteur qui produit l'intention) n'avait
+	// qu'à omettre plan_binding pour qu'une chaîne d'actions classées F/I/W
+	// échappe entièrement à ce contrôle — chaque étape jugée seule par OPA,
+	// comme si elle n'appartenait à aucune séquence. §5.3 borne les
+	// mitigations « by action »/« by sequence » de §4.4 aux classes F/I/W ;
+	// ici on ferme le trou d'opt-out PAR REQUÊTE pour les trois.
+	// La classe F est FINANCIÈRE (§4.1, pep.ClassF) : ce sont précisément les
+	// actions dont la composition (fractionnement, « salami ») est la plus
+	// dangereuse — elle n'est PAS exemptée. La lecture, elle, relève de
+	// « hors F/I/W ».
 	// ClassOut est délibérément exclue : « hors F/I/W » (§5.3) n'escalade
 	// jamais vers un plan, quel que soit son enjeu apparent.
-	if (class == pep.ClassI || class == pep.ClassW) && len(tr.PlanBinding) == 0 {
+	if (class == pep.ClassF || class == pep.ClassI || class == pep.ClassW) && len(tr.PlanBinding) == 0 {
 		b.mu.Lock()
 		b.stats.PlanDenies++
 		b.mu.Unlock()

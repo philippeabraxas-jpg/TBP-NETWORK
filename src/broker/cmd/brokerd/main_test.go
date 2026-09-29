@@ -364,17 +364,18 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		t.Fatalf("operateurs: %v", err)
 	}
 
-	// Registre d'agents (revue #125) : "agent-1" résolu classe F — les
-	// requêtes de ce fichier déclaraient déjà "class":0 avant #125 ; le
-	// registre porte désormais la même classe, mais de façon AUTORITAIRE.
+	// Registre d'agents (revue #125) : "agent-1" résolu classe hors F/I/W (3) :
+	// ni quorum ni plan (F, I et W en exigent un, #177), ce qui isole ces tests du
+	// reste. Le registre porte la classe de façon AUTORITAIRE ; le "class":0
+	// que les requêtes déclarent encore est ignoré (#125).
 	// "agent-1" porte aussi transport_identity="agent-test" (revue #163) :
 	// le CN du certificat client de test (brokerTLSFixture.clientCert,
 	// net_tls_test.go) — TestBrokerdNetworkMTLSEndToEnd déclare "agent-1"
 	// sur le plan de données RÉSEAU avec ce certificat précis.
 	agentsFile := filepath.Join(dir, "agents.json")
 	agents, err := json.Marshal(map[string]agentRegistryEntry{
-		"agent-1": {Class: 0, TransportIdentity: "agent-test"},
-		"agent-2": {Class: 0},
+		"agent-1": {Class: 3, TransportIdentity: "agent-test"},
+		"agent-2": {Class: 3},
 	})
 	if err != nil {
 		t.Fatalf("registre d'agents: %v", err)
@@ -836,7 +837,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		t.Fatalf("operateurs: %v", err)
 	}
 	agentsFile := filepath.Join(dir, "agents.json")
-	agents, _ := json.Marshal(map[string]agentRegistryEntry{"agent-1": {Class: 0}})
+	agents, _ := json.Marshal(map[string]agentRegistryEntry{"agent-1": {Class: 3}})
 	if err := os.WriteFile(agentsFile, agents, 0o600); err != nil {
 		t.Fatalf("registre d'agents: %v", err)
 	}

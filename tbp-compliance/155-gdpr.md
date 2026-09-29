@@ -5,7 +5,7 @@
 **Reference**: EU Regulation 2016/679. Full treatment of the privacy strand left open by [SOC 2 (#154)](154-soc2.md).
 **Last verified**: 2026-09-29
 
-Legend: ✅ Covered/strong technical evidence · 🟡 Partial · 🔴 Real gap · ⚪ Out of TBP's scope
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 ## Principles and rights vs. TBP
 

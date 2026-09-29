@@ -6,8 +6,9 @@ fermer (avec l'issue qui le suit), ou ⚪ hors périmètre (avec son motif et, p
 un déploiement, ce que l'utilisateur fait pour le fermer). Ce script échoue si
 le catalogue dérive :
 
-  1. plus aucune ligne 🟡 (partiel) ni 🟢 (à faire en Rego) : un partiel doit
-     être tranché en couvert, rouge ou gris ;
+  1. plus aucun 🟡 (partiel) ni 🟢 (à faire en Rego) NULLE PART dans une fiche —
+     ni dans une ligne, ni dans la légende, ni dans la prose d'un résumé : un
+     partiel est tranché en couvert, rouge ou gris (le README les définit) ;
   2. toute ligne 🔴 renvoie à une issue (#NNN) ;
   3. toute ligne ⚪ a un motif non vide (« Why grey » ou une raison d'une ligne) ;
   4. l'état de chaque fiche (Full / Partial) découle de ses lignes : Partial si et
@@ -64,6 +65,8 @@ for path in fiches:
 
     red_rows = 0
     for n, line in enumerate(lines, 1):
+        if "🟡" in line or "🟢" in line:
+            err(fname, f"ligne {n} : statut retiré (🟡/🟢) — trancher en ✅, 🔴 ou ⚪, y compris dans la légende et les résumés")
         if not line.startswith("|") or line.startswith("|---"):
             continue
         cells = split_row(line)

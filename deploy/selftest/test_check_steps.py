@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 
-from check_steps import check_file
+from check_steps import check_file, check_parity
 
 VALID_GUIDE = """# Test guide
 
@@ -93,6 +93,34 @@ class CheckStepsTest(unittest.TestCase):
             1,
         )
         self.assertEqual(self._run(guide), [])
+
+    def _parity(self, en: str, fr: str) -> list[str]:
+        paths = []
+        try:
+            for text in (en, fr):
+                with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as fh:
+                    fh.write(text)
+                    paths.append(fh.name)
+            return check_parity(*paths)
+        finally:
+            for p in paths:
+                os.unlink(p)
+
+    def test_parite_fr_conforme_passe(self):
+        fr = VALID_GUIDE.replace("#### Step", "#### Étape")
+        self.assertEqual(self._parity(VALID_GUIDE, fr), [])
+
+    def test_parite_variable_absente_du_fr(self):
+        en = VALID_GUIDE + "\n```bash\n# TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json\n```\n"
+        fr = VALID_GUIDE.replace("#### Step", "#### Étape") + "\n```bash\n# rien\n```\n"
+        errors = self._parity(en, fr)
+        self.assertTrue(any("TBP_AGENT_REGISTRY_FILE" in e for e in errors), errors)
+
+    def test_parite_etape_manquante_en_fr(self):
+        fr = VALID_GUIDE.replace("#### Step", "#### Étape")
+        fr = fr[: fr.index("#### Étape 2")]
+        errors = self._parity(VALID_GUIDE, fr)
+        self.assertTrue(any("étape" in e for e in errors), errors)
 
 
 if __name__ == "__main__":

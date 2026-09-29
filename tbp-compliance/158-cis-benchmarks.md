@@ -9,7 +9,7 @@
 
 Unlike every other framework in this series, this one has **no control that belongs in the broker's code**: CIS Benchmarks configure the OPERATING SYSTEM, the DOCKER DAEMON, or the KUBERNETES CLUSTER that HOSTS a service — never the application logic running inside it. TBP is neither a container runtime nor an orchestrator; there is literally nothing to implement in `src/broker`, `src/pep`, or Rego rules to "satisfy" a CIS benchmark.
 
-Legend: ⚪ Out of TBP's scope · ✅ Prerequisite documented
+Legend: ✅ Covered · 🔴 Real gap (needs code; the row links the issue that tracks it) · ⚪ Not TBP's concern (the row says why and, for a deployment, how to close it). A combined status splits one control between what TBP covers and what stays with the deployer. See the [catalogue README](README.md).
 
 | CIS domain | Status | Detail |
 |---|---|---|

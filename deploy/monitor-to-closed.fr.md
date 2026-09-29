@@ -5,9 +5,11 @@ _English version: [monitor-to-closed.md](monitor-to-closed.md)._
 Le mode **closed** ne s'installe pas : il se **mérite**. La posture de
 démarrage est monitor partout (§5.3) ; la bascule exige les points de
 mesure §9.1 installés et alimentés (D100), une fenêtre d'observation, et
-un **quorum** — un opérateur seul ne peut pas fermer le réseau
-(démontré par la phase mono du selftest : 1 signataire → 403, quorum →
-200).
+un **quorum** — k signatures Ed25519 de contrôleurs DISTINCTS épinglés dans
+`TBP_QUORUM_KEYRING_FILE`, jamais une liste de noms auto-déclarée (revue de
+sécurité #89) — un opérateur seul ne peut pas fermer le réseau
+(démontré par la phase mono du selftest : 1 signature valide → 403, k
+signatures valides → 200).
 
 > MAB : voir [checklists/routeur.md](checklists/routeur.fr.md) — le MAB est
 > une affaire NAC/switch (machine routeur), pas de posture PEP. La
@@ -61,31 +63,44 @@ fermer sans l'expliquer, c'est aveugler le réseau.
 
 #### Étape 3 — Demander la bascule au quorum (par PEP)
 
-**Prérequis vérifiable** : étapes 1-2 vertes ; les signataires sont
-prévenus et joignables ; la fenêtre de rollback (étape 4) est décidée.
+**Prérequis vérifiable** : étapes 1-2 vertes ; les contrôleurs sont
+prévenus et joignables ; `TBP_QUORUM_KEYRING_FILE` sur le PEP épingle leurs
+clés publiques ; la fenêtre de rollback (étape 4) est décidée.
 
 **Commande** :
 
 ```bash
-# Le vérificateur de quorum actuel compte les signataires (TBP_QUORUM_MIN,
-# défaut 2) — la crypto de quorum est une phase ultérieure, la couture est
-# en place. 1 signataire DOIT échouer :
+# Le vérificateur de quorum est CRYPTOGRAPHIQUE (revue de sécurité #89) :
+# k signatures Ed25519 (TBP_QUORUM_MIN, défaut 2) de contrôleurs DISTINCTS
+# épinglés dans TBP_QUORUM_KEYRING_FILE, chacune sur
+# QuorumMessage("mode-closed", expiry) = "TBPQ1" ‖ len(condition) u16 BE
+# ‖ condition ‖ expiry u64 BE (pep.QuorumMessage). Un corps qui ne fait que
+# DÉCLARER des noms ("signers": [...], l'ancien format d'avant #89) n'est
+# plus même un champ valide — il est ignoré en silence et la demande est
+# refusée faute de toute signature :
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1"]}'
-# attendu : 403. Puis, quorum réuni :
-curl -s -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"closed","signers":["op-1","op-2"]}'
+  -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
+# attendu : 403 (aucune signature). Une seule signature valide (k=2) DOIT
+# aussi échouer — voir la phase mono de deploy/selftest/mono.go pour
+# l'exemple complet (helper signCtrl) qui produit de vraies signatures par
+# contrôleur et exerce 1 signature-403 → 2 signatures-200 :
+go run ./deploy/selftest -phase mono
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Critère de succès observable** : 403 sans quorum, 200 avec ;
-`GET /v1/mode` rend `{"mode":"closed"}` ; la bascule laisse une feuille
-`KindTelemetry` dans le registre de la cellule (comptée par le selftest).
+**Critère de succès observable** : 403 sans preuve k-of-n valide, 200
+avec une (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
+"signature":"…"}, …]}`, en hexadécimal, chaque signature par un contrôleur
+DISTINCT épinglé dans `TBP_QUORUM_KEYRING_FILE`) ; `GET /v1/mode` rend
+`{"mode":"closed"}` ; la bascule laisse une feuille `KindTelemetry` dans le
+registre de la cellule (comptée par le selftest).
 
-**En cas d'échec : STOP** — un 200 sans quorum = vérificateur cassé :
-rester en monitor et corriger ; un 403 avec quorum = signataires
-insuffisants, refaire la demande proprement.
+**En cas d'échec : STOP** — un 200 sans preuve de quorum valide =
+vérificateur cassé : rester en monitor et corriger ; un 403 avec ce qui
+devrait être un quorum valide = signatures insuffisantes ou invalides
+(mauvaise clé, expiration périmée ou différente, condition différente, ou
+un signataire répété compté une seule fois), refaire la demande
+proprement.
 
 #### Étape 4 — Observer en closed, rollback prêt
 
@@ -96,10 +111,9 @@ insuffisants, refaire la demande proprement.
 ```bash
 # En closed, un veto OPA bloque : forwarded=false (démontré par la phase
 # mono du selftest). Surveiller denied et les alarmes fail-closed (T14).
-# Rollback = bascule gouvernée inverse :
-curl -s -X POST http://127.0.0.1:8443/v1/mode \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"monitor","signers":["op-1","op-2"]}'
+# Rollback = la bascule gouvernée inverse — même exigence de preuve signée
+# k-of-n qu'à l'étape 3, cette fois sur QuorumMessage("mode-monitor", …) :
+# voir deploy/selftest/mono.go pour l'exemple complet.
 ```
 
 **Critère de succès observable** : les denies en closed correspondent aux
