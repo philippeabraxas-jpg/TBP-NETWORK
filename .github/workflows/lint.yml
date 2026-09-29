@@ -26,6 +26,11 @@ jobs:
         run: opa fmt --list --diff policies/rego/
       - name: opa check
         run: opa check policies/rego/
+      # Tests des paquets de règles (policies/tests/, volontairement hors du
+      # bundle et du validateur de déterminisme). Un paquet qui refuse tout
+      # passerait sans eux : chaque refus y a son cas voisin autorisé.
+      - name: opa test (paquets de règles)
+        run: opa test policies/rego/ policies/tests/
       - name: gen_capabilities.sh (fails if a forbidden built-in vanishes from a newer OPA release)
         run: policies/gen_capabilities.sh
 

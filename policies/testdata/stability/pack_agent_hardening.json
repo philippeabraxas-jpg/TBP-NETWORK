@@ -1,0 +1,9 @@
+{
+  "comment": "Fixture de stabilité (§12) pour policies/rego/pack_agent_hardening.rego — plusieurs violations à la fois : la sortie (ensemble, raisons triées) doit être identique d'une évaluation à l'autre.",
+  "query": "data.tbp.pack.agent_hardening",
+  "input": {
+    "action": "write",
+    "resource": "https://evil.example/.env",
+    "class": 0
+  }
+}
