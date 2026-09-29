@@ -298,6 +298,20 @@ service.
 #                                  # TBP_QUORUM_KEYRING_FILE que
 #                                  # POST /v1/mode, §89/§105), jamais un
 #                                  # simple drapeau d'environnement
+#   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/pepd-provisioning-witness.json
+#                                  # issue #192 : pepd mesure à chaque démarrage
+#                                  # les deux trousseaux épinglés auxquels il
+#                                  # fait confiance (TBP_KEYRING_FILE,
+#                                  # TBP_QUORUM_KEYRING_FILE — dérivés, pas
+#                                  # listés ici) ; un fichier modifié refuse le
+#                                  # démarrage. REQUIS, hors de
+#                                  # TBP_REGISTRY_DIR (même raison que le
+#                                  # manifeste du démarrage mesuré, #111).
+#                                  # Seul TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1
+#                                  # (dev/labo, exige la sentinelle
+#                                  # DEV_ENVIRONMENT, jamais en production) peut
+#                                  # le remplacer. Voir « Fichiers de
+#                                  # provisionnement » après l'étape 7.
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
 curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
@@ -496,6 +510,23 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # élargir ni retirer une entrée ; seul
 #                                      # un opérateur qui édite ce fichier et
 #                                      # redémarre brokerd le peut.
+#   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/broker-provisioning-witness.json
+#                                      # issue #192 : brokerd mesure, à chaque
+#                                      # démarrage, les fichiers qui portent la
+#                                      # confiance de la cellule — clés
+#                                      # d'opérateurs, registre d'agents,
+#                                      # manifeste de genèse (contrôleurs),
+#                                      # registre de skills et CA cliente mTLS si
+#                                      # configurée. La liste est DÉRIVÉE de
+#                                      # cette configuration ;
+#                                      # TBP_PROVISIONING_EXTRA_FILES="nom=chemin,…"
+#                                      # s'y ajoute. Un fichier modifié refuse le
+#                                      # démarrage et le nomme. REQUIS, hors de
+#                                      # TBP_REGISTRY_DIR, différent de celui de
+#                                      # pepd. Échappatoire (dev/labo seulement,
+#                                      # exige la sentinelle) :
+#                                      # TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1.
+#                                      # Voir « Fichiers de provisionnement ».
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # plan de DONNÉES : POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # plan
 #                                      # d'ADMINISTRATION (revue de sécurité
@@ -585,6 +616,47 @@ genèse, sans OPA ou sans clés d'opérateurs est fail-open : corriger la
 cause, ne jamais contourner. Un `epoch0` refusé signifie une genèse qui
 ne correspond pas au manifest : refaire la distribution (étape 1),
 jamais bricoler le jeton à la main.
+
+## Fichiers de provisionnement — mesurés à chaque démarrage (issue #192)
+
+Le démarrage mesuré de `pepd` atteste quatre artefacts (bundle, config OPA, binaire
+`brokerd`, conteneur IA). Les fichiers qui portent la CONFIANCE de la cellule sont mesurés
+par le démon qui les charge : éditer `agents.json` (classe W → F, ce qui supprime plan et
+quorum), ajouter une clé à un trousseau d'opérateurs ou de contrôleurs, ou élargir le
+périmètre d'un skill passait jusqu'ici sans aucune alarme.
+
+- **Ce qui est mesuré.** `brokerd` : clés d'opérateurs, registre d'agents, manifeste de
+  genèse, registre de skills, CA cliente mTLS. `pepd` : trousseau des émetteurs, trousseau
+  du quorum. Les deux acceptent `TBP_PROVISIONING_EXTRA_FILES` (par exemple le fichier de
+  règles d'`anod`).
+- **Comment.** Un condensé sur la liste triée (nom, SHA-256) est engagé au premier démarrage
+  dans un témoin signé par la clé de cellule, hors de `TBP_REGISTRY_DIR`. À chaque démarrage
+  suivant le condensé doit correspondre ; sinon le démon refuse de démarrer, écrit une
+  feuille de refus, lève l'alarme et nomme le fichier modifié (jamais son contenu).
+- **Changement légitime** (nouvel agent, clé remplacée). Éditer le fichier, puis faire signer
+  une preuve par les contrôleurs — le même k que la classe W (`TBP_QUORUM_MIN`) : à
+  l'échelle 1 l'administrateur seul signe, k = 1 ; au-dessus, un quorum k-of-n :
+
+  ```bash
+  go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
+  quorumproof sign -condition provisioning-transition-brokerd -cell cell-a \
+    -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
+  # puis dans brokerd.env : TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
+  # redémarrer, vérifier le démarrage, puis RETIRER la ligne (la preuve vit 4 minutes par défaut)
+  ```
+
+  Conditions : `provisioning-transition-brokerd` et `provisioning-transition-pepd` (la preuve
+  de l'un ne vaut jamais pour l'autre, ni pour une bascule de posture). Les contrôleurs dont
+  la clé est dans un HSM utilisent `quorumproof message` (ce qu'il faut signer) puis
+  `quorumproof assemble`.
+- **Adopter cette brique sur une cellule qui a déjà tourné.** Sans témoin et avec un registre
+  qui a déjà vécu, le démon refuse de démarrer (un fichier édité serait sinon adopté comme un
+  « premier démarrage », §111) : fournir une fois une preuve de transition comme ci-dessus.
+- **Limites.** Les fichiers sont chargés une fois au démarrage (aucun rechargement à chaud) :
+  un changement est attrapé au démarrage suivant, pas pendant l'exécution. Un attaquant qui
+  détient la clé de cellule ET peut écrire le témoin peut le forger (même confiance que le
+  manifeste du démarrage mesuré). L'échelle est un réglage de la preuve, pas du mécanisme : la
+  même brique tourne à toutes les échelles.
 
 #### Étape 8 — Points de mesure §9.1 AVANT toute bascule (D100)
 
