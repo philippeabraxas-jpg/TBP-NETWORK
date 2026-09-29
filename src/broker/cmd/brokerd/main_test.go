@@ -72,6 +72,8 @@ func validConfigEnv() map[string]string {
 		"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
 		"TBP_OPERATOR_KEYS_FILE":   "/etc/tbp/operators.json",
 		"TBP_AGENT_REGISTRY_FILE":  "/etc/tbp/agents.json",
+		// #192 : le témoin de provisionnement est requis (hors du registre)
+		"TBP_PROVISIONING_WITNESS_FILE": "/var/lib/tbp/provisioning-witness.json",
 	}
 }
 
@@ -401,21 +403,22 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		adminSock:       adminSock,
 		controllerPrivs: controllerPrivs,
 		env: map[string]string{
-			"TBP_CELL_ID":              "cell-a",
-			"TBP_SALT":                 hex.EncodeToString(salt),
-			"TBP_POLICY_ID":            hex.EncodeToString(policy),
-			"TBP_REGISTRY_DIR":         filepath.Join(dir, "registry"),
-			"TBP_OPA_ENDPOINT":         "http://127.0.0.1:1/opa", // pas de connexion à la construction
-			"TBP_OPA_INSECURE_TCP_DEV": "1",                      // §92.A3 : dev/lab
-			"TBP_TRANSLATOR":           "structured",
-			"TBP_ISSUER_SEED_FILE":     seedFile,
-			"TBP_GENESIS_DIR":          genDir,
-			"TBP_TOPOLOGY":             "multi",
-			"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
-			"TBP_OPERATOR_KEYS_FILE":   opsFile,
-			"TBP_AGENT_REGISTRY_FILE":  agentsFile,
-			"TBP_BROKER_SOCKET":        sock,
-			"TBP_BROKER_ADMIN_SOCKET":  adminSock,
+			"TBP_CELL_ID":                   "cell-a",
+			"TBP_SALT":                      hex.EncodeToString(salt),
+			"TBP_POLICY_ID":                 hex.EncodeToString(policy),
+			"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
+			"TBP_OPA_ENDPOINT":              "http://127.0.0.1:1/opa", // pas de connexion à la construction
+			"TBP_OPA_INSECURE_TCP_DEV":      "1",                      // §92.A3 : dev/lab
+			"TBP_TRANSLATOR":                "structured",
+			"TBP_ISSUER_SEED_FILE":          seedFile,
+			"TBP_GENESIS_DIR":               genDir,
+			"TBP_TOPOLOGY":                  "multi",
+			"TBP_CLUSTER_MEMBERS":           "cell-a,cell-b",
+			"TBP_OPERATOR_KEYS_FILE":        opsFile,
+			"TBP_AGENT_REGISTRY_FILE":       agentsFile,
+			"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "provisioning-witness.json"),
+			"TBP_BROKER_SOCKET":             sock,
+			"TBP_BROKER_ADMIN_SOCKET":       adminSock,
 		},
 	}
 }
@@ -863,22 +866,23 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	defer opa.Close()
 
 	env := map[string]string{
-		"TBP_CELL_ID":              "cell-a",
-		"TBP_SALT":                 hex.EncodeToString(salt),
-		"TBP_POLICY_ID":            policyHex,
-		"TBP_REGISTRY_DIR":         filepath.Join(dir, "registry"),
-		"TBP_OPA_ENDPOINT":         opa.URL,
-		"TBP_OPA_INSECURE_TCP_DEV": "1",
-		"TBP_TRANSLATOR":           "structured",
-		"TBP_ISSUER_SEED_FILE":     seedFile,
-		"TBP_GENESIS_DIR":          genDir,
-		"TBP_QUORUM_MIN":           "1",
-		"TBP_TOPOLOGY":             "mono",
-		"TBP_CLUSTER_MEMBERS":      "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
-		"TBP_OPERATOR_KEYS_FILE":   opsFile,
-		"TBP_AGENT_REGISTRY_FILE":  agentsFile,
-		"TBP_BROKER_SOCKET":        sock,
-		"TBP_BROKER_ADMIN_SOCKET":  adminSock,
+		"TBP_CELL_ID":                   "cell-a",
+		"TBP_SALT":                      hex.EncodeToString(salt),
+		"TBP_POLICY_ID":                 policyHex,
+		"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
+		"TBP_OPA_ENDPOINT":              opa.URL,
+		"TBP_OPA_INSECURE_TCP_DEV":      "1",
+		"TBP_TRANSLATOR":                "structured",
+		"TBP_ISSUER_SEED_FILE":          seedFile,
+		"TBP_GENESIS_DIR":               genDir,
+		"TBP_QUORUM_MIN":                "1",
+		"TBP_TOPOLOGY":                  "mono",
+		"TBP_CLUSTER_MEMBERS":           "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
+		"TBP_OPERATOR_KEYS_FILE":        opsFile,
+		"TBP_AGENT_REGISTRY_FILE":       agentsFile,
+		"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "provisioning-witness.json"),
+		"TBP_BROKER_SOCKET":             sock,
+		"TBP_BROKER_ADMIN_SOCKET":       adminSock,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

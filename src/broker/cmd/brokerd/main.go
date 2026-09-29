@@ -274,9 +274,18 @@ type config struct {
 	operatorKeysFile     string
 	agentRegistryFile    string // registre d'agents (revue #125) : identité/classe/quota
 	skillRegistryFile    string // registre de skills (catalogue #142-#161) : "" = pas de notion de skill (doctrine existante)
-	envelopeEndpoint     string // "" = enveloppe non câblée (doctrine existante)
-	socketPath           string // plan de données : POST /v1/actions
-	adminSocketPath      string // plan d'administration (revue #95) : GET /v1/supervision/*
+	// Mesure des fichiers de provisionnement (issue #192) : voir provisioning.go.
+	// witness : chemin du témoin signé ("" seulement si provDisabled) ;
+	// provDisabled : échappatoire dev EXPLICITE (sentinelle #113) ; provProof :
+	// preuve de quorum autorisant une transition délibérée ; provExtra : fichiers
+	// de confiance supplémentaires, en plus de ceux que brokerd dérive lui-même.
+	provWitnessFile  string
+	provDisabled     bool
+	provProofFile    string
+	provExtra        []registry.ProvisioningFile
+	envelopeEndpoint string // "" = enveloppe non câblée (doctrine existante)
+	socketPath       string // plan de données : POST /v1/actions
+	adminSocketPath  string // plan d'administration (revue #95) : GET /v1/supervision/*
 	// Transport réseau du plan de données (revue de sécurité #124) :
 	// optionnel — "" ⇒ Unix uniquement (comportement historique, valeur
 	// par défaut). Si netListenAddr est non vide, les trois champs TLS
@@ -366,7 +375,12 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	case usingPKCS11 && (pkcs11Module == "" || pkcs11Token == "" || pkcs11KeyLabel == "" || pkcs11PINFile == ""):
 		return nil, errors.New("TBP_ISSUER_PKCS11_MODULE, _TOKEN_LABEL, _KEY_LABEL et _PIN_FILE sont tous requis ensemble")
 	}
-	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile)); err != nil {
+	provDisabled := getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1"
+	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile, provDisabled)); err != nil {
+		return nil, err
+	}
+	provWitnessFile, provProofFile, provExtra, err := loadProvisioningConfig(getenv, provDisabled)
+	if err != nil {
 		return nil, err
 	}
 	genesisDir, err := envRequired(getenv, "TBP_GENESIS_DIR")
@@ -487,6 +501,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		netTLSCertFile:       netTLSCertFile,
 		netTLSKeyFile:        netTLSKeyFile,
 		netTLSClientCAFile:   netTLSClientCAFile,
+		provWitnessFile:      provWitnessFile,
+		provDisabled:         provDisabled,
+		provProofFile:        provProofFile,
+		provExtra:            provExtra,
 	}, nil
 }
 
@@ -496,13 +514,16 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 // échappatoires OPA (#92), la seed de dev était jusqu'ici acceptée SANS
 // AUCUN drapeau dédié, seule sa présence suffisait à choisir la custody
 // dev plutôt que HSM.
-func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string) []string {
+func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string, provisioningDisabled bool) []string {
 	var active []string
 	if opaInsecureTCPDev {
 		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
 	}
 	if issuerSeedFile != "" {
 		active = append(active, "TBP_ISSUER_SEED_FILE")
+	}
+	if provisioningDisabled {
+		active = append(active, "TBP_PROVISIONING_DISABLED_DEV_UNSAFE")
 	}
 	return active
 }
@@ -542,6 +563,13 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	}()
 
 	onTrip := func(reason string) { log.Printf("brokerd: ALARME: %s", reason) }
+
+	// Mesure des fichiers de provisionnement (issue #192) : AVANT que brokerd
+	// n'en charge un seul, et avant toute autre écriture dans son journal (sa
+	// taille distingue un premier démarrage d'un témoin effacé).
+	if err := setupProvisioning(ctx, cfg, cellLog, signer, verifier, onTrip); err != nil {
+		return fmt.Errorf("provisionnement: %w", err)
+	}
 
 	// Transport OPA durci (revue de sécurité #92, A3) : Unix + SO_PEERCRED
 	// (nominal) ou TCP non authentifié (dev/lab, EXPLICITEMENT déclaré par
