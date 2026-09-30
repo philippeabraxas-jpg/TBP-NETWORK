@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -50,7 +51,10 @@ func newQuorumTestBroker(t *testing.T, opaURL string, tr Translator, epochs Epoc
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	opa, err := pep.NewOPAClient(pep.OPAOptions{Endpoint: opaURL, CellID: "c", Salt: testSalt, Leaves: leaves})
+	opa, err := pep.NewOPAClient(pep.OPAOptions{
+		Endpoint: opaURL, CellID: "c", Salt: testSalt, Leaves: leaves,
+		Timeout: 500 * time.Millisecond, // test : le budget de 5 ms de production est indiscernable du bruit d'un runner chargé
+	})
 	if err != nil {
 		t.Fatalf("NewOPAClient: %v", err)
 	}
