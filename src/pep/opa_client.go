@@ -18,9 +18,10 @@ package pep
 // cas — le transport est isolé derrière OPAOptions.HTTPClient.
 //
 // Doctrine fail-closed (§4.1) : timeout, OPA injoignable, statut non 200
-// ou réponse indécodable ⇒ deny + alarme OnTrip (couture T14 — le latch
-// « fail-closed unique » est l'affaire de T14, ce client signale chaque
-// faute). Règle indéfinie ou deny métier ⇒ deny SANS alarme : OPA est
+// ou réponse indécodable ⇒ deny ; alarme OnTrip (couture T14 — le latch
+// « fail-closed unique » est l'affaire de T14) au seuil TripAfter de fautes
+// consécutives (issue #205), immédiatement pour une réponse qui rompt le
+// contrat. Règle indéfinie ou deny métier ⇒ deny SANS alarme : OPA est
 // sain, c'est le default-deny §1 qui parle. Chaque décision laisse une
 // feuille hash-only (§4.1/§6.2, sel chez le producteur) ; un allow sans
 // preuve redevient deny (pas de preuve, pas d'accès — comme T9).
@@ -34,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
@@ -147,9 +149,20 @@ type OPAOptions struct {
 	// feuille. Requis.
 	Leaves LeafSink
 	// OnTrip est la couture d'alarme vers T14 (fail-closed unique). Appelé
-	// à chaque faute OPA (timeout, injoignable, statut, corps) — T14
-	// possède le latch. Nil ⇒ pas d'alarme (le deny reste fail-closed).
+	// quand la faute OPA atteint le seuil TripAfter — T14 possède le latch.
+	// Nil ⇒ pas d'alarme (le deny reste fail-closed).
 	OnTrip func(reason string)
+	// TripAfter est le nombre de fautes OPA CONSÉCUTIVES (timeout,
+	// injoignable, statut non 200) qui bascule le latch T14 (issue #205,
+	// R-18) : le verdict de chaque requête fautée reste un deny tracé,
+	// mais une faute isolée (pause GC, reconnexion) ne verrouille plus
+	// toute la cellule. Une décision d'un OPA sain (allow, deny, règle
+	// indéfinie) remet le compteur à zéro. 0 ⇒ 1 (historique : le latch
+	// bascule à la première faute). Une réponse qui rompt le contrat
+	// (opa-bad-response) bascule TOUJOURS immédiatement : ce n'est pas
+	// une faute de disponibilité, c'est un OPA qui ment ou un bundle
+	// cassé. Négatif ⇒ erreur.
+	TripAfter int
 	// Now est l'horloge NTS de la cellule (§6.2) pour la feuille.
 	// Nil ⇒ time.Now (dev).
 	Now func() time.Time
@@ -166,6 +179,9 @@ type OPAClient struct {
 	leaves   LeafSink
 	onTrip   func(reason string)
 	now      func() time.Time
+
+	tripAfter int64
+	faults    atomic.Int64 // fautes OPA consécutives (issue #205)
 }
 
 // NewOPAClient construit le client. Fail-closed : endpoint, cellID, sel
@@ -185,6 +201,13 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 	}
 	if opts.Timeout < 0 {
 		return nil, errors.New("pep: timeout OPA négatif refusé")
+	}
+	if opts.TripAfter < 0 {
+		return nil, errors.New("pep: TripAfter négatif refusé")
+	}
+	tripAfter := int64(opts.TripAfter)
+	if tripAfter == 0 {
+		tripAfter = 1
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -209,6 +232,8 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 		leaves:   opts.Leaves,
 		onTrip:   opts.OnTrip,
 		now:      now,
+
+		tripAfter: tripAfter,
 	}, nil
 }
 
@@ -312,10 +337,24 @@ func (c *OPAClient) finish(ctx context.Context, in OPAInput, d OPADecision, star
 	d.Elapsed = time.Since(start)
 
 	switch d.Reason {
-	case ReasonOPATimeout, ReasonOPAUnreachable, ReasonOPAError, ReasonOPABadResponse:
-		if c.onTrip != nil {
+	case ReasonOPATimeout, ReasonOPAUnreachable, ReasonOPAError:
+		// Faute de disponibilité : le deny de CETTE requête est acquis ;
+		// le latch global ne bascule qu'au seuil de fautes consécutives
+		// (issue #205). L'événement devient un taux.
+		if n := c.faults.Add(1); n >= c.tripAfter && c.onTrip != nil {
 			c.onTrip(d.Reason) // couture T14 — le latch unique est chez T14
 		}
+	case ReasonOPABadResponse:
+		// Contrat rompu : jamais transitoire, bascule immédiate.
+		c.faults.Add(1)
+		if c.onTrip != nil {
+			c.onTrip(d.Reason)
+		}
+	case ReasonOPACallerCancelled:
+		// Ni faute d'OPA ni preuve de santé : le compteur ne bouge pas.
+	default:
+		// Allow, deny métier, règle indéfinie : OPA a répondu sainement.
+		c.faults.Store(0)
 	}
 
 	leaf := registry.Leaf{

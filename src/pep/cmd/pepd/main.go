@@ -373,6 +373,13 @@ func run() error {
 		{pep.ReasonOPAUnreachable, pep.ClassI},
 		{pep.ReasonOPAError, pep.ClassI},
 		{pep.ReasonOPABadResponse, pep.ClassI},
+		// Watcher de révision (#92.A5). Enregistrées EXPLICITEMENT (issue
+		// #205) : une condition inconnue s'auto-enregistre en classe W, la
+		// plus dure à lever — or « unverifiable » se déclenche à chaque
+		// redémarrage d'OPA. Injoignable = classe I (levée automatique
+		// possible) ; bundle substitué = classe W (quorum, jamais automatique).
+		{pep.ReasonOPARevisionUnverifiable, pep.ClassI},
+		{pep.ReasonOPARevisionMismatch, pep.ClassW},
 		{pep.ReasonClockSkew, pep.ClassI},
 		{pep.TripReasonJTISaturated, pep.ClassI},
 		{pep.TripReasonQuotaSaturated, pep.ClassI},
@@ -475,6 +482,27 @@ func run() error {
 	opaClient := opa.client
 	if opa.watcher != nil {
 		go opa.watcher.Run(ctx)
+		// Reprise automatique bornée du latch après une faute OPA (issue
+		// #205) : sonde hors du chemin chaud, révision conforme exigée.
+		probes, interval, err := opaAutoClearConfig(os.Getenv)
+		if err != nil {
+			return err
+		}
+		if probes > 0 {
+			clearer, err := pep.NewOPAAutoClearer(pep.OPAAutoClearOptions{
+				FailClosed: failClosed,
+				Probe:      opa.watcher.Verify,
+				Conditions: opaAutoClearConditions,
+				Probes:     probes,
+				Interval:   interval,
+			})
+			if err != nil {
+				return err
+			}
+			go clearer.Run(ctx)
+		} else {
+			log.Printf("pepd: reprise automatique OPA désactivée (TBP_OPA_AUTOCLEAR_PROBES=0) — levée manuelle par POST /v1/failclosed/clear")
+		}
 	}
 
 	// Posture (§5.3) : TOUJOURS monitor au démarrage ; bascules gouvernées
@@ -509,6 +537,9 @@ func run() error {
 		Mode:      mode,
 		Ledger:    ledger,
 		OPA:       opaClient,
+		// Lecture et levée gouvernée des conditions fail-closed, sur le plan
+		// d'administration uniquement (issue #205).
+		FailClosed: failClosed,
 	})
 	if err != nil {
 		return err

@@ -231,6 +231,24 @@ func (w *OPARevisionWatcher) Check(ctx context.Context) {
 	}
 }
 
+// ErrOPARevisionMismatch : OPA sert une autre révision que celle épinglée.
+var ErrOPARevisionMismatch = errors.New("pep: révision OPA servie ≠ révision épinglée")
+
+// Verify est une vérification PURE de la révision servie : aucune feuille,
+// aucune alarme, aucun changement d'état. Elle sert de sonde de reprise
+// (issue #205) — OPA répond ET sert exactement le bundle épinglé — sans
+// interférer avec le watcher lui-même (Check/Run, qui tracent et alarment).
+func (w *OPARevisionWatcher) Verify(ctx context.Context) error {
+	revision, err := w.fetchRevision(ctx)
+	if err != nil {
+		return err
+	}
+	if revision != w.expected {
+		return ErrOPARevisionMismatch
+	}
+	return nil
+}
+
 // fetchRevision interroge OPA avec provenance=true et rend la révision
 // annoncée — ou une erreur si quoi que ce soit empêche de la lire
 // (réseau, statut, corps, champ absent). Aucune de ces fautes n'est

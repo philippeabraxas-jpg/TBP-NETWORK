@@ -57,6 +57,11 @@ type ListenerOptions struct {
 	// dry_run.available=false : la politique tranche (résidu §10.5). Hors
 	// classes F/I/W, ce champ n'a AUCUN effet (D105 : coût nul).
 	DryRun *DryRunGate
+	// FailClosed (T14), si non nil, ouvre sur le plan d'ADMINISTRATION la
+	// lecture des conditions basculées et leur levée gouvernée (issue #205,
+	// R-18) : sans cette route, le seul moyen de lever un latch était de
+	// redémarrer pepd puis de reconfirmer la posture par quorum.
+	FailClosed *FailClosed
 }
 
 // ListenerStats agrège les mesures du listener (§9.1).
@@ -72,11 +77,12 @@ type ListenerStats struct {
 // Listener est le serveur de décision du PEP. Sûr pour un usage
 // concurrent.
 type Listener struct {
-	validator *Validator
-	mode      *ModeController
-	ledger    *QuotaLedger
-	opa       *OPAClient
-	dryRun    *DryRunGate
+	validator  *Validator
+	mode       *ModeController
+	ledger     *QuotaLedger
+	opa        *OPAClient
+	dryRun     *DryRunGate
+	failClosed *FailClosed
 
 	evaluations    atomic.Uint64
 	forwarded      atomic.Uint64
@@ -96,11 +102,12 @@ func NewListener(opts ListenerOptions) (*Listener, error) {
 		return nil, errors.New("pep: contrôleur de mode requis (§5.3 : posture explicite)")
 	}
 	return &Listener{
-		validator: opts.Validator,
-		mode:      opts.Mode,
-		ledger:    opts.Ledger,
-		opa:       opts.OPA,
-		dryRun:    opts.DryRun,
+		validator:  opts.Validator,
+		mode:       opts.Mode,
+		ledger:     opts.Ledger,
+		opa:        opts.OPA,
+		dryRun:     opts.DryRun,
+		failClosed: opts.FailClosed,
 	}, nil
 }
 
@@ -138,6 +145,10 @@ func (l *Listener) AdminHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/mode", l.handleMode)
 	mux.HandleFunc("/healthz", l.handleHealthz)
+	if l.failClosed != nil {
+		mux.HandleFunc("/v1/failclosed", l.handleFailClosedList)
+		mux.HandleFunc("/v1/failclosed/clear", l.handleFailClosedClear)
+	}
 	return mux
 }
 
@@ -501,6 +512,71 @@ func (l *Listener) handleMode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maxFailClosedBody borne le corps de /v1/failclosed/clear (preuve de quorum
+// comprise : quelques signatures hex).
+const maxFailClosedBody = 64 << 10
+
+// FailClosedClearRequest demande la levée d'une condition basculée. Pour
+// une condition classe W, Expiry et Signatures portent la preuve de quorum
+// sur QuorumMessage(condition, cellID, Expiry) — le nom de la condition EST
+// la condition liée par la signature, une preuve ne vaut pour aucune autre.
+// Pour une condition classe F/I, la levée est une décision d'opérateur :
+// l'accès au socket d'administration EST le contrôle d'accès (#95).
+type FailClosedClearRequest struct {
+	Condition  string                `json:"condition"`
+	Expiry     int64                 `json:"expiry,omitempty"`
+	Signatures []QuorumSignatureWire `json:"signatures,omitempty"`
+}
+
+// handleFailClosedList rend les conditions actuellement basculées.
+func (l *Listener) handleFailClosedList(w http.ResponseWriter, r *http.Request) {
+	if !methodGuard(w, r, http.MethodGet) {
+		return
+	}
+	type view struct {
+		Name   string `json:"name"`
+		Class  string `json:"class"`
+		Since  int64  `json:"since_unix"`
+		Detail string `json:"detail,omitempty"`
+	}
+	out := []view{}
+	for _, c := range l.failClosed.Tripped() {
+		out = append(out, view{Name: c.Name, Class: className(c.Class), Since: c.Since.Unix(), Detail: c.Detail})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tripped": out})
+}
+
+// handleFailClosedClear lève une condition — tracé (feuille « manual »).
+func (l *Listener) handleFailClosedClear(w http.ResponseWriter, r *http.Request) {
+	if !methodGuard(w, r, http.MethodPost) {
+		return
+	}
+	var in FailClosedClearRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxFailClosedBody)).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+		return
+	}
+	if in.Condition == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "condition requise"})
+		return
+	}
+	proof, err := decodeQuorumProof(ModeChangeRequest{Expiry: in.Expiry, Signatures: in.Signatures})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	switch err := l.failClosed.Clear(in.Condition, proof); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"cleared": in.Condition})
+	case errors.Is(err, ErrConditionUnknown):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, ErrConditionNotTripped):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+	}
+}
+
 // handleHealthz : état du listener + statistiques de latence (§9.1).
 func (l *Listener) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if !methodGuard(w, r, http.MethodGet) {
@@ -515,4 +591,18 @@ func (l *Listener) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		Mode:   l.mode.Mode().String(),
 		Stats:  l.Stats(),
 	})
+}
+
+// className rend le nom de classe §5.3 pour l'observabilité d'administration.
+func className(c Class) string {
+	switch c {
+	case ClassF:
+		return "F"
+	case ClassI:
+		return "I"
+	case ClassW:
+		return "W"
+	default:
+		return "Out"
+	}
 }
