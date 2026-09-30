@@ -642,6 +642,48 @@ would-deny, forwarded); the cell's registry contains
 **On failure: STOP** — no measurement, no closed: the switch is
 the [monitor-to-closed.md](monitor-to-closed.md) procedure, with quorum.
 
+## OPA faults: what the cell does, and how a latch is lifted (issue #205)
+
+Every OPA fault (timeout, unreachable, non-200) **denies that request** and
+leaves a leaf — that never changes. What changed is the *global* latch (the
+fail-closed point that refuses every decision):
+
+- it flips after `TBP_OPA_TRIP_AFTER` **consecutive** faults (default 3; `1`
+  restores the former "first fault locks the cell"); a healthy decision resets
+  the count. A response that breaks the contract (`opa-bad-response`) flips it
+  immediately — that is not an availability fault;
+- the background revision watcher flips `opa-revision-unverifiable` when it
+  cannot read OPA's revision (an OPA restart). That condition is class I and
+  **self-clears**; `opa-revision-mismatch` (a substituted bundle) is class W and
+  never does;
+- a probe outside the decision path lifts the transient OPA conditions once OPA
+  answers **and serves exactly the pinned bundle revision**,
+  `TBP_OPA_AUTOCLEAR_PROBES` times in a row (default 3, every
+  `TBP_OPA_AUTOCLEAR_INTERVAL_MS`, default 2000). A condition that re-flips soon
+  after doubles the probes required (up to ×8), so a flapping OPA neither clears
+  by reflex nor drowns the operator in alarms. `TBP_OPA_AUTOCLEAR_PROBES=0`
+  disables it: manual lifting only, the strictest profile;
+- never lifted automatically: `opa-bad-response`, `opa-revision-mismatch`,
+  clock skew, saturation, anchor lag.
+
+Read and lift from the admin socket (access to the socket is the access control,
+#95):
+
+```bash
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/failclosed
+# class I: an operator decision, traced
+curl -s --unix-socket /run/tbp/pepd-admin.sock -X POST \
+  -d '{"condition":"opa-bad-response"}' http://localhost/v1/failclosed/clear
+# class W: quorum proof signed for THAT condition (replay refused, #105)
+quorumproof sign -condition opa-revision-mismatch -cell cell-a -key /etc/tbp/admin.key -out /tmp/p.json
+jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket /run/tbp/pepd-admin.sock \
+  -X POST -d @- http://localhost/v1/failclosed/clear
+```
+
+**Honesty note:** this is resilience against an OPA **process** fault. It does
+not make one machine survive its own loss; a second OPA backend and the mirrors
+of §7.4 are a separate work item (scale 3).
+
 ## systemd units
 
 Hardening pattern: `src/translator/tbp-translator.service` (T24 —

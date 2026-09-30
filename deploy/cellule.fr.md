@@ -679,6 +679,50 @@ would-deny, forwarded) ; le registre de la cellule contient des feuilles
 **En cas d'échec : STOP** — sans mesure, pas de closed : la bascule est
 la procédure [monitor-to-closed.md](monitor-to-closed.fr.md), avec quorum.
 
+## Fautes OPA : ce que fait la cellule, et comment lever un verrou (issue #205)
+
+Toute faute OPA (timeout, injoignable, statut non 200) **refuse cette requête**
+et laisse une feuille — cela ne change pas. Ce qui change, c'est le verrou
+*global* (le point fail-closed qui refuse toute décision) :
+
+- il bascule après `TBP_OPA_TRIP_AFTER` fautes **consécutives** (défaut 3 ; `1`
+  restitue l'ancien « la première faute verrouille la cellule ») ; une décision
+  saine remet le compte à zéro. Une réponse qui rompt le contrat
+  (`opa-bad-response`) le bascule immédiatement — ce n'est pas une faute de
+  disponibilité ;
+- le watcher de révision, en arrière-plan, bascule `opa-revision-unverifiable`
+  quand il ne peut pas lire la révision d'OPA (redémarrage d'OPA). Cette
+  condition est de classe I et **se lève seule** ; `opa-revision-mismatch`
+  (bundle substitué) est de classe W et ne se lève jamais seule ;
+- une sonde hors du chemin de décision lève les conditions OPA transitoires
+  quand OPA répond **et sert exactement la révision de bundle épinglée**,
+  `TBP_OPA_AUTOCLEAR_PROBES` fois de suite (défaut 3, toutes les
+  `TBP_OPA_AUTOCLEAR_INTERVAL_MS`, défaut 2000). Une condition qui rebascule peu
+  après double le nombre de sondes exigé (jusqu'à ×8) : un OPA qui flappe ne se
+  lève ni par réflexe ni en noyant l'opérateur d'alarmes.
+  `TBP_OPA_AUTOCLEAR_PROBES=0` la désactive : levée manuelle seulement, le
+  profil le plus strict ;
+- jamais levés automatiquement : `opa-bad-response`, `opa-revision-mismatch`,
+  dérive d'horloge, saturations, retard d'ancrage.
+
+Lire et lever depuis le socket d'administration (l'accès au socket est le
+contrôle d'accès, #95) :
+
+```bash
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/failclosed
+# classe I : décision d'opérateur, tracée
+curl -s --unix-socket /run/tbp/pepd-admin.sock -X POST \
+  -d '{"condition":"opa-bad-response"}' http://localhost/v1/failclosed/clear
+# classe W : preuve de quorum signée pour CETTE condition (rejeu refusé, #105)
+quorumproof sign -condition opa-revision-mismatch -cell cell-a -key /etc/tbp/admin.key -out /tmp/p.json
+jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket /run/tbp/pepd-admin.sock \
+  -X POST -d @- http://localhost/v1/failclosed/clear
+```
+
+**Note d'honnêteté :** c'est de la résilience à une faute du **processus** OPA.
+Cela ne fait pas survivre une machine à sa propre perte ; un second backend OPA
+et les miroirs du §7.4 sont un chantier séparé (échelle 3).
+
 ## Unités systemd
 
 Patron de durcissement : `src/translator/tbp-translator.service` (T24 —

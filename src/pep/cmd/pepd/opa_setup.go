@@ -62,6 +62,10 @@ func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte
 		return nil, err
 	}
 
+	tripAfter, err := opaTripAfter(getenv)
+	if err != nil {
+		return nil, err
+	}
 	client, err := pep.NewOPAClient(pep.OPAOptions{
 		Endpoint:   endpoint,
 		HTTPClient: hc,
@@ -69,6 +73,7 @@ func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte
 		Salt:       salt,
 		Leaves:     cellLog,
 		OnTrip:     onTrip,
+		TripAfter:  tripAfter,
 	})
 	if err != nil {
 		return nil, err
@@ -148,4 +153,58 @@ func opaRevisionInterval(getenv func(string) string) (time.Duration, error) {
 		return 0, fmt.Errorf("pepd: TBP_OPA_REVISION_CHECK_INTERVAL_MS invalide %q (entier > 0 attendu)", s)
 	}
 	return time.Duration(ms) * time.Millisecond, nil
+}
+
+// defaultOPATripAfter : fautes OPA consécutives qui basculent le latch
+// fail-closed (issue #205, R-18). Chaque requête fautée reste refusée et
+// tracée ; seul le verrou GLOBAL attend ce seuil.
+const defaultOPATripAfter = 3
+
+// opaTripAfter lit TBP_OPA_TRIP_AFTER (optionnel, entier ≥ 1). Absent ⇒
+// défaut ; 1 restitue le comportement historique (verrou à la première
+// faute) ; présent mais illisible ou < 1 ⇒ erreur (§1).
+func opaTripAfter(getenv func(string) string) (int, error) {
+	s := getenv("TBP_OPA_TRIP_AFTER")
+	if s == "" {
+		return defaultOPATripAfter, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("pepd: TBP_OPA_TRIP_AFTER invalide %q (entier ≥ 1 attendu)", s)
+	}
+	return n, nil
+}
+
+// opaAutoClearConfig lit la reprise automatique du latch OPA (issue #205) :
+// TBP_OPA_AUTOCLEAR_PROBES (sondes saines consécutives, défaut 3 ; 0 la
+// DÉSACTIVE — levée manuelle seulement, profil le plus strict) et
+// TBP_OPA_AUTOCLEAR_INTERVAL_MS (période de sonde, défaut 2 s). Valeur
+// déclarée illisible ⇒ erreur, jamais un défaut silencieux (§1).
+func opaAutoClearConfig(getenv func(string) string) (probes int, interval time.Duration, err error) {
+	probes = pep.DefaultOPAAutoClearProbes
+	if s := getenv("TBP_OPA_AUTOCLEAR_PROBES"); s != "" {
+		probes, err = strconv.Atoi(s)
+		if err != nil || probes < 0 {
+			return 0, 0, fmt.Errorf("pepd: TBP_OPA_AUTOCLEAR_PROBES invalide %q (entier ≥ 0 attendu, 0 = désactivé)", s)
+		}
+	}
+	if s := getenv("TBP_OPA_AUTOCLEAR_INTERVAL_MS"); s != "" {
+		ms, aerr := strconv.Atoi(s)
+		if aerr != nil || ms <= 0 {
+			return 0, 0, fmt.Errorf("pepd: TBP_OPA_AUTOCLEAR_INTERVAL_MS invalide %q (entier > 0 attendu)", s)
+		}
+		interval = time.Duration(ms) * time.Millisecond
+	}
+	return probes, interval, nil
+}
+
+// opaAutoClearConditions : les conditions OPA TRANSITOIRES, candidates à la
+// levée automatique. Ni opa-bad-response (contrat rompu) ni
+// opa-revision-mismatch (bundle substitué, classe W) n'y figurent : leur
+// levée reste une décision humaine.
+var opaAutoClearConditions = []string{
+	pep.ReasonOPATimeout,
+	pep.ReasonOPAUnreachable,
+	pep.ReasonOPAError,
+	pep.ReasonOPARevisionUnverifiable,
 }

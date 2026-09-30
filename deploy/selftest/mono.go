@@ -245,7 +245,7 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	if !ok {
 		return
 	}
-	defer opa.stop()
+	defer func() { opa.stop() }() // opa est remplacé par l'exercice de redémarrage (#205)
 
 	// --- Étape : environnement pepd (SUBSTITUTION DEV documentée) -----------
 	issuer := devKey("issuer")
@@ -313,6 +313,12 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		"TBP_OPA_INSECURE_TCP_DEV=1",
 		"TBP_QUORUM_KEYRING_FILE="+quorumKeyringPath,
 		fmt.Sprintf("TBP_QUORUM_MIN=%d", prof.quorumMin),
+		// Reprise après faute OPA (issue #205) : seuil par défaut (3 fautes
+		// consécutives), sonde rapprochée pour que l'exercice de fin de
+		// phase ne dure que quelques secondes.
+		"TBP_OPA_AUTOCLEAR_PROBES=2",
+		"TBP_OPA_AUTOCLEAR_INTERVAL_MS=300",
+		"TBP_OPA_REVISION_CHECK_INTERVAL_MS=500",
 		// T38/#71 : explicite même si async-bounded est le défaut — le
 		// selftest éping le modèle de durabilité qu'il exerce.
 		"TBP_DURABILITY=async-bounded",
@@ -576,4 +582,46 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		after[registry.KindDecision] >= 6, fmt.Sprintf("KindDecision=%d", after[registry.KindDecision]))
 	s.add(ph, "registre: bascule de posture tracée (KindTelemetry ≥ 1)",
 		after[registry.KindTelemetry] >= 1, fmt.Sprintf("KindTelemetry=%d", after[registry.KindTelemetry]))
+
+	// --- Issue #205 (R-18) : un redémarrage d'OPA ne doit PAS immobiliser la
+	// cellule. OPA est tué, pepd refuse (fail-closed, par requête puis par
+	// verrou global), OPA revient sur le MÊME bundle signé : pepd reprend
+	// SANS redémarrage ni quorum. Avant #205, le verrou ne se levait jamais.
+	opa.stop()
+	for i := 0; i < 4; i++ {
+		tokDown, _ := mintOK("read")
+		if _, er, err := evaluate(pepdURL, tokDown, "read", "doc-1"); err == nil && er.Allow {
+			s.add(ph, "#205: OPA arrêté → aucune évaluation ne peut être allow", false, "allow=true")
+			return
+		}
+	}
+	s.add(ph, "#205: OPA arrêté → chaque évaluation est refusée (fail-closed par requête)", true, "4 refus")
+	latched := false
+	for i := 0; i < 30 && !latched; i++ {
+		_, raw, err := getUnix(adminHC, "http://pepd-admin/v1/failclosed")
+		latched = err == nil && strings.Contains(string(raw), `"name"`)
+		if !latched {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	s.add(ph, "#205: la faute persistante bascule le verrou global, visible sur le plan d'administration", latched, "GET /v1/failclosed")
+
+	restarted, ok := startOPA(s, ph, cfg, monoOPAAddr, bundlePath, verificationKeyPath, filepath.Join(opaDir, "opa-restart.log"))
+	if !ok {
+		return
+	}
+	opa = restarted
+	recovered := false
+	for i := 0; i < 100 && !recovered; i++ {
+		_, raw, err := getUnix(adminHC, "http://pepd-admin/v1/failclosed")
+		recovered = err == nil && !strings.Contains(string(raw), `"name"`)
+		if !recovered {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	s.add(ph, "#205: OPA revenu sur le bundle épinglé → le verrou se lève SEUL (sonde + révision conforme)", recovered, "GET /v1/failclosed vide")
+	tokUp, _ := mintOK("read")
+	_, erUp, errUp := evaluate(pepdURL, tokUp, "read", "doc-1")
+	s.add(ph, "#205: la cellule redécide après la reprise, sans redémarrage de pepd ni quorum",
+		errUp == nil && erUp.Allow, fmt.Sprintf("allow=%v reason=%s", erUp.Allow, erUp.Reason))
 }

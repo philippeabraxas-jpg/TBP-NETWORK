@@ -50,13 +50,14 @@ const (
 
 // Erreurs du point fail-closed.
 var (
-	ErrConditionUnknown      = errors.New("pep: condition inconnue")
-	ErrConditionNotTripped   = errors.New("pep: condition non basculée")
-	ErrConditionClassChange  = errors.New("pep: condition déjà enregistrée avec une autre classe")
-	ErrQuorumVerifierMissing = errors.New("pep: levée classe W sans vérifieur de quorum (fail-closed)")
-	ErrQuorumRejected        = errors.New("pep: preuve de quorum rejetée (§5.3)")
-	ErrQuorumStateMissing    = errors.New("pep: levée classe W sans magasin d'état de quorum (fail-closed, §105)")
-	ErrQuorumReplayed        = errors.New("pep: preuve de quorum déjà consommée ou expirée plus tôt (rejeu, §105)")
+	ErrConditionUnknown       = errors.New("pep: condition inconnue")
+	ErrConditionNotTripped    = errors.New("pep: condition non basculée")
+	ErrConditionClassChange   = errors.New("pep: condition déjà enregistrée avec une autre classe")
+	ErrQuorumVerifierMissing  = errors.New("pep: levée classe W sans vérifieur de quorum (fail-closed)")
+	ErrQuorumRejected         = errors.New("pep: preuve de quorum rejetée (§5.3)")
+	ErrQuorumStateMissing     = errors.New("pep: levée classe W sans magasin d'état de quorum (fail-closed, §105)")
+	ErrQuorumReplayed         = errors.New("pep: preuve de quorum déjà consommée ou expirée plus tôt (rejeu, §105)")
+	ErrAutoClearRefusedClassW = errors.New("pep: levée automatique refusée pour une condition classe W (quorum exigé, §5.3)")
 )
 
 // Actions tracées dans les feuilles du point fail-closed.
@@ -264,6 +265,14 @@ func (f *FailClosed) Gate() *Refusal {
 	return &Refusal{Reason: c.Name, Since: c.Since, Detail: c.Detail}
 }
 
+// Sources de levée tracées dans la feuille (détail du record « TBFF1 »).
+// La levée manuelle garde le détail VIDE : le record historique reste
+// identique, seule la levée automatique (issue #205) se distingue.
+const (
+	clearSourceManual = ""
+	clearSourceAuto   = "auto"
+)
+
 // Clear lève une condition — action TRACÉE. Classes F/I : levée opérateur
 // simple. Classe W (§5.3) : quorum EXIGE — vérifieur absent ou preuve
 // rejetée ⇒ erreur, la condition reste basculée (fail-closed).
@@ -295,11 +304,52 @@ func (f *FailClosed) Clear(name string, proof QuorumProof) error {
 			return fmt.Errorf("%w (%s)", ErrQuorumReplayed, name)
 		}
 	}
+	f.clearLocked(c, clearSourceManual)
+	return nil
+}
+
+// AutoClear lève une condition SANS preuve, pour un mécanisme de reprise
+// qui a lui-même VÉRIFIÉ le retour à la normale (issue #205 : sonde OPA +
+// révision conforme). Jamais pour une condition classe W : la levée
+// gouvernée (quorum) n'est pas contournable par une sonde. Tracée, avec la
+// source « auto » dans la feuille.
+func (f *FailClosed) AutoClear(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.conds[name]
+	if !ok {
+		return fmt.Errorf("%w (%s)", ErrConditionUnknown, name)
+	}
+	if !c.Tripped {
+		return fmt.Errorf("%w (%s)", ErrConditionNotTripped, name)
+	}
+	if c.Class == ClassW {
+		return fmt.Errorf("%w (%s)", ErrAutoClearRefusedClassW, name)
+	}
+	f.clearLocked(c, clearSourceAuto)
+	return nil
+}
+
+func (f *FailClosed) clearLocked(c *Condition, source string) {
 	c.Tripped = false
 	c.Since = time.Time{}
 	c.Detail = ""
-	f.writeLeafLocked(failClosedActionClear, name, "")
-	return nil
+	f.writeLeafLocked(failClosedActionClear, c.Name, source)
+}
+
+// Tripped rend les conditions actuellement basculées, par ordre
+// lexicographique (observabilité, sondes de reprise).
+func (f *FailClosed) Tripped() []Condition {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Condition
+	for _, c := range f.conds {
+		if c.Tripped {
+			out = append(out, *c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // Condition retourne l'état d'une condition (couture forensique /

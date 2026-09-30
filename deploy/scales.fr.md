@@ -37,6 +37,7 @@ se lise dans le journal et non dans la mémoire d'un admin. Suivi dans #86.
 | Listener réseau mTLS | `TBP_BROKER_TLS_*` | absent (socket Unix) | requis si agents distants | requis, CA dédiée aux agents | requis |
 | Registre de skills + paliers | `TBP_SKILL_REGISTRY_FILE`, bundle `require_skill_registry` | sans objet (pas de broker) | recommandé, **poser `require_skill_registry`** | requis | requis |
 | Périmètre par agent | bundle `agent_scope.require_agent_scope` | sans objet (pas de broker) | recommandé | requis | requis |
+| Gestion des fautes OPA | `TBP_OPA_TRIP_AFTER`, `TBP_OPA_AUTOCLEAR_PROBES` | défauts (3 / 3) | défauts | défauts ; un second backend OPA est prévu | défini au handshake (#33) |
 | Témoin de provisionnement | `TBP_PROVISIONING_WITNESS_FILE` | requis (l'admin signe un changement) | requis | requis | requis |
 | Démarrage mesuré | `TBP_MEASURED_BOOT_*` | requis | requis | requis | requis |
 | Superviseur / moniteur indépendant | `superviseur.md` | absent | optionnel | requis | requis |
