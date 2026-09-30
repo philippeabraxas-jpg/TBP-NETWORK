@@ -286,8 +286,9 @@ func NewTracker(cfg TrackerConfig) (*Tracker, error) {
 // en refus (pas de preuve, pas de bascule — même doctrine que T9/T33).
 //
 // Ordre strict : forme → TTL borné → futur borné → autorité membre →
-// signatures m-of-n distinctes → monotonie de N → équivoque → budget auto
-// → révocation éventuelle → calcul notBefore → bascule.
+// signatures m-of-n distinctes → monotonie de N → équivoque → bail non échu
+// (#207, hors amorçage) → budget auto → révocation éventuelle → calcul
+// notBefore → bascule.
 func (t *Tracker) Accept(ctx context.Context, tokenJSON []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -344,6 +345,20 @@ func (t *Tracker) Accept(ctx context.Context, tokenJSON []byte) error {
 			}
 			return t.refuseLocked(ctx, p.N, p.Authority, "epoch-equivocation", epochEventEquivocate)
 		}
+	}
+
+	// Bail déjà échu à la réception (issue #207, red team R-14) : le jeton
+	// est authentique mais l'appliquer installerait une époque MORTE à
+	// l'instant même — la cellule cesserait de servir alors que l'ancien
+	// bail vit encore, le numéro N serait grillé (un jeton frais au même N
+	// deviendrait une « équivoque ») et, en mode auto, le budget de bascule
+	// serait consommé. Refusé AVANT toute mutation d'état. Exception
+	// d'amorçage : sans époque en cours (t.current == nil), l'epoch 0 de la
+	// genèse est importé même échu — brokerd démarre des jours après la
+	// cérémonie puis le bail est renouvelé (deploy/cellule.md) ; la cellule
+	// ne sert pas tant qu'aucun bail vivant n'est installé.
+	if t.current != nil && !now.Before(issuedAt.Add(time.Duration(p.TTLSeconds)*time.Second)) {
+		return t.refuseLocked(ctx, p.N, p.Authority, "epoch-token-expired")
 	}
 
 	if mode == ModeAuto && !t.consumeAutoBudgetLocked(now) {
