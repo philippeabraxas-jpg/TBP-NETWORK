@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -746,6 +747,32 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && !actV.Allow && actV.Reason == "opa-deny" &&
 			statsV3.Requests == 3 && statsV3.Denies == 2 && statsV3.Allows == 1,
 		fmt.Sprintf("allow=%v reason=%s requests=%d denies=%d allows=%d", actV.Allow, actV.Reason, statsV3.Requests, statsV3.Denies, statsV3.Allows))
+
+	// --- Issue #207 (R-14) : un jeton d'époque au bail échu ne remplace pas ---
+	// l'époque vivante. Le jeton est AUTHENTIQUE (signé 2-of-3 par les
+	// contrôleurs) : seul son bail, déjà échu à la réception, le disqualifie.
+	staleTok, err := mintEpoch(privs, cluster.EpochPayload{
+		N: 1, Authority: daemonsCellID,
+		IssuedAt: time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339), TTLSeconds: 60,
+	}, 1, 2)
+	if err != nil {
+		s.fail(phaseDaemons, "menthe jeton d'époque échu (#207)", err)
+		return
+	}
+	renewReq, _ := http.NewRequest(http.MethodPost, "http://brokerd/v1/epoch/renew", bytes.NewReader(staleTok))
+	renewResp, renewErr := brokerAdminHC.Do(renewReq)
+	renewStatus, renewBody := 0, []byte(nil)
+	if renewErr == nil {
+		renewStatus = renewResp.StatusCode
+		renewBody, _ = io.ReadAll(io.LimitReader(renewResp.Body, 1<<16))
+		_ = renewResp.Body.Close()
+	}
+	_, rawE, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/epoch")
+	epochAfter := daemonEpochView{}
+	_ = json.Unmarshal(rawE, &epochAfter)
+	s.add(phaseDaemons, "#207 : jeton d'époque authentique mais au bail échu → refusé, l'époque vivante (0) est intacte",
+		renewErr == nil && renewStatus == http.StatusBadRequest && strings.Contains(string(renewBody), "epoch-token-expired") && epochAfter.Epoch == 0,
+		fmt.Sprintf("status=%d epoch=%d corps=%s", renewStatus, epochAfter.Epoch, strings.TrimSpace(string(renewBody))))
 
 	// --- Issue #206 (R-19) : une preuve W vaut UNE autorisation ---------------
 	// La MÊME intention, avec la MÊME preuve de quorum, est représentée : le

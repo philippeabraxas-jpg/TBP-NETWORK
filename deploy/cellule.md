@@ -577,6 +577,16 @@ design — an unreachable quorum lets the lease lapse and the cell stops
 (fencing, §7). Plan for that cadence, or use `mono` for a single cell; a
 sustainable renewal scheme is the open decision in #197.
 
+A renewal token is applied only while its own lease is alive (issue #207): a token
+that is authentic but already expired at delivery is refused
+(`epoch-token-expired`, traced) and changes nothing — it would otherwise install a
+dead epoch over a live one, burn its number `N` (a fresh token at the same `N`
+would read as an equivocation) and, in `auto` mode, spend the failover budget.
+Sign the renewal just before delivering it; if a token was missed, sign a new one
+(a fresh `issued_at`, the same or a higher `N`). Exception: with no epoch yet, the
+genesis `epoch0.json` is imported even if expired — `brokerd` starts days after the
+ceremony, and the cell does not serve until a live lease is installed.
+
 **On failure: STOP** — a brokerd that starts without salt, without
 genesis, without OPA or without operator keys is fail-open: fix the
 cause, never work around it. A refused `epoch0` means a genesis that

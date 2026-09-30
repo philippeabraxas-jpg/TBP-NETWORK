@@ -611,6 +611,17 @@ s'arrête (clôture, §7). Prévoir cette cadence, ou utiliser `mono` pour une
 cellule seule ; un schéma de renouvellement soutenable est la décision
 ouverte de #197.
 
+Un jeton de renouvellement n'est appliqué que tant que son propre bail est vivant
+(issue #207) : un jeton authentique mais déjà échu à la livraison est refusé
+(`epoch-token-expired`, tracé) et ne change rien — il installerait sinon une
+époque morte par-dessus une époque vivante, grillerait son numéro `N` (un jeton
+frais au même `N` passerait pour une équivoque) et, en mode `auto`, consommerait
+le budget de bascule. Signer le renouvellement juste avant de le livrer ; si un
+jeton a été manqué, en signer un nouveau (un `issued_at` frais, le même `N` ou un
+`N` supérieur). Exception : sans époque en cours, l'`epoch0.json` de la genèse
+est importé même échu — `brokerd` démarre des jours après la cérémonie, et la
+cellule ne sert pas tant qu'aucun bail vivant n'est installé.
+
 **En cas d'échec : STOP** — un brokerd qui démarre sans sel, sans
 genèse, sans OPA ou sans clés d'opérateurs est fail-open : corriger la
 cause, ne jamais contourner. Un `epoch0` refusé signifie une genèse qui
