@@ -292,6 +292,13 @@ func run() error {
 		return fmt.Errorf("provisionnement: %w", err)
 	}
 
+	// Échappatoires dev actives (issue #208, R-13) : une feuille opposable, pas
+	// seulement un log. APRÈS le provisionnement — dont la garde se sert de la
+	// taille du journal pour distinguer un premier démarrage d'un témoin effacé.
+	if err := devmode.RecordActive(ctx, cellLog, cellID, salt, devEscapeHatchFlags(os.Getenv), nil); err != nil {
+		return err
+	}
+
 	// Measured boot (T31, issue #32) — revue de sécurité #96 : AVANT
 	// d'ouvrir le service de la cellule (point d'intégration documenté,
 	// src/registry/README.md). Actif PAR DÉFAUT depuis la revue de
@@ -726,20 +733,25 @@ func topologyFromEnv(getenv func(string) string) (multi bool, err error) {
 // depuis l'environnement) et trace une ALARME haute priorité si les deux
 // sont réunis — jamais un simple log discret.
 func checkDevEscapeHatches(getenv func(string) string, stat func(string) (os.FileInfo, error)) error {
+	return devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devEscapeHatchFlags(getenv))
+}
+
+// devEscapeHatchFlags liste les échappatoires « dev » actives de pepd. Séparée
+// de checkDevEscapeHatches pour que la même liste alimente la feuille
+// d'audit écrite au démarrage (issue #208, devmode.RecordActive).
+func devEscapeHatchFlags(getenv func(string) string) []string {
 	var active []string
-	if getenv("TBP_OPA_DISABLED_DEV_UNSAFE") == "1" {
-		active = append(active, "TBP_OPA_DISABLED_DEV_UNSAFE")
+	for _, name := range []string{
+		"TBP_OPA_DISABLED_DEV_UNSAFE",
+		"TBP_OPA_INSECURE_TCP_DEV",
+		"TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE",
+		"TBP_PROVISIONING_DISABLED_DEV_UNSAFE",
+	} {
+		if getenv(name) == "1" {
+			active = append(active, name)
+		}
 	}
-	if getenv("TBP_OPA_INSECURE_TCP_DEV") == "1" {
-		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
-	}
-	if getenv("TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE") == "1" {
-		active = append(active, "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE")
-	}
-	if getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1" {
-		active = append(active, "TBP_PROVISIONING_DISABLED_DEV_UNSAFE")
-	}
-	return devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, active)
+	return active
 }
 
 // detectRestart établit isRestart (revue de sécurité #93) : DOIT être

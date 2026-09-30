@@ -65,6 +65,11 @@ refusés en production :
   quorum) ;
 - le témoin de provisionnement et le démarrage mesuré au démarrage (#112, #192).
 
+Une échappatoire dev est refusée sans le sentinel, et quand elle est acceptée
+elle laisse une feuille de télémétrie dans le registre de la cellule (issue
+#208 : les noms des échappatoires actives, hash seulement) — jamais seulement
+une ligne de log.
+
 Cette liste est le point de départ des « règles inaliénables » que le
 handshake pleine échelle définira ; c'est ce qui existe dans le code
 aujourd'hui, pas une décision. Savoir si une brique peut être relâchée à une

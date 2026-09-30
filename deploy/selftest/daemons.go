@@ -40,6 +40,7 @@ import (
 	"golang.org/x/mod/sumdb/note"
 
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
+	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
@@ -747,6 +748,13 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && !actV.Allow && actV.Reason == "opa-deny" &&
 			statsV3.Requests == 3 && statsV3.Denies == 2 && statsV3.Allows == 1,
 		fmt.Sprintf("allow=%v reason=%s requests=%d denies=%d allows=%d", actV.Allow, actV.Reason, statsV3.Requests, statsV3.Denies, statsV3.Allows))
+
+	// --- Issue #208 (R-13) : les échappatoires dev actives de brokerd ---------
+	// laissent une feuille (TBP_OPA_INSECURE_TCP_DEV et TBP_ISSUER_SEED_FILE).
+	devLeaf := registry.HashPayload(cellSalt, devmode.ActiveRecord([]string{"TBP_OPA_INSECURE_TCP_DEV", "TBP_ISSUER_SEED_FILE"}))
+	foundDev, derr := waitPayloadHash(ctx, daemonsCellID, brokerRegDir, devLeaf, 5*time.Second)
+	s.add(phaseDaemons, "#208 : les échappatoires dev actives de brokerd sont consignées en feuille KindTelemetry (recalculable par re-hash)",
+		derr == nil && foundDev, fmt.Sprintf("trouvée=%v err=%v", foundDev, derr))
 
 	// --- Issue #207 (R-14) : un jeton d'époque au bail échu ne remplace pas ---
 	// l'époque vivante. Le jeton est AUTHENTIQUE (signé 2-of-3 par les
