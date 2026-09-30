@@ -1,0 +1,268 @@
+Rapport de revue red team — TBP-NETWORK, chemin de décision chaud -Cyberkimi le 01-10-2026
+(chaque points à ouvert une issue, corrigée ou en cours de correction)
+
+Portée : src/broker (orchestration + émission), src/pep (validation, anti-replay, quota, horloge, posture, contrat de plan), src/cluster (fencing, quorum, promotion), cmd/pepd, cmd/brokerd, plus l'intégration registry (manifest, provisioning). 5 passes, 25 fichiers. Analyse statique de revue adversariale — aucune exploitation dynamique.
+
+Méthodologie : approche attaquant sur la base du modèle de menace déclaré §2 (agent compromis, machine non managée, insider, attaquant capable de down/isoler/remplacer/flooder des composants et de contrôler le timing). Je ne conteste pas les hypothèses déclarées du trust base (genèse TOFU, SoftHSM/FileRootMeasurer dev) sauf si l'implémentation les aggrave. Ordonnancement : fraude > impunité > DoS > friction, selon la doctrine §8/§9.
+1. Synthèse exécutive
+
+L'architecture est solide : fail-closed en cascade à chaque étape, feuille écrite avant toute mutation d'état, état borné partout, et une vingtaine de revues de sécurité numérotées (#89 → #192) dont les correctifs sont traçables dans le code. Aucune faille de fraude non mitigée trouvée.
+
+Le résultat dominant est une faille de disponibilité : R-18 — le latch fail-closed T14 n'a aucune route de levée opérationnelle ; une pause transitoire d'OPA (circuit-breaker 5 ms) escalade en procédure de quorum. À corriger avant tout pilotage en mode fermé.
+
+Correction d'une de mes surestimations de passe 5 : la fragilité 5 ms sur l'enveloppe (R-22) ne produit pas de brick — brokerd n'a pas d'instance FailClosed (c'est pepd-only) ; ses fautes OPA/enveloppe donnent des refus par requête + log, pas de verrouillage global. Elle reste un amplificateur de friction, regroupée comme surface d'entrée de R-18 côté pepd, pas comme brick autonome.
+2. Table des findings
+ID
+	
+Sévérité
+	
+Titre
+	
+Statut
+R-18
+	
+Haute (dispo)
+	
+Aucune route pour lever un latch T14 ; timeout OPA 5 ms → refus global jusqu'au quorum
+	
+Ouvert
+R-16
+	
+Moyenne (DoS)
+	
+Plan de données pepd sans borne de corps ni ReadTimeout
+	
+Ouvert
+R-19
+	
+Moyenne-basse
+	
+Preuves de quorum W rejouables dans leur fenêtre ≤ 300 s
+	
+Ouvert
+R-12
+	
+Moyenne-basse
+	
+Aucune cohérence skill.RiskTier ↔ agent.Class
+	
+Ouvert
+R-14
+	
+Moyenne-basse
+	
+Rejeu de jetons d'époque périmés : budget auto consumé + zones mortes
+	
+Ouvert
+R-4
+	
+Moyenne-basse
+	
+Sceau objet (claim −5) auto-déclaré par l'agent en mode structuré
+	
+Ouvert
+R-17
+	
+Basse-moyenne
+	
+Feuilles d'alarme horloge synchrones sous mutex (~150–250 ms)
+	
+Ouvert
+R-13
+	
+Basse
+	
+Alarme dev-mode #113 = log.Printf, pas de feuille registre
+	
+Ouvert
+R-6
+	
+Basse
+	
+Classe d'action por agent, pas par requête (poussée de friction)
+	
+Observation
+R-1
+	
+Basse
+	
+Bornes incohérentes : intention 4096 < maxima quorum_proof/plan_binding
+	
+Ouvert
+R-5
+	
+Basse
+	
+Composition max légitime > plafond fil 1024 o (passeports longs)
+	
+Ouvert
+R-2
+	
+Info
+	
+Découplage quota.resource / resource d'action — à documenter
+	
+Consigné
+R-15
+	
+Info
+	
+Receipt.ReceivedAt signé mais jamais vérifié
+	
+Consigné
+R-20
+	
+Info
+	
+SO_PEERCRED retarde l'imposture, ne l'empêche pas
+	
+Consigné
+R-21
+	
+Info
+	
+Classification de faute ctx de l'enveloppe ≠ client OPA
+	
+Consigné
+R-3
+	
+Clos
+	
+Plans approuvés ne survivent pas à un changement de politique
+	
+Fermé — bonne direction
+R-7
+	
+Clos
+	
+Cycle de vie passeport (expiry à Consume/Open) correct
+	
+Fermé
+R-8
+	
+Clos
+	
+Couplage plancher T38 ↔ CheckpointInterval : refus de démarrage visible
+	
+Note ops
+R-9
+	
+Retiré
+	
+Rejeu de preuves de posture — infirmé par QuorumStateStore #105
+	
+Retiré
+R-10/11
+	
+Clos
+	
+Orphelins de compteurs / recharge de quota : sémantique débit par design
+	
+Fermé
+R-22
+	
+Fusionné
+	
+Fragilité 5 ms enveloppe — périmètre corrigé (par-requête, pas de latch brokerd)
+	
+Fusionné
+3. Findings détaillés
+R-18 — Haute. Aucun chemin d'exécution pour lever une condition T14
+
+Chaîne : une pause GC d'OPA, un redémarrage (roll), ou un paquet perdu → Eval dépasse le break 5 ms → erreur (opa-timeout/unreachable/error/bad-response) opa_client.go → failClosed.Trip sur des conditions pré-enregistrées en ClassI failclosed.go → Validator.Gate() court-circuite toute décision, toutes classes confondues, tant que la condition tient validator.go +1 . Le watcher de révision OPA #92.A5 alimente la même couture opa_setup.go.
+
+Le problème : FailClosed.Clear existe failclosed.go mais aucune route ne l'invoque — le mux admin de pepd ne sert que /v1/mode et /healthz listener.go. La récupération est donc : redémarrer pepd (conditions en mémoire) → detectRestart vrai → ModeRefused (#93) → reconfirmation de posture par quorum via POST /v1/mode mode.go. Une pause de 5 ms devient une cérémonie multi-signataires.
+
+Incohérence interne : le watchdog horloge, lui, s'auto-récupère en traçant son resync clock.go — mais le latch T14 qu'il a posé, lui, reste. Double standard entre détecteurs transitoires et permanents.
+
+Impact : panne totale de la cellule sur un événement de production banal ; amplification directe du risque n°1 déclaré « death by friction » (§9).
+
+Remédiation : (a) route admin /v1/failclosed/clear gouvernée — opérateur pour ClassF/I, quorum pour ClassW (Clear supporte déjà les classes failclosed.go) ; (b) auto-clear sur sonde saine pour les classes transitoires (OPA, horloge), feuillé comme les resyncs ; (c) à défaut, runbook documenté « restart + quorum » traité comme procédure de première ligne — et inventorié en friction §9.1.
+R-16 — Moyenne. Plan de données pepd : corps non bornés, aucun ReadTimeout
+
+Chaîne : les http.Server de pepd ne configurent que ReadHeaderTimeout, et handleEvaluate/handleConsume décochent le JSON sans MaxBytesReader listener.go. La borne 1024 o du token intervient après décodage base64 complet validator.go. Un agent gouverné (population adverse déclarée §2) peut poster des corps géants ou dégoutter des corps indéfiniment → pression goroutines/mémoire au point le plus exposé du périmètre. brokerd, lui, borne POST /v1/actions à 64 Kio avec DisallowUnknownFields server.go — la protection existe dans le dépôt, elle n'est juste pas appliquée au plan de données pepd.
+
+Remédiation : http.MaxBytesReader (~8 Kio couvre largement un token base64 max) + ReadTimeout/IdleTimeout sur les deux serveurs pepd.
+R-19 — Moyenne-basse. Preuves de quorum W rejouables dans leur fenêtre
+
+Chaîne : VerifyClassW vérifie liaison (action, resource, policyID, epoch), fraîcheur (expiry, TTL ≤ 300 s) et k signatures distinctes quorum.go — mais aucun registre de preuves consommées, contrairement aux preuves de posture qui avancent un plancher persistant par condition (#105) failclosed.go +1 . Une preuve k-of-n autorisant l'action X peut être présentée N fois dans 300 s pour N exécutions.
+
+Atténuation : #177 impose un plan binding distinct par exécution W broker.go, OPA réévalue à chaque fois, l'enveloppe borne le volume — la « ponctualité » reste structurellement implicite plutôt qu'imposée.
+
+Remédiation : nonce dans QuorumStatement + registre borné de preuves consommées (symétrique à #105).
+R-12 — Moyenne-basse. RiskTier du skill non recoupé avec la classe de l'agent
+
+Chaîne : les gates dures (plan-binding obligatoire #177, quorum W) se déclenchent sur agent.Class broker.go, tandis que SkillInput.RiskTier ne part qu'en intrant OPA broker.go +1 . Un agent enregistré Out qui invoque un skill provisionné critical échappe aux deux gates — seuls OPA et le scope littéral le gardent. Le recoupement scope↔tier existe à la genèse (tierMaxScope skill_registry.go), mais pas tier↔classe-agent.
+
+Filet : la policy Rego peut compenser via SkillInput — à condition que l'auteur l'écrive. Recommander un cross-check à la genèse de registre, même philosophie que tierMaxScope.
+R-14 — Moyenne-basse. Jetons d'époque périmés rejouables
+
+Chaîne : Tracker.Accept borne issuedAt dans le futur (+5 s) mais jamais dans le passé epoch.go. Les baux tournant toutes les ~60 s, des enregistrements valides-signés-périmés abondent. Soumis via POST /v1/epoch/renew sur le socket admin main.go, un vieux jeton mode=auto à N monotone : (a) consomme un slot du budget auto (3/h) epoch.go ; (b) peut avoir expiresAt < notBefore — époque qui expire avant d'entrer en fonction, epoch-not-yet-effective puis epoch-expired, zone morte jusqu'au prochain jeton signé ; (c) en série → failover-budget-exhausted → bascule humaine requise pour les failovers légitimes.
+
+Précondition : accès au socket admin (frontière délibérée — l'accès au socket EST le contrôle d'accès). Remédiation trivial : refuser !now.Before(expiresAt) à l'entrée, avant consommation du budget et mutation d'état.
+R-4 — Moyenne-basse. Sceau objet (claim −5) sans provenance en mode structuré
+
+Chaîne : l'agent fournit object_seal en hex broker.go, l'émetteur le recopie dans le jeton issuer.go, le validateur compare le sceau du jeton à celui de la requête validator.go — deux valeurs choisies par le présentant, égales par construction. La capacité-objet §4.4(2) ne vaut que si le service recalcule ComputeObjectSeal sur l'état réel (l'extension PostgreSQL le fait côté serveur, pas le chemin HTTP générique).
+
+Remédiation : documenter comme contrat d'intégration obligatoire dans les guides de déploiement (recompute service-side), ou coudre le calcul dans une seam broker.
+R-17 — Basse-moyenne. Feuilles d'alarme horloge synchrones sous mutex
+
+Chaîne : les transitions du watchdog écrivent leur feuille d'alarme en synchrone (~100 ms checkpoint + ~50 ms poll POSIX) sous w.mu clock.go ; IssuerAllowed/NaturalLanguageAllowed prennent le même verrou — un flapping chrony (sync↔unsync) produit jusqu'à ~2×250 ms de stall par cycle, contre un budget tier-1 de 5 ms. Remédiation : écriture hors verrou ou via l'async writer. Note liée (informationnelle) : à émetteur unique, le portillon iss == LocalIssuer du mode dégradé est un no-op clock.go.
+R-13 — Basse. Alarme dev-mode sans feuille
+
+RequireDeclared promet « ALARME haute priorité (T14) », l'implémentation est un log.Printf devmode.go. Fait atténuant : l'appel survient avant l'ouverture du CellLog dans les deux démons — la feuille est matériellement impossible à ce stade. Soit reporter la feuille à l'ouverture du registre, soit corriger le commentaire (qui sur-vend le mécanisme réel).
+R-6 — Basse. Classe d'action par agent, pas par requête
+
+Choix défendable de #125 (le registre résout la classe, jamais l'agent broker.go +1 ), mais tout sujet mixte (lectures + écritures infra) subit le tier le plus strict — plan-binding obligatoire — sur toutes ses requêtes broker.go. Poussée opérationnelle : provisionnement d'agents distincts par activité, ou règles Rego affinant via SkillInput (lié à R-12). À consigner en note friction.
+R-1 / R-5 — Basse. Bornes incohérentes
+
+    R-1 : quorum_proof (≤ 4096 o bruts) et plan_binding (≤ 4135 o bruts) sont transportés en hex à l'intérieur de l'intention JSON bornée à 4096 octets broker.go +1 — le maxima n'est accessible qu'à ~40 % de 4096 o, soit ~une dizaine de co-signataires W en pratique. Au-delà : request-invalid opa-que pour l'opérateur.
+    R-5 : avec passport (resource ≤ 1024 + quota.resource ≤ 1024) plus sujet/action/cellID, la composition légitime dépasse le plafond fil de 1024 o — ErrTokenTooLarge dès resource ≳ 600 o issuer.go. Fail-closed mais DoS fonctionnel sur requêtes légitimes.
+
+R-2 / R-15 / R-20 / R-21 — Informationnels
+
+    R-2 : quota.resource ≠ possible de resource d'action — vraisemblablement voulu (data-plane ≠ route API) broker.go +2 ; la garde est la règle d'enveloppe OPA + plafond registre. À consigner pour auteurs de politiques.
+    R-15 : Receipt.ReceivedAt est signé puis ignoré promotion.go — soit le borner (skew), soit retirer le champ. Un champ signé inerte est un leurre.
+    R-20 : SO_PEERCRED vérifie l'UID à chaque connexion opa_transport.go ; un attaquant même-UID peut tuer OPA et re-binder le socket — la mesure retarde, n'empêche pas. Consigner la portée réelle.
+    R-21 : l'enveloppe classifie ctx.Err() différemment du client OPA (pas de classifyContextFault) opa_client.go +1 — bruit de journal à l'arrêt ; aligner.
+
+4. Fermés / retirés — traçabilité de la revue
+
+    R-3 — CLOS (bonne direction). Pas de hot-reload OPA : tout changement de politique = redémarrage avec TBP_POLICY_ID épinglé + vérification démarrage + watcher opa_setup.go +1 ; le ContractStore est reconstruit vide à chaque boot (maps en mémoire, zéro persistance) plan_contract.go, protégé par le provisioning guard #192 provisioning.go. Un plan approuvé sous P1 ne peut plus être exécuté sous P2.
+    R-7 — CLOS. PassportCounter.Consume refuse now > exp avec coupure + feuille quota.go ; /v1/passport/consume exige la preuve de possession #90.3 listener.go +1 .
+    R-9 — RETIRÉ. Les preuves de posture sont à usage unique : QuorumStateStore persistant consomme l'expiry par condition (#105) mode.go +1 — mon suspicion de passe 2 était fausse.
+    R-10/R-11 — CLOS. Compteurs purgés à exp (reporté via evicted pour T21), recharge = débit signé par design ; anti-dribble = post-traitement déclaré §4.1-bis quota.go.
+    R-8 — CLOS/note ops. La violation du plancher 4×CheckpointInterval produit un refus de démarrage explicite — bruyant, pas caché ; documenter le couplage window↔checkpoint dans le guide ops.
+
+5. Points vérifiés solides — à ne pas ré-attaquer
+
+    Jetons : canonique CBOR revérifiée par ré-encodage, jeu fermé de claims, doublons/longueurs indéfinies rejetés, unprotected vide, alg épinglé, Ed25519, TTL forcé [30-60 s], jti consommé en dernier, atomique validator.go +1 .
+    Anti-replay : ring borné, purge stricte exp < now, purge complète avant de triper, trip latchée, jamais d'éviction antireplay.go.
+    Contrat de plan : curseur strict, feuille avant avancement du curseur, signature opérateur sur ApprovalMessage, tombstones bornés, saturation = refus, attribution TBPL2 plan_contract.go.
+    Quota : débit par fenêtre, aucun prélèvement partiel, leaf avant coupure, purge des expirés, protection overflow uint64, garde windowS quota.go.
+    Posture : redémarrage = refused, quorum pour tout changement, plancher de fraîcheur persistant #105 mode.go.
+    Fencing : N strictement monotone, équivocation détectée + alarmée, re-livraison idempotente, notBefore sans fenêtre de double autorité, quarantaine par roster, budget auto borné epoch.go.
+    Quorum W : liaison complète action/resource/policy/epoch, TTL ≤ 300 s, signataires distincts, champ « quorum » jamais cru quorum.go.
+    Promotion : aucun intrant de santé candidat, réception vérifiée cryptographiquement, bundle vs ancre, fenêtre ancrée promotion.go.
+    Durcissement ops : sentinel dev hors fichier d'environnement devmode.go, witness signé hors registry, transition liée au démon provisioning.go, seed/PIN en 0600 vérifié main.go.
+    Transport : mTLS TLS 1.3 + RequireAndVerifyClientCert sans échappatoire net_tls.go ; sockets data/admin séparés 0660 main.go +1 .
+    OPA/enveloppe : classification faute appelant vs budget propre, alarme seulement sur fautes, feuille par évaluation, réservation pessimiste avec demandes en vol, purge époque, jamais de sur-émission opa_client.go +1 .
+    Failover : détection ET feuille-morte + ancre-morte (anti-faux-positif), double budget cohérent (2 déclenchements monitor ≤ 3 acceptations cellule) failover.go.
+    Registres agent/skill : tables hors-bande immuables, validation à la genèse, aucune résolution depuis la demande agent_registry.go +1 .
+
+6. Limites de cette revue
+
+    Statique uniquement — aucune exploitation dynamique.
+    Non couverts : extension PostgreSQL, translator (hors chemin structuré v1), supervision/console, telemetry/anod.
+    Hypothèses du modèle §2 acceptées comme déclarées (genèse TOFU, HSM en gouvernance).
+    Plusieurs findings ont des préconditions d'accès bornées (socket admin local, CN mTLS correspondant).
+
+7. Ordre d'issue suggéré
+
+    R-18 — bloquant pour le pilot fermé : route Clear gouvernée + auto-clear sur sonde saine.
+    R-16 — bornes corps + timeouts plan de données pepd.
+    R-14 — garde de fraîcheur à l'entrée de Tracker.Accept.
+    R-19 — registre de consommation des preuves W.
+    R-12 — cross-check genèse RiskTier ↔ Class.
+    R-17 — écriture horloge hors verrou.
+    Basse/docs : R-4 (contrat d'intégration), R-13 (feuille ou commentaire), R-6 (note friction), R-1/R-5 (composition des bornes), R-2/R-15/R-20/R-21 (consignés).
