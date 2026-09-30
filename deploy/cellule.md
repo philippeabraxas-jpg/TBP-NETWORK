@@ -684,6 +684,28 @@ jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket
 not make one machine survive its own loss; a second OPA backend and the mirrors
 of §7.4 are a separate work item (scale 3).
 
+## Class W quorum proofs are single-use (issue #206)
+
+A class-W action carries a k-of-n quorum proof bound to (action, resource,
+policy, epoch, expiry). The broker **consumes** it: the first presentation is
+admitted, any later presentation of the same statement is refused
+(`quorum-proof-replayed` in the quorum leaf, `quorum-insufficient` to the
+caller). The identity of a proof is its signed statement, not its signatures —
+a different subset of signers of the same statement is the same authorization.
+
+- To authorize a second execution, the controllers sign a **new** statement
+  (another expiry). Collect signatures only once the requester is ready.
+- An invalid proof never consumes a statement; a valid one is burned **before**
+  the admission leaf and before the plan step, so a crash or a refusal later in
+  the chain leaves it burned (re-sign), never replayable.
+- The consumed set lives in `TBP_REGISTRY_DIR/quorum_proofs_consumed.json`
+  (0600, same custody as `cell_log.key`), survives restarts, purges entries at
+  their expiry and never evicts a live one; a full set (4096) refuses. A
+  corrupted file refuses to start.
+- **Limit:** deleting or replacing that file reopens the replay window for the
+  proofs still in their TTL (≤ 300 s). It is part of the cell's state: protect
+  it like the registry key.
+
 ## systemd units
 
 Hardening pattern: `src/translator/tbp-translator.service` (T24 —

@@ -40,6 +40,8 @@ var (
 	ErrQuorumProofExpired  = errors.New("cluster: preuve de quorum expirée")
 	ErrQuorumProofTTLLong  = errors.New("cluster: preuve de quorum au-delà du TTL maximal")
 	ErrQuorumInsufficient  = errors.New("cluster: quorum k-of-n non atteint (signatures distinctes insuffisantes)")
+	// ErrQuorumProofReplayed, ErrProofStoreFull et ErrQuorumProofStoreFail :
+	// voir proof_store.go (issue #206).
 )
 
 // QuorumStatement est le contenu signé par les contrôleurs : il lie
@@ -81,6 +83,11 @@ type QuorumGateConfig struct {
 	// MaxProofTTLSeconds borne la fraîcheur d'une preuve.
 	// 0 ⇒ DefaultMaxProofTTLSeconds.
 	MaxProofTTLSeconds int
+	// Consumed est le registre des preuves déjà consommées (issue #206,
+	// R-19) : une preuve vaut UNE autorisation. Requis — jamais un registre
+	// optionnel qu'on pourrait oublier de brancher (même doctrine que
+	// QuorumState, #105). En production : un FileProofStore.
+	Consumed ProofStore
 	// Now : horloge NTS (§6.2). Nil ⇒ time.Now (dev).
 	Now func() time.Time
 }
@@ -97,6 +104,7 @@ type QuorumGate struct {
 	policy [32]byte
 	maxTTL time.Duration
 	now    func() time.Time
+	used   ProofStore
 	mu     sync.Mutex // sérialise feuilles + lecture d'horloge
 }
 
@@ -113,6 +121,9 @@ func NewQuorumGate(cfg QuorumGateConfig) (*QuorumGate, error) {
 	}
 	if len(cfg.Controllers) == 0 {
 		return nil, errors.New("cluster: manifest des contrôleurs requis (§7.5 : k-of-n)")
+	}
+	if cfg.Consumed == nil {
+		return nil, errors.New("cluster: registre des preuves consommées requis (issue #206 : une preuve W vaut une autorisation, jamais rejouable pendant son TTL)")
 	}
 	if cfg.K < 1 || cfg.K > len(cfg.Controllers) {
 		return nil, fmt.Errorf("cluster: quorum incohérent : k=%d pour %d contrôleurs", cfg.K, len(cfg.Controllers))
@@ -140,7 +151,7 @@ func NewQuorumGate(cfg QuorumGateConfig) (*QuorumGate, error) {
 	return &QuorumGate{
 		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves,
 		ctrls: ctrls, k: cfg.K, policy: cfg.PolicyID,
-		maxTTL: time.Duration(maxTTL) * time.Second, now: now,
+		maxTTL: time.Duration(maxTTL) * time.Second, now: now, used: cfg.Consumed,
 	}, nil
 }
 
@@ -209,6 +220,25 @@ func (g *QuorumGate) VerifyClassW(ctx context.Context, proofJSON []byte, action,
 	}
 	if valid < g.k {
 		return g.refuseLocked(ctx, int8(valid), int8(g.k), action, epoch, "quorum-insufficient", ErrQuorumInsufficient)
+	}
+
+	// Consommation (issue #206, R-19) : APRÈS la vérification complète —
+	// une preuve invalide ne brûle jamais une preuve légitime — et AVANT la
+	// feuille d'admission. La consommation est durable : si un crash ou un
+	// échec de feuille suit, la preuve reste brûlée (les contrôleurs en
+	// resignent une), jamais rejouable.
+	id, err := proofID(st)
+	if err != nil {
+		return g.refuseLocked(ctx, int8(valid), int8(g.k), action, epoch, "statement-unserializable", ErrQuorumInsufficient)
+	}
+	fresh, err := g.used.Consume(id, expiry, now)
+	switch {
+	case errors.Is(err, ErrProofStoreFull):
+		return g.refuseLocked(ctx, int8(valid), int8(g.k), action, epoch, "quorum-proof-store-full", ErrProofStoreFull)
+	case err != nil:
+		return g.refuseLocked(ctx, int8(valid), int8(g.k), action, epoch, "quorum-proof-store-error", ErrQuorumProofStoreFail)
+	case !fresh:
+		return g.refuseLocked(ctx, int8(valid), int8(g.k), action, epoch, "quorum-proof-replayed", ErrQuorumProofReplayed)
 	}
 	return g.leafLocked(ctx, 0x01, int8(valid), int8(g.k), action, epoch, "ok")
 }
