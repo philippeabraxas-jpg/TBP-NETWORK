@@ -74,7 +74,8 @@ func newContractBroker(t *testing.T, opaURL string, tr Translator, gate Contract
 	// explicite empruntent le chemin classe W — preuve de quorum valide
 	// attachée pour rester sur le chemin nominal.
 	if st, ok := tr.(staticTranslator); ok && st.err == nil && st.tr.Class == nil && len(st.tr.QuorumProof) == 0 {
-		st.tr.QuorumProof = mintTestProof(t, st.tr.Action, st.tr.Resource, 7)
+		action, resource := st.tr.Action, st.tr.Resource
+		st.freshProof = func() []byte { return mintTestProof(t, action, resource, 7) }
 		tr = st
 	}
 	b, err := NewBroker(BrokerOptions{

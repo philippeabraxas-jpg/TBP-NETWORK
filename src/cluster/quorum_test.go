@@ -51,9 +51,13 @@ func mintQuorumProof(t *testing.T, privs map[int]ed25519.PrivateKey, action, res
 func newGate(t *testing.T, clk *manualClock, leaves *leafRecorder, opts ...func(*QuorumGateConfig)) *QuorumGate {
 	t.Helper()
 	pubs, _ := testControllers(t)
+	proofs, err := NewMemoryProofStore(0)
+	if err != nil {
+		t.Fatalf("NewMemoryProofStore: %v", err)
+	}
 	cfg := QuorumGateConfig{
 		CellID: "cell-a", Salt: testSalt, Leaves: leaves,
-		Controllers: pubs, K: 2, PolicyID: testPolicyID, Now: clk.now,
+		Controllers: pubs, K: 2, PolicyID: testPolicyID, Now: clk.now, Consumed: proofs,
 	}
 	for _, f := range opts {
 		f(&cfg)
@@ -81,9 +85,10 @@ func quorumRecord(verdict byte, valid, k int8, epoch uint64, action, reason stri
 
 func TestQuorumGateConfigFailClosed(t *testing.T) {
 	pubs, _ := testControllers(t)
+	proofs, _ := NewMemoryProofStore(0)
 	full := QuorumGateConfig{
 		CellID: "cell-a", Salt: testSalt, Leaves: &leafRecorder{},
-		Controllers: pubs, K: 2, PolicyID: testPolicyID,
+		Controllers: pubs, K: 2, PolicyID: testPolicyID, Consumed: proofs,
 	}
 	if _, err := NewQuorumGate(full); err != nil {
 		t.Fatalf("config complète refusée : %v", err)
@@ -96,6 +101,7 @@ func TestQuorumGateConfigFailClosed(t *testing.T) {
 		"k=0":               func(c *QuorumGateConfig) { c.K = 0 },
 		"k > n":             func(c *QuorumGateConfig) { c.K = 4 },
 		"TTL négatif":       func(c *QuorumGateConfig) { c.MaxProofTTLSeconds = -1 },
+		"sans registre des preuves consommées (#206)": func(c *QuorumGateConfig) { c.Consumed = nil },
 	}
 	for name, mutate := range cases {
 		cfg := full

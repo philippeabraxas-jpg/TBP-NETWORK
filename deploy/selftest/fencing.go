@@ -359,10 +359,15 @@ func runFencing(s *suite, cfg config) {
 
 	// --- Étape : QuorumGate classe W (§7.5) sur le registre de cell-a -------
 	var policyZero [32]byte
+	consumed, err := cluster.NewMemoryProofStore(0)
+	if err != nil {
+		s.fail(phaseFencing, "registre des preuves consommées (#206)", err)
+		return
+	}
 	gate, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
 		CellID: "cell-a", Salt: salt[:16], Leaves: logA,
 		Controllers: pubs, K: 2, PolicyID: policyZero,
-		MaxProofTTLSeconds: 3600, Now: clk.now,
+		MaxProofTTLSeconds: 3600, Now: clk.now, Consumed: consumed,
 	})
 	if err != nil {
 		s.fail(phaseFencing, "quorum gate (fail-closed à la config)", err)
@@ -382,6 +387,9 @@ func runFencing(s *suite, cfg config) {
 	n, err = waitKind(ctx, "cell-a", regDirA, registry.KindQuorum, 2)
 	s.add(phaseFencing, "quorum §7.5: admission 2-of-3 tracée (KindQuorum)", err == nil && n >= 2,
 		fmt.Sprintf("KindQuorum=%d", n))
+	err = gate.VerifyClassW(ctx, proof2, "seal", "vault-1", 2)
+	s.add(phaseFencing, "quorum §7.5 (#206): la même preuve 2-of-3 représentée est refusée (une preuve = une autorisation)",
+		errors.Is(err, cluster.ErrQuorumProofReplayed), fmt.Sprintf("err=%v", err))
 
 	// --- Étape : promotion miroir→canari (§7.4) — saine puis partition ------
 	cellBPriv := devKey("cell-b")

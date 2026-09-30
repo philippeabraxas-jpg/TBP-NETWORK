@@ -723,6 +723,31 @@ jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket
 Cela ne fait pas survivre une machine à sa propre perte ; un second backend OPA
 et les miroirs du §7.4 sont un chantier séparé (échelle 3).
 
+## Les preuves de quorum de classe W sont à usage unique (issue #206)
+
+Une action de classe W porte une preuve de quorum k-of-n liée à (action,
+ressource, politique, époque, expiry). Le broker la **consomme** : la première
+présentation est admise, toute présentation ultérieure du même énoncé est
+refusée (`quorum-proof-replayed` dans la feuille de quorum,
+`quorum-insufficient` côté appelant). L'identité d'une preuve est son énoncé
+signé, pas ses signatures — un autre sous-ensemble de signataires du même
+énoncé est la même autorisation.
+
+- Pour autoriser une seconde exécution, les contrôleurs signent un **nouvel**
+  énoncé (autre expiry). Ne collecter les signatures que lorsque le demandeur
+  est prêt.
+- Une preuve invalide ne consomme jamais un énoncé ; une preuve valide est
+  brûlée **avant** la feuille d'admission et avant l'étape du plan : un crash
+  ou un refus plus loin dans la chaîne la laisse brûlée (re-signer), jamais
+  rejouable.
+- L'ensemble consommé vit dans `TBP_REGISTRY_DIR/quorum_proofs_consumed.json`
+  (0600, même custody que `cell_log.key`), survit aux redémarrages, purge les
+  entrées à leur expiry et n'évince jamais une entrée vivante ; un ensemble
+  plein (4096) refuse. Un fichier corrompu refuse de démarrer.
+- **Limite :** supprimer ou remplacer ce fichier rouvre la fenêtre de rejeu des
+  preuves encore dans leur TTL (≤ 300 s). Il fait partie de l'état de la
+  cellule : à protéger comme la clé du registre.
+
 ## Unités systemd
 
 Patron de durcissement : `src/translator/tbp-translator.service` (T24 —

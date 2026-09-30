@@ -671,6 +671,13 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	}
 
 	// Quorum classe W (§7.5) : mêmes contrôleurs épinglés, K = M.
+	// Registre des preuves W consommées (issue #206, R-19) : une preuve vaut
+	// UNE autorisation, y compris après un redémarrage de brokerd. Même
+	// frontière de custody que cell_log.key.
+	proofStore, err := cluster.NewFileProofStore(filepath.Join(cfg.registryDir, "quorum_proofs_consumed.json"), 0)
+	if err != nil {
+		return fmt.Errorf("registre des preuves de quorum consommées: %w", err)
+	}
 	quorumGate, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
 		CellID:      cfg.cellID,
 		Salt:        cfg.salt,
@@ -678,6 +685,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		Controllers: controllers,
 		K:           cfg.quorumMin,
 		PolicyID:    cfg.policyID,
+		Consumed:    proofStore,
 	})
 	if err != nil {
 		return fmt.Errorf("quorum gate: %w", err)

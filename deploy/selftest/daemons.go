@@ -162,9 +162,10 @@ func waitCheckpointFile(dir string, verifier note.Verifier, size uint64) error {
 // — Vues JSON des démons (contrats stables snake_case, D109/T34c) —
 
 type daemonStatsView struct {
-	Requests uint64 `json:"requests"`
-	Allows   uint64 `json:"allows"`
-	Denies   uint64 `json:"denies"`
+	Requests     uint64 `json:"requests"`
+	Allows       uint64 `json:"allows"`
+	Denies       uint64 `json:"denies"`
+	QuorumDenies uint64 `json:"quorum_denies"`
 }
 
 type daemonEpochView struct {
@@ -674,7 +675,11 @@ func runDaemons(s *suite, cfg config) {
 	}
 
 	// --- Action réelle de bout en bout (chaîne §5.1 complète) ----------------
-	proof, err := mintProof(privs, "read", "doc-1", policyID, 0, time.Now().Add(2*time.Minute), 1, 2)
+	// TTL de 4 min (plafond 5 min) : la même preuve est représentée plus bas,
+	// après un redémarrage de brokerd (issue #206) — elle ne doit pas avoir
+	// expiré d'ici là, sinon le refus ne prouverait rien.
+	proofMintedAt := time.Now()
+	proof, err := mintProof(privs, "read", "doc-1", policyID, 0, proofMintedAt.Add(4*time.Minute), 1, 2)
 	if err != nil {
 		s.fail(phaseDaemons, "menthe preuve de quorum", err)
 		return
@@ -741,6 +746,25 @@ func runDaemons(s *suite, cfg config) {
 		err == nil && status == http.StatusOK && !actV.Allow && actV.Reason == "opa-deny" &&
 			statsV3.Requests == 3 && statsV3.Denies == 2 && statsV3.Allows == 1,
 		fmt.Sprintf("allow=%v reason=%s requests=%d denies=%d allows=%d", actV.Allow, actV.Reason, statsV3.Requests, statsV3.Denies, statsV3.Allows))
+
+	// --- Issue #206 (R-19) : une preuve W vaut UNE autorisation ---------------
+	// La MÊME intention, avec la MÊME preuve de quorum, est représentée : le
+	// refus doit venir du quorum (quorum_denies=1), pas d'un autre garde-fou
+	// — le quorum est évalué avant le plan_binding, donc avant la
+	// consommation de l'étape du plan.
+	status, raw, err = postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{
+		"subject": "agent-1", "intent": intent,
+	})
+	actV = daemonActionResponse{}
+	if err == nil {
+		_ = json.Unmarshal(raw, &actV)
+	}
+	_, rawR, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
+	statsR := daemonStatsView{}
+	_ = json.Unmarshal(rawR, &statsR)
+	s.add(phaseDaemons, "#206 : la même preuve de quorum W présentée une seconde fois → refus au quorum",
+		err == nil && status == http.StatusOK && !actV.Allow && statsR.QuorumDenies == 1,
+		fmt.Sprintf("allow=%v reason=%s quorum_denies=%d", actV.Allow, actV.Reason, statsR.QuorumDenies))
 
 	// --- Étape : démarrage supervisord (deploy/superviseur.md étape 3) -------
 	supervisord, err := startDaemon(supervisordBin, supervisorEnv, filepath.Join(base, "supervisord.log"))
@@ -905,4 +929,23 @@ func runDaemons(s *suite, cfg config) {
 	}
 	s.add(phaseDaemons, "issue #192 : état d'origine restauré ⇒ brokerd repart (le refus ne visait que la divergence)",
 		restarted, "")
+
+	// Issue #206 : la consommation survit au redémarrage — la preuve d'avant
+	// le redémarrage est encore dans sa fenêtre, et encore refusée au quorum.
+	if restarted {
+		status, raw, err = postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{
+			"subject": "agent-1", "intent": intent,
+		})
+		actV = daemonActionResponse{}
+		if err == nil {
+			_ = json.Unmarshal(raw, &actV)
+		}
+		_, rawA, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/stats")
+		statsA := daemonStatsView{}
+		_ = json.Unmarshal(rawA, &statsA)
+		age := time.Since(proofMintedAt)
+		s.add(phaseDaemons, "#206 : la preuve déjà consommée reste refusée APRÈS un redémarrage de brokerd (registre durable)",
+			err == nil && status == http.StatusOK && !actV.Allow && statsA.QuorumDenies == 1 && age < 4*time.Minute,
+			fmt.Sprintf("allow=%v reason=%s quorum_denies=%d âge_preuve=%s", actV.Allow, actV.Reason, statsA.QuorumDenies, age.Round(time.Second)))
+	}
 }

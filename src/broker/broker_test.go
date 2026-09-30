@@ -96,10 +96,18 @@ func (r *tripRecorder) all() []string {
 type staticTranslator struct {
 	tr  Translation
 	err error
+	// freshProof, si non nil, frappe une preuve de quorum NEUVE à chaque
+	// Translate : depuis #206 une preuve W vaut une seule autorisation, donc
+	// un traducteur fixe qui rejouerait la même preuve N fois serait refusé.
+	freshProof func() []byte
 }
 
 func (s staticTranslator) Translate(_ context.Context, _, _ string) (Translation, error) {
-	return s.tr, s.err
+	tr := s.tr
+	if s.freshProof != nil {
+		tr.QuorumProof = s.freshProof()
+	}
+	return tr, s.err
 }
 
 // failSigner signe toujours en erreur — faute HSM simulée.
@@ -211,7 +219,8 @@ func newTestBroker(t *testing.T, opaURL string, tr Translator) (*Broker, *Issuer
 	// valide pour rester sur le chemin nominal — les chemins de REFUS du
 	// quorum ont leurs tests dédiés (quorum_epoch_test.go).
 	if st, ok := tr.(staticTranslator); ok && st.err == nil && st.tr.Class == nil && len(st.tr.QuorumProof) == 0 {
-		st.tr.QuorumProof = mintTestProof(t, st.tr.Action, st.tr.Resource, 7)
+		action, resource := st.tr.Action, st.tr.Resource
+		st.freshProof = func() []byte { return mintTestProof(t, action, resource, 7) }
 		tr = st
 	}
 	// permissiveAgentRegistry résout toujours en classe W — depuis #177,
@@ -336,15 +345,22 @@ func testControllers(t *testing.T) (pubs map[int]ed25519.PublicKey, privs map[in
 func newTestQuorumGate(t *testing.T, leaves *leafRecorder) *cluster.QuorumGate {
 	t.Helper()
 	pubs, _ := testControllers(t)
+	proofs, err := cluster.NewMemoryProofStore(0)
+	if err != nil {
+		t.Fatalf("NewMemoryProofStore: %v", err)
+	}
 	gate, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
 		CellID: "tbp/registry/cell-test-01", Salt: testSalt, Leaves: leaves,
-		Controllers: pubs, K: 2, PolicyID: testPolicyID,
+		Controllers: pubs, K: 2, PolicyID: testPolicyID, Consumed: proofs,
 	})
 	if err != nil {
 		t.Fatalf("NewQuorumGate: %v", err)
 	}
 	return gate
 }
+
+// proofSeq rend chaque preuve de test distincte (voir mintTestProof).
+var proofSeq atomic.Uint64
 
 // mintTestProof frappe une preuve de quorum liée à (action, resource,
 // epoch, testPolicyID), signée par les contrôleurs désignés (défaut 1 et
@@ -360,7 +376,9 @@ func mintTestProof(t *testing.T, action, resource string, epoch uint64, signers 
 		Resource: resource,
 		PolicyID: hex.EncodeToString(testPolicyID[:]),
 		Epoch:    epoch,
-		Expiry:   time.Now().UTC().Add(120 * time.Second).Format(time.RFC3339),
+		// Expiry unique par appel (issue #206) : une preuve W est consommée ;
+		// deux preuves du même énoncé seraient la même autorisation.
+		Expiry: time.Now().UTC().Add(time.Duration(60+proofSeq.Add(1)%200) * time.Second).Format(time.RFC3339),
 	}
 	canonical, err := json.Marshal(st)
 	if err != nil {

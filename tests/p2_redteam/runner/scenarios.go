@@ -774,9 +774,13 @@ func scenarioTelemetryCut(ctx context.Context, cfg Config, sink *countingSink, s
 	if cfg.MutSkipQuorum {
 		gate = mutantAcceptGate{} // M-S9
 	} else {
+		consumed, err := cluster.NewMemoryProofStore(0) // #206 : une preuve W vaut une autorisation
+		if err != nil {
+			return false, "", fmt.Errorf("registre des preuves consommées: %w", err)
+		}
 		g, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
 			CellID: cfg.CellID, Salt: salt, Leaves: sink,
-			Controllers: pubs, K: 2, PolicyID: policyID,
+			Controllers: pubs, K: 2, PolicyID: policyID, Consumed: consumed,
 		})
 		if err != nil {
 			return false, "", fmt.Errorf("quorum gate: %w", err)
@@ -841,14 +845,22 @@ func scenarioTelemetryCut(ctx context.Context, cfg Config, sink *countingSink, s
 		return false, "", fmt.Errorf("quorum 2-of-3 valide refusé (%s) — faux positif du gate", res.Reason)
 	}
 
+	// Attaque 3 (#206, R-19) : rejeu de la preuve 2-of-3 déjà consommée — la
+	// coupure autorisée une fois ne s'autorise pas N fois. Le refus vient du
+	// quorum (étape 6), donc avant le plan_binding permissif de ce scénario.
+	res = brk.HandleAction(ctx, "admin-sous-pression", intent(strong))
+	if res.Allow || res.Reason != broker.ReasonQuorumInsufficient {
+		return false, fmt.Sprintf("rejeu de la preuve 2-of-3 : allow=%v reason=%q — une preuve consommée a autorisé une seconde coupure", res.Allow, res.Reason), nil
+	}
+
 	counts, _, _ := sink.snapshot()
-	if counts[registry.KindQuorum] != 2 {
-		return false, fmt.Sprintf("%d feuilles KindQuorum ≠ 2 (refus insuffisant + admission gouvernée)", counts[registry.KindQuorum]), nil
+	if counts[registry.KindQuorum] != 3 {
+		return false, fmt.Sprintf("%d feuilles KindQuorum ≠ 3 (refus insuffisant + admission gouvernée + refus de rejeu)", counts[registry.KindQuorum]), nil
 	}
 	if counts[registry.KindDecision] < 3 {
 		return false, fmt.Sprintf("%d feuilles KindDecision < 3 — une coupure (tentée ou admise) n'a pas laissé sa décision", counts[registry.KindDecision]), nil
 	}
-	return true, "sans preuve : quorum-required ; 1-of-3 : quorum-insufficient leafé KindQuorum ; 2-of-3 : admis, leafé KindQuorum — rien de silencieux", nil
+	return true, "sans preuve : quorum-required ; 1-of-3 : quorum-insufficient leafé KindQuorum ; 2-of-3 : admis, leafé KindQuorum ; même preuve rejouée : refusée, leafée — rien de silencieux", nil
 }
 
 // ---------------------------------------------------------------------------
