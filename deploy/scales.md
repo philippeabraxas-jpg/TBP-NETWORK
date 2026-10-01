@@ -76,3 +76,20 @@ An agent that is not routed through `brokerd` has no skill registry and no
 `require_skill_registry` is an explicit per-scale setting above and not a
 default: turn it on wherever `brokerd` fronts the agents. There is no
 escalation beyond the `risk_tier` floor for classes I and W.
+
+## Decisions recorded
+
+- **R-12 — skill `risk_tier` vs agent class: a deployment matter (#210).** The registry does not
+  cross-check a skill's tier against the class of the agent that calls it, and TBP will not add a
+  second escalation on top of the pack: an agent registered outside F/I/W that calls a skill
+  provisioned `critical` is held back by `tbp.pack.skill_tier` (`high` needs class I or W, `critical`
+  needs W), **provided the deployment loads the pack and sets `require_skill_registry`**. That is the
+  per-scale setting in the table above; the residual is the same as #195 and is closed the same way
+  (register every agent that can perform an irreversible act as class W; give every irreversible
+  skill `risk_tier: critical`; review the registry file, which the provisioning witness #192
+  protects). Decided with the author after the red-team review; no code.
+- **#181 — behavioural profile by sequence: after scale 2.** Salami / decomposition detection, cost
+  anomalies and a per-run cost cap need real multi-agent traffic to be specified, and scaling will
+  open needs that are not visible yet. It is therefore **not** a scale-2 brick: the catalogue rows
+  that depend on it stay 🔴, tracked in #181, and are re-opened once the scale-2 lab has produced
+  data to design against.
