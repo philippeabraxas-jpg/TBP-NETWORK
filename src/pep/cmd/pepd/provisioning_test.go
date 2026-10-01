@@ -79,8 +79,42 @@ func (pf *provFixture) setup(t *testing.T) error {
 	}, signer, verifier, pf.cellLog, pf.getenv)
 }
 
+// boundCondition fait ce que fait l'opérateur : il lit dans le REFUS de pepd la
+// condition à signer (« base|from=…|to=… », issue #236) et la reprend sous la base
+// voulue — les tests de mauvais usage gardent la bonne paire (départ, cible).
+func (pf *provFixture) boundCondition(t *testing.T, base string) string {
+	t.Helper()
+	saved, had := pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"]
+	delete(pf.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	err := pf.setup(t)
+	if had {
+		pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = saved
+	}
+	if err == nil {
+		t.Fatal("boundCondition : pas de divergence à autoriser (le démarrage est conforme)")
+	}
+	return conditionFromRefusal(t, err, base)
+}
+
+// conditionFromRefusal extrait « |from=…|to=… » du refus et le greffe sur base.
+func conditionFromRefusal(t *testing.T, err error, base string) string {
+	t.Helper()
+	const marker = "condition à signer : "
+	i := strings.Index(err.Error(), marker)
+	if i < 0 {
+		t.Fatalf("le refus n'annonce pas la condition à signer : %v", err)
+	}
+	cond := strings.Fields(err.Error()[i+len(marker):])[0]
+	j := strings.Index(cond, "|")
+	if j < 0 {
+		t.Fatalf("condition annoncée sans état lié : %q", cond)
+	}
+	return base + cond[j:]
+}
+
 func (pf *provFixture) proof(t *testing.T, condition string, n int) {
 	t.Helper()
+	condition = pf.boundCondition(t, condition)
 	expiry := time.Now().Add(60 * time.Second)
 	msg := pep.QuorumMessage(condition, pf.cellID, expiry)
 	var sigs []measuredBootTransitionSigWire
@@ -256,6 +290,7 @@ func TestPepdKeyringTransitionCannotBeSelfAuthorized(t *testing.T) {
 // proofBy écrit une preuve de transition signée par EXACTEMENT ces clés.
 func (pf *provFixture) proofBy(t *testing.T, condition string, privs ...ed25519.PrivateKey) {
 	t.Helper()
+	condition = pf.boundCondition(t, condition)
 	expiry := time.Now().Add(60 * time.Second)
 	msg := pep.QuorumMessage(condition, pf.cellID, expiry)
 	var sigs []measuredBootTransitionSigWire
@@ -367,6 +402,8 @@ func TestPepdLostQuorumIsRecoveredByReEngagement(t *testing.T) {
 	if err := os.Rename(pf.witness, pf.witness+".perdu"); err != nil {
 		t.Fatal(err)
 	}
+	// l'état de départ a changé (plus de témoin : from nul) : la preuve se re-signe (#236)
+	pf.proofBy(t, conditionProvisioningTransition, fresh)
 	if err := pf.setup(t); err != nil {
 		t.Fatalf("ré-engagement signé par la nouvelle clé refusé : %v", err)
 	}
@@ -445,5 +482,58 @@ func TestPepdTopologyChangeIsAGovernedTransition(t *testing.T) {
 	pf.proofBy(t, conditionProvisioningTransition, a, b)
 	if err := pf.setup(t); err != nil {
 		t.Fatalf("changement de topologie signé par le quorum refusé : %v", err)
+	}
+}
+
+// --- issue #236 : la preuve de transition est liée à l'état cible -----------------
+
+func (pf *provFixture) logSize(t *testing.T) uint64 {
+	t.Helper()
+	_, size, err := pf.cellLog.Head(pf.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return size
+}
+
+// Reproduction de l'attaque de la revue red team : une rotation légitime est signée par
+// le quorum ; le fichier de preuve reste en place ; qui peut écrire le trousseau y ajoute
+// ensuite SA clé, et redémarre. Avant #236 la preuve (liée à la seule condition) ré-engageait
+// n'importe quel état présent au démarrage, et le nouvel état devenait la référence.
+func TestPepdTransitionProofDoesNotAuthorizeAnotherState(t *testing.T) {
+	pf := newProvFixture(t)
+	if err := pf.setup(t); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pf.keyring, []byte(`{"00":"aa","01":"bb"}`), 0o600); err != nil { // rotation légitime
+		t.Fatal(err)
+	}
+	pf.proof(t, conditionProvisioningTransition, pf.quorumMin) // signée pour CET état
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("la rotation légitime signée est refusée : %v", err)
+	}
+
+	// L'attaquant ajoute sa clé ; la MÊME preuve est toujours en place.
+	if err := os.WriteFile(pf.keyring, []byte(`{"00":"aa","01":"bb","ff":"attaquant"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := pf.logSize(t)
+	err := pf.setup(t)
+	if err == nil {
+		t.Fatal("une preuve signée pour un autre état a ré-engagé l'état de l'attaquant (#236)")
+	}
+	if !strings.Contains(err.Error(), "condition à signer") {
+		t.Fatalf("le refus ne dit pas quelle condition signer : %v", err)
+	}
+	if pf.logSize(t) <= before {
+		t.Fatal("aucune feuille de refus écrite")
+	}
+	// Rétrograder à l'état précédent avec la preuve de la rotation (aller) : refusé aussi —
+	// la preuve est consommée par la progression de l'attesté.
+	if err := os.WriteFile(pf.keyring, []byte(`{"00":"aa"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pf.setup(t); err == nil {
+		t.Fatal("la preuve de la rotation a servi à revenir à l'état précédent (#236)")
 	}
 }

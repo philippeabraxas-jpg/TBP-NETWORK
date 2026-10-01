@@ -377,3 +377,32 @@ func TestPlanApproveAndBindMatchWhatBrokerdVerifies(t *testing.T) {
 		t.Fatal("paramètres mal formés acceptés")
 	}
 }
+
+// Issue #236 : la condition d'une transition porte l'état de départ et l'état cible ; la
+// preuve signée sur la condition annoncée par le démon vaut pour elle, et pour aucune autre paire.
+func TestSignedTransitionConditionBindsTheTargetState(t *testing.T) {
+	dir := t.TempDir()
+	admin, f := keyFile(t, dir, "admin", 9)
+	from, to, other := [32]byte{1}, [32]byte{2}, [32]byte{3}
+	cond := pep.TransitionCondition("provisioning-transition-pepd", from, to)
+	if !strings.Contains(cond, "|from=01") || !strings.Contains(cond, "|to=02") {
+		t.Fatalf("condition sans état lié : %q", cond)
+	}
+	out := filepath.Join(dir, "p.json")
+	if err := cmdSign([]string{"-condition", cond, "-cell", "cell-a", "-key", f, "-out", out}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pep.VerifyQuorumProofFile(out, cond, "cell-a", keyringOf(admin), 1); err != nil {
+		t.Fatalf("la preuve signée sur la condition annoncée est refusée : %v", err)
+	}
+	for name, c := range map[string]string{
+		"autre cible":       pep.TransitionCondition("provisioning-transition-pepd", from, other),
+		"autre départ":      pep.TransitionCondition("provisioning-transition-pepd", other, to),
+		"retour (inversée)": pep.TransitionCondition("provisioning-transition-pepd", to, from),
+		"sans état":         "provisioning-transition-pepd",
+	} {
+		if err := pep.VerifyQuorumProofFile(out, c, "cell-a", keyringOf(admin), 1); err == nil {
+			t.Fatalf("la preuve vaut aussi pour %s", name)
+		}
+	}
+}

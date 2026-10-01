@@ -533,16 +533,40 @@ func runDaemons(s *suite, cfg config) {
 		// exécutable, pas seulement le code).
 		"TBP_BROKER_ADMIN_SOCKET="+brokerAdminSock,
 	)
-	// Adoption de #192 sur un registre qui a DÉJÀ vécu (ici : le harness y a écrit
-	// des feuilles avant le premier démarrage de brokerd, comme le ferait une cellule
-	// déployée avant cette brique) : sans témoin, brokerd refuse — un fichier édité
-	// serait sinon ré-engagé comme « premier démarrage » (§111). Le SEUL geste
-	// d'adoption est une preuve de quorum, bornée à CE démon et à cette condition ;
-	// elle ne sert qu'au premier démarrage (les suivants n'en ont plus besoin).
+
+	// Adoption de #192 sur un registre qui a DÉJÀ vécu (ici : le harness y a écrit des
+	// feuilles avant le premier démarrage de brokerd, comme le ferait une cellule déployée
+	// avant cette brique) : sans témoin, brokerd refuse — un fichier édité serait sinon
+	// ré-engagé comme « premier démarrage » (§111). Le SEUL geste d'adoption est une preuve
+	// de quorum. Geste de l'opérateur (issue #236) : brokerd REFUSE sans preuve et annonce la
+	// condition à signer (état de départ — aucun témoin — et état cible) ; les contrôleurs
+	// signent exactement celle-ci. Le démon est borné : un démon qui ne refuse pas (il sert)
+	// est arrêté et l'adoption est signalée en échec.
 	provProof := filepath.Join(base, "provisioning-proof.json")
 	{
+		probe, err := startDaemon(brokerdBin, brokerEnv, filepath.Join(base, "brokerd-adoption-refus.log"))
+		if err != nil {
+			s.fail(phaseDaemons, "brokerd: démarrage sans preuve (adoption)", err)
+			return
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- probe.cmd.Wait() }()
+		var rerr error
+		select {
+		case rerr = <-exited:
+		case <-time.After(20 * time.Second):
+			probe.stop()
+			rerr = nil
+		}
+		refusal, _ := os.ReadFile(filepath.Join(base, "brokerd-adoption-refus.log"))
+		cond, ok := conditionToSign(string(refusal))
+		s.add(phaseDaemons, "brokerd: refus sans preuve, et la condition à signer (départ, cible) est annoncée (#236)",
+			rerr != nil && ok, strings.TrimSpace(cond))
+		if !ok || rerr == nil {
+			return
+		}
 		expiry := time.Now().Add(4 * time.Minute)
-		msg := pep.QuorumMessage("provisioning-transition-brokerd", daemonsCellID, expiry)
+		msg := pep.QuorumMessage(cond, daemonsCellID, expiry)
 		type sigWire struct {
 			KeyID     string `json:"key_id"`
 			Signature string `json:"signature"`
@@ -984,4 +1008,20 @@ func runDaemons(s *suite, cfg config) {
 			err == nil && status == http.StatusOK && !actV.Allow && statsA.QuorumDenies == 1 && age < 4*time.Minute,
 			fmt.Sprintf("allow=%v reason=%s quorum_denies=%d âge_preuve=%s", actV.Allow, actV.Reason, statsA.QuorumDenies, age.Round(time.Second)))
 	}
+}
+
+// conditionToSign extrait de la sortie d'un démon la condition annoncée par son refus
+// (« condition à signer : base|from=…|to=… », issue #236) — ce que l'opérateur copie
+// dans « quorumproof sign -condition ».
+func conditionToSign(out string) (string, bool) {
+	const marker = "condition à signer : "
+	i := strings.Index(out, marker)
+	if i < 0 {
+		return "", false
+	}
+	f := strings.Fields(out[i+len(marker):])
+	if len(f) == 0 || !strings.Contains(f[0], "|from=") || !strings.Contains(f[0], "|to=") {
+		return "", false
+	}
+	return f[0], true
 }

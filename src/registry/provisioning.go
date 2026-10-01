@@ -463,7 +463,12 @@ type ProvisioningGuardOptions struct {
 	// courant que l'attaquant vient d'éditer (issue #218). prev est nil quand il n'y
 	// a rien d'attesté à opposer — premier démarrage, ou ré-engagement après
 	// effacement du témoin (confiance à la première utilisation, documentée).
-	AuthorizeTransition func(prev map[string][]byte) error
+	//
+	// from est le condensé ATTESTÉ (celui du dernier témoin ; nul en l'absence de
+	// témoin) et to le condensé de l'état CIBLE mesuré. La preuve doit les lier
+	// (issue #236) : sans cela une preuve valide ré-engagerait n'importe quel état
+	// présent au démarrage, et se rejouerait pour revenir à un état antérieur.
+	AuthorizeTransition func(prev map[string][]byte, from, to [32]byte) error
 	OnTrip              func(reason string)
 	Now                 func() time.Time
 }
@@ -560,7 +565,7 @@ func (g *ProvisioningGuard) Check(ctx context.Context) error {
 		// Rien d'attesté à opposer (le témoin est perdu) : prev = nil, le démon
 		// retombe sur le trousseau courant. C'est un acte d'installation, pas une
 		// transition — documenté (issue #218).
-		if aerr := g.o.AuthorizeTransition(nil); aerr != nil {
+		if aerr := g.o.AuthorizeTransition(nil, [32]byte{}, digest); aerr != nil {
 			g.trip("provisioning-witness-missing")
 			return g.refuse(ctx, digest, 0, "witness-missing", fmt.Errorf("%w : autorisation refusée : %v", ErrProvisioningWitnessMissing, aerr))
 		}
@@ -589,7 +594,7 @@ func (g *ProvisioningGuard) Check(ctx context.Context) error {
 		return g.refuse(ctx, digest, last.Seq, "divergence", fmt.Errorf("%w : %s (témoin d'avant #218 sans instantané des fichiers d'autorité : ré-engager explicitement)", ErrProvisioningDivergence, changed))
 	}
 	if g.o.AuthorizeTransition != nil {
-		if aerr := g.o.AuthorizeTransition(last.Authorities); aerr == nil {
+		if aerr := g.o.AuthorizeTransition(last.Authorities, last.Digest, digest); aerr == nil {
 			next := ProvisioningWitness{Seq: last.Seq + 1, Prev: HashManifest(marshalWitnessRecord(*last)), Authorities: authorities}
 			return g.commit(ctx, provEventTransition, next, digest, per, "transition")
 		} else {

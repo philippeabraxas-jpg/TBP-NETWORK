@@ -279,6 +279,8 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #   TBP_MEASURED_BOOT_BROKER_BINARY=/usr/local/bin/brokerd
 #   TBP_MEASURED_BOOT_AI_CONTAINER=<container image digest or path>
 #   TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE=/etc/tbp/measured-boot-transition-proof.json
+#                                  # (the proof signs the condition the daemon prints
+#                                  # when it refuses: measured-boot-transition|from=…|to=…, #236)
 #                                  # optional — only present for a DELIBERATE
 #                                  # reference re-engagement (bundle/config
 #                                  # update). security review #112: replaces
@@ -627,14 +629,21 @@ scope used to pass without any alarm.
 
   ```bash
   go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
-  quorumproof sign -condition provisioning-transition-brokerd -cell cell-a \
+  # 1. start WITHOUT a proof: the daemon refuses and prints what to sign, e.g.
+  #      condition to sign: provisioning-transition-brokerd|from=<attested digest>|to=<target digest>
+  # 2. the controllers sign EXACTLY that condition (they see what they approve)
+  quorumproof sign -condition 'provisioning-transition-brokerd|from=…|to=…' -cell cell-a \
     -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
-  # then in brokerd.env: TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
-  # restart, check it started, and REMOVE the line (the proof lives 4 minutes by default)
+  # 3. in brokerd.env: TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
+  #    restart, check it started, and REMOVE the line (the proof lives 4 minutes by default)
   ```
 
   Conditions: `provisioning-transition-brokerd` and `provisioning-transition-pepd` (a
-  proof for one never works for the other, nor for a posture switch). Controllers whose
+  proof for one never works for the other, nor for a posture switch). **A proof is bound
+  to the state it approves (issue #236)**: the condition carries the attested digest
+  (`from`) and the target digest (`to`). It re-engages no other state — if the file is
+  edited again after you signed, the daemon refuses and prints the new condition — and
+  it cannot bring the previous state back once the transition has happened. Controllers whose
   keys live in an HSM use `quorumproof message` (what to sign) and `quorumproof assemble`.
 - **Who may sign a change (issue #218).** The proof is checked against the controller
   keys *as attested in the witness* (the quorum keyring for `pepd`, the genesis manifest

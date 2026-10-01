@@ -149,7 +149,7 @@ TBP_QUORUM_MIN=1 /usr/local/bin/brokerd     # in the same environment otherwise
 **Observable success criterion**: `brokerd` **refuses to start** and names `quorum-settings`. Even a
 transition proof signed by **one** controller does not authorise it: the change is authorised only by the
 quorum that was **attested** (2), not by the one you just wrote. Signed by two controllers
-(`quorumproof sign -condition provisioning-transition-brokerd -cell cell-a -key … -key …`, then
+(`quorumproof sign -condition '<the condition the refusal prints: provisioning-transition-brokerd|from=…|to=…>' -cell cell-a -key … -key …`, then
 `TBP_PROVISIONING_TRANSITION_PROOF_FILE`) it is accepted — and `brokerd` then warns at every start that
 `k = 1`. Moving up a scale is the same governed act in the other direction.
 

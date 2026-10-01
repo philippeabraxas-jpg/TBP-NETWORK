@@ -288,6 +288,8 @@ service.
 #   TBP_MEASURED_BOOT_BROKER_BINARY=/usr/local/bin/brokerd
 #   TBP_MEASURED_BOOT_AI_CONTAINER=<digest ou chemin de l'image conteneur>
 #   TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE=/etc/tbp/measured-boot-transition-proof.json
+#                                  # (la preuve signe la condition que le démon affiche en
+#                                  # refusant : measured-boot-transition|from=…|to=…, #236)
 #                                  # optionnel — présent seulement pour une
 #                                  # ré-engagement DÉLIBÉRÉ de la référence
 #                                  # (mise à jour de bundle/config). Revue de
@@ -663,14 +665,21 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
 
   ```bash
   go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
-  quorumproof sign -condition provisioning-transition-brokerd -cell cell-a \
+  # 1. démarrer SANS preuve : le démon refuse et affiche ce qu'il faut signer, par ex.
+  #      condition à signer : provisioning-transition-brokerd|from=<condensé attesté>|to=<condensé cible>
+  # 2. les contrôleurs signent EXACTEMENT cette condition (ils voient ce qu'ils approuvent)
+  quorumproof sign -condition 'provisioning-transition-brokerd|from=…|to=…' -cell cell-a \
     -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
-  # puis dans brokerd.env : TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
-  # redémarrer, vérifier le démarrage, puis RETIRER la ligne (la preuve vit 4 minutes par défaut)
+  # 3. dans brokerd.env : TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
+  #    redémarrer, vérifier le démarrage, puis RETIRER la ligne (la preuve vit 4 minutes par défaut)
   ```
 
   Conditions : `provisioning-transition-brokerd` et `provisioning-transition-pepd` (la preuve
-  de l'un ne vaut jamais pour l'autre, ni pour une bascule de posture). Les contrôleurs dont
+  de l'un ne vaut jamais pour l'autre, ni pour une bascule de posture). **Une preuve est liée
+  à l'état qu'elle approuve (issue #236)** : la condition porte le condensé attesté (`from`)
+  et le condensé cible (`to`). Elle ne ré-engage aucun autre état — si le fichier est édité
+  de nouveau après la signature, le démon refuse et affiche la nouvelle condition — et elle
+  ne ramène pas l'état précédent une fois la transition faite. Les contrôleurs dont
   la clé est dans un HSM utilisent `quorumproof message` (ce qu'il faut signer) puis
   `quorumproof assemble`.
 - **Qui peut signer un changement (issue #218).** La preuve est vérifiée contre les clés de

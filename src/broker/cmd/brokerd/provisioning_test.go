@@ -153,7 +153,45 @@ func boot(t *testing.T, fx *runFixture, sock string) error {
 }
 
 // signProof écrit une preuve de quorum pour UNE condition, signée par les n premiers contrôleurs.
+// signProof fait ce que fait l'opérateur : il lit dans le REFUS de brokerd la
+// condition à signer (« base|from=…|to=… », issue #236), la signe avec n
+// contrôleurs et pose le fichier de preuve. `condition` est la BASE : les tests de
+// mauvais usage (condition d'un autre démon, d'une bascule de posture) gardent la
+// bonne paire (départ, cible) pour ne prouver que l'erreur de base.
 func signProof(t *testing.T, fx *runFixture, path, condition string, n int) {
+	t.Helper()
+	saved, had := fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"]
+	delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	err := boot(t, fx, fx.sock)
+	if had {
+		fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = saved
+	}
+	if err == nil {
+		t.Fatal("signProof : pas de divergence à autoriser (le démarrage est conforme)")
+	}
+	condition = conditionFromRefusal(t, err, condition)
+	signConditionBy(t, fx, path, condition, n)
+}
+
+// conditionFromRefusal extrait « |from=…|to=… » du refus et le greffe sur base.
+func conditionFromRefusal(t *testing.T, err error, base string) string {
+	t.Helper()
+	const marker = "condition à signer : "
+	i := strings.Index(err.Error(), marker)
+	if i < 0 {
+		t.Fatalf("le refus n'annonce pas la condition à signer : %v", err)
+	}
+	cond := strings.Fields(err.Error()[i+len(marker):])[0]
+	j := strings.Index(cond, "|")
+	if j < 0 {
+		t.Fatalf("condition annoncée sans état lié : %q", cond)
+	}
+	return base + cond[j:]
+}
+
+// signConditionBy écrit une preuve signée par les n premiers contrôleurs sur
+// EXACTEMENT cette condition.
+func signConditionBy(t *testing.T, fx *runFixture, path, condition string, n int) {
 	t.Helper()
 	expiry := time.Now().Add(60 * time.Second)
 	msg := pep.QuorumMessage(condition, "cell-a", expiry)
@@ -518,11 +556,12 @@ func TestBrokerdEpoch0SignerReplacedNeedsResign(t *testing.T) {
 	}
 	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
 	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
-	signProof(t, fx, proof, conditionProvisioningTransition, 2) // rangs 1 et 2, attestés
 
 	_, fresh, _ := ed25519.GenerateKey(nil)
 	signers := []ed25519.PrivateKey{fx.controllerPrivs[0], fresh, fx.controllerPrivs[2]} // le rang 2 est remplacé
 	writeManifest(t, fx, pubs(signers)...)
+	// la preuve se signe APRÈS l'édition : elle porte l'état cible (#236)
+	signProof(t, fx, proof, conditionProvisioningTransition, 2) // rangs 1 et 2, attestés
 	if err := boot(t, fx, sock); err == nil || !strings.Contains(err.Error(), "epoch0") {
 		t.Fatalf("epoch0 signé par une clé retirée accepté, ou autre cause : %v", err)
 	}
@@ -550,8 +589,8 @@ func TestBrokerdRemovingAControllerByShiftingRanksIsRefused(t *testing.T) {
 	}
 	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
 	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
-	signProof(t, fx, proof, conditionProvisioningTransition, 2)
 	writeManifest(t, fx, pubs(fx.controllerPrivs[1:])...) // supprime le rang 1 : les rangs glissent
+	signProof(t, fx, proof, conditionProvisioningTransition, 2) // après l'édition : la preuve porte l'état cible (#236)
 	err := boot(t, fx, sock)
 	if err == nil || !strings.Contains(err.Error(), "epoch0") {
 		t.Fatalf("manifeste aux rangs décalés accepté, ou autre cause : %v", err)
@@ -589,5 +628,49 @@ func TestBrokerdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
 	delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
 	if err := boot(t, fx, sock); err != nil {
 		t.Fatalf("nouveau k non retenu : %v", err)
+	}
+}
+
+// Issue #236 : la preuve de transition est liée à l'état de départ ET à l'état cible.
+// Une rotation légitime est signée ; la preuve reste en place ; un état différent
+// (agent ajouté hors-bande) ne doit pas être ré-engagé par elle, ni l'état précédent
+// restauré avec elle.
+func TestBrokerdTransitionProofDoesNotAuthorizeAnotherState(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	original, _ := os.ReadFile(fx.agentsFile)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+
+	// changement légitime signé par le quorum
+	if err := os.WriteFile(fx.agentsFile, []byte(strings.Replace(string(original), "{", `{"agent-9":{"class":3},`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("la transition signée est refusée : %v", err)
+	}
+
+	// l'attaquant ajoute SON agent ; la même preuve est toujours en place
+	if err := os.WriteFile(fx.agentsFile, []byte(strings.Replace(string(original), "{", `{"agent-9":{"class":3},"agent-evil":{"class":3},`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := boot(t, fx, sock)
+	if err == nil {
+		t.Fatal("une preuve signée pour un autre état a ré-engagé l'état de l'attaquant (#236)")
+	}
+	if !strings.Contains(err.Error(), "condition à signer") {
+		t.Fatalf("le refus ne dit pas quelle condition signer : %v", err)
+	}
+	// et on ne revient pas à l'état précédent avec la preuve de l'aller
+	if err := os.WriteFile(fx.agentsFile, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("la preuve de la transition aller a servi à revenir à l'état précédent (#236)")
 	}
 }

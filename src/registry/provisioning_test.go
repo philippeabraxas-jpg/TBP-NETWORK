@@ -267,7 +267,7 @@ func TestAuthorizedTransitionReEngagesTheReference(t *testing.T) {
 	e.edit("agents.json", `{"agent-1":{"class":2},"agent-2":{"class":3}}`) // ajout légitime d'un agent
 
 	var asked int
-	e.opts.AuthorizeTransition = func(map[string][]byte) error { asked++; return nil }
+	e.opts.AuthorizeTransition = func(map[string][]byte, [32]byte, [32]byte) error { asked++; return nil }
 	if err := e.guard().Check(context.Background()); err != nil {
 		t.Fatalf("transition autorisée refusée : %v", err)
 	}
@@ -299,7 +299,7 @@ func TestRefusedAuthorizationKeepsTheBootRefused(t *testing.T) {
 	}
 	e.log.size = 1
 	e.edit("agents.json", `{"agent-1":{"class":0}}`)
-	e.opts.AuthorizeTransition = func(map[string][]byte) error { return errors.New("quorum insuffisant") }
+	e.opts.AuthorizeTransition = func(map[string][]byte, [32]byte, [32]byte) error { return errors.New("quorum insuffisant") }
 	err := e.guard().Check(context.Background())
 	if !errors.Is(err, ErrProvisioningDivergence) || !strings.Contains(err.Error(), "quorum insuffisant") {
 		t.Fatalf("transition non autorisée acceptée ou raison perdue : %v", err)
@@ -332,7 +332,7 @@ func TestErasedWitnessOnUsedLogIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.log.size = 5
-	e.opts.AuthorizeTransition = func(map[string][]byte) error { return nil }
+	e.opts.AuthorizeTransition = func(map[string][]byte, [32]byte, [32]byte) error { return nil }
 	if err := e.guard().Check(context.Background()); err != nil {
 		t.Fatalf("ré-engagement autorisé refusé : %v", err)
 	}
@@ -582,7 +582,7 @@ func TestAuthoritySnapshotIsCommittedAndPassedToAuthorize(t *testing.T) {
 	// le fichier est remplacé : l'autorisation reçoit l'ANCIEN contenu, pas le courant
 	e.edit("agents.json", `{"attacker":{"class":3}}`)
 	var seen string
-	e.opts.AuthorizeTransition = func(prev map[string][]byte) error {
+	e.opts.AuthorizeTransition = func(prev map[string][]byte, _, _ [32]byte) error {
 		seen = string(prev["agents.json"])
 		return nil
 	}
@@ -680,7 +680,7 @@ func TestLegacyWitnessDivergenceIsRefusedEvenWithAProof(t *testing.T) {
 	e.log.size = 1
 	e.legacyWitness()
 	e.edit("agents.json", `{"attacker":{"class":3}}`)
-	e.opts.AuthorizeTransition = func(map[string][]byte) error { return nil } // « preuve » valide
+	e.opts.AuthorizeTransition = func(map[string][]byte, [32]byte, [32]byte) error { return nil } // « preuve » valide
 	if err := e.guard().Check(context.Background()); !errors.Is(err, ErrProvisioningDivergence) {
 		t.Fatalf("rétrogradation par témoin v1 acceptée : %v", err)
 	}
@@ -697,7 +697,7 @@ func TestReEngagementPassesNilPrev(t *testing.T) {
 	e.log.size = 5
 	called := false
 	var gotPrev map[string][]byte = map[string][]byte{"x": nil}
-	e.opts.AuthorizeTransition = func(prev map[string][]byte) error { called = true; gotPrev = prev; return nil }
+	e.opts.AuthorizeTransition = func(prev map[string][]byte, _, _ [32]byte) error { called = true; gotPrev = prev; return nil }
 	if err := e.guard().Check(context.Background()); err != nil || !called || gotPrev != nil {
 		t.Fatalf("ré-engagement : err=%v called=%v prev=%v", err, called, gotPrev)
 	}
@@ -726,7 +726,7 @@ func TestInlineSettingIsMeasuredAndRetained(t *testing.T) {
 		t.Fatalf("réglage modifié sans preuve : %v", err)
 	}
 	var seen string
-	e.opts.AuthorizeTransition = func(prev map[string][]byte) error { seen = string(prev["quorum-settings"]); return nil }
+	e.opts.AuthorizeTransition = func(prev map[string][]byte, _, _ [32]byte) error { seen = string(prev["quorum-settings"]); return nil }
 	if err := e.guard().Check(context.Background()); err != nil {
 		t.Fatalf("transition autorisée refusée : %v", err)
 	}

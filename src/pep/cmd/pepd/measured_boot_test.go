@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +133,14 @@ func newMeasuredBootFixture(t *testing.T) *measuredBootFixture {
 // signature (quorum insuffisant).
 func (fx *measuredBootFixture) writeTransitionProof(t *testing.T, nSigs int, wrongKey bool, expiry time.Time) string {
 	t.Helper()
-	msg := pep.QuorumMessage(reasonMeasuredBootTransition, fx.cellID, expiry)
+	// Comme l'opérateur : la condition (« base|from=…|to=… », #236) est lue dans le
+	// refus du démarrage sans preuve, puis signée.
+	delete(fx.env, "TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE")
+	refusal := fx.run(t)
+	if refusal == nil {
+		t.Fatal("writeTransitionProof : pas de divergence à autoriser (le démarrage est conforme)")
+	}
+	msg := pep.QuorumMessage(conditionFromRefusal(t, refusal, reasonMeasuredBootTransition), fx.cellID, expiry)
 	var sigs []measuredBootTransitionSigWire
 	i := 0
 	for kid, priv := range fx.quorumPrivs {
@@ -363,5 +371,46 @@ func TestSetupMeasuredBootTransitionValidProofReEngagesReference(t *testing.T) {
 	// Démarrage suivant, état désormais stable : admis.
 	if err := fx.run(t); err != nil {
 		t.Fatalf("CheckBoot refusé après ré-engagement de la référence: %v", err)
+	}
+}
+
+// TestSetupMeasuredBootTransitionProofDoesNotAuthorizeAnotherState (#236) : une preuve
+// signée pour la mise à jour A ne ré-engage pas un état B (autre composant altéré), même
+// laissée en place ; et elle ne ramène pas à l'état d'avant.
+func TestSetupMeasuredBootTransitionProofDoesNotAuthorizeAnotherState(t *testing.T) {
+	fx := newMeasuredBootFixture(t)
+	if err := fx.run(t); err != nil {
+		t.Fatalf("genèse refusée: %v", err)
+	}
+	original, err := os.ReadFile(fx.componentPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fx.componentPaths[0], []byte("mise à jour A, approuvée"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.writeTransitionProof(t, 2, false, time.Now().Add(time.Minute))
+	if err := fx.run(t); err != nil {
+		t.Fatalf("la transition signée est refusée: %v", err)
+	}
+
+	// Le binaire du broker est ensuite altéré ; la preuve de A est toujours en place.
+	if err := os.WriteFile(fx.componentPaths[2], []byte("binaire altéré par l'attaquant"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = fx.run(t)
+	if err == nil {
+		t.Fatal("une preuve signée pour la mise à jour A a ré-engagé un autre état altéré (#236)")
+	}
+	if !strings.Contains(err.Error(), "condition à signer") {
+		t.Fatalf("le refus ne dit pas quelle condition signer : %v", err)
+	}
+
+	// Retour à l'état d'avant A avec la preuve de A : refusé (la référence a progressé).
+	if err := os.WriteFile(fx.componentPaths[0], original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.run(t); err == nil {
+		t.Fatal("la preuve de A a servi à revenir à l'état précédent (#236)")
 	}
 }
