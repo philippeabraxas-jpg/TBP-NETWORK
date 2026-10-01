@@ -69,3 +69,13 @@ tests/p2_redteam/out/
 # OPA, capabilities strippées, keyring DEV, registres tessera locaux
 # (cell_log.key), rapport JSON. Régénérés à chaque run, jamais commités.
 deploy/selftest/out/
+
+# Binaires compilés à la racine : « go build ./src/…/cmd/X » sans -o dépose le binaire dans le
+# répertoire courant. Deux binaires (brokerd, quorumproof) ont été commités par erreur (#253, #248) ;
+# toujours « go build -o /tmp/… » ou « go install ». Les binaires du selftest vivent dans deploy/selftest/out/.
+/brokerd
+/pepd
+/anod
+/supervisord
+/quorumproof
+/tmetrics
