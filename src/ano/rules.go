@@ -30,7 +30,8 @@ package ano
 //
 // Les motifs s'appliquent aussi à la forme TEXTE d'un nombre JSON (#238) : un
 // nombre ne peut pas porter un jeton partiel, une correspondance masque donc la
-// feuille entière (le jeton restitue le nombre d'origine au retour).
+// feuille entière (le jeton restitue le nombre d'origine au retour). Un nombre en notation
+// exponentielle est jugé aussi sous sa forme décimale pleine (« 4.1e15 » → « 4100000000000000 »).
 //
 // Les motifs sont des regex RE2 (bibliothèque standard Go : temps linéaire,
 // pas de retour arrière catastrophique) appliquées aux CHAÎNES restantes
