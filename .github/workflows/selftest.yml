@@ -26,8 +26,8 @@ jobs:
   go:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
@@ -45,14 +45,14 @@ jobs:
   selftest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
           # une décision délibérée (govulncheck dit quand), jamais un effet de bord.
           go-version: "1.27.1"
-      - uses: open-policy-agent/setup-opa@34a30e8a924d1b03ce2cf7abe97250bbb1f332b5  # v2.2.0
+      - uses: open-policy-agent/setup-opa@b2b258e089860efaadaaf71bf6e3aecb4a3eeff1  # v2.4.0
         with:
           # Épinglé — même raison et même version que lint.yml/determinism.yml.
           version: 1.20.2
