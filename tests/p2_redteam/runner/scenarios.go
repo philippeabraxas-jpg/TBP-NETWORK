@@ -339,23 +339,23 @@ func scenarioBrokerFlood(ctx context.Context, cfg Config, sink *countingSink, sa
 // contractGate est la couture consommée par le scénario — le mutant M-S6
 // l'implémente en avalant les déviations.
 type contractGate interface {
-	Submit(ctx context.Context, steps []pep.PlanStep) ([32]byte, error)
+	Submit(ctx context.Context, subject string, steps []pep.PlanStep) ([32]byte, error)
 	Approve(ctx context.Context, planHash [32]byte, expiry time.Time, sig []byte) error
-	VerifyStep(ctx context.Context, binding []byte, action, resource string) ([32]byte, error)
+	VerifyStep(ctx context.Context, subject string, binding []byte, action, resource string) ([32]byte, error)
 }
 
 // mutantDevStore (M-S6) accepte toute déviation de plan — l'écart
 // approuvé/exécuté n'est plus refusé. Le scénario doit le détecter.
 type mutantDevStore struct{ inner contractGate }
 
-func (m mutantDevStore) Submit(ctx context.Context, steps []pep.PlanStep) ([32]byte, error) {
-	return m.inner.Submit(ctx, steps)
+func (m mutantDevStore) Submit(ctx context.Context, subject string, steps []pep.PlanStep) ([32]byte, error) {
+	return m.inner.Submit(ctx, subject, steps)
 }
 func (m mutantDevStore) Approve(ctx context.Context, h [32]byte, e time.Time, s []byte) error {
 	return m.inner.Approve(ctx, h, e, s)
 }
-func (m mutantDevStore) VerifyStep(ctx context.Context, b []byte, a, r string) ([32]byte, error) {
-	seal, err := m.inner.VerifyStep(ctx, b, a, r)
+func (m mutantDevStore) VerifyStep(ctx context.Context, subject string, b []byte, a, r string) ([32]byte, error) {
+	seal, err := m.inner.VerifyStep(ctx, subject, b, a, r)
 	if err != nil {
 		return seal, nil // mutation : le refus de déviation est avalé
 	}
@@ -381,7 +381,7 @@ func scenarioLyingPlan(ctx context.Context, cfg Config, sink *countingSink, salt
 	// Le plan arbitré : lire registry/docs/42 avec des paramètres scellés.
 	params := []byte(`{"format":"liste","max":50}`)
 	steps := []pep.PlanStep{{Action: "read.list", Resource: "registry/docs/42", ParamsHash: pep.HashParams(params)}}
-	planHash, err := gate.Submit(ctx, steps)
+	planHash, err := gate.Submit(ctx, "agent-redteam", steps)
 	if err != nil {
 		return false, "", fmt.Errorf("submit: %w", err)
 	}
@@ -396,7 +396,7 @@ func scenarioLyingPlan(ctx context.Context, cfg Config, sink *countingSink, salt
 	if err != nil {
 		return false, "", fmt.Errorf("binding honnête: %w", err)
 	}
-	if _, err := gate.VerifyStep(ctx, bindingOK, "read.list", "registry/docs/42"); err != nil {
+	if _, err := gate.VerifyStep(ctx, "agent-redteam", bindingOK, "read.list", "registry/docs/42"); err != nil {
 		return false, "", fmt.Errorf("exécution honnête refusée (%v) — faux positif du contrat", err)
 	}
 
@@ -406,7 +406,7 @@ func scenarioLyingPlan(ctx context.Context, cfg Config, sink *countingSink, salt
 	if err != nil {
 		return false, "", fmt.Errorf("binding dévié: %w", err)
 	}
-	_, errDev := gate.VerifyStep(ctx, bindingEvil, "read.list", "registry/docs/42")
+	_, errDev := gate.VerifyStep(ctx, "agent-redteam", bindingEvil, "read.list", "registry/docs/42")
 	if errDev == nil {
 		return false, "déviation de paramètres ACCEPTÉE — le plan menteur passe (§4.2 violé)", nil
 	}
@@ -713,7 +713,7 @@ func (mutantAcceptGate) VerifyClassW(_ context.Context, _ []byte, _, _ string, _
 // exige désormais un plan_binding pour toute action classe W, y compris ici.
 type permissiveContractGate struct{}
 
-func (permissiveContractGate) VerifyStep(_ context.Context, _ []byte, _, _ string) ([32]byte, error) {
+func (permissiveContractGate) VerifyStep(_ context.Context, _ string, _ []byte, _, _ string) ([32]byte, error) {
 	return [32]byte{}, nil
 }
 

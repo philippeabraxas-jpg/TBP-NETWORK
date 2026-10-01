@@ -116,9 +116,9 @@ provisionnement ».
 action ; l'agent présente les deux :
 
 ```bash
-# 1. soumettre le plan (socket d'administration) — répond {"plan_hash": "<hex>"}
+# 1. soumettre le plan POUR un agent (socket d'administration ; "subject" doit être au registre, et lui seul peut le dérouler, #235) — répond {"plan_hash": "<hex>"}
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
-  -d '{"steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
+  -d '{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
   http://localhost/v1/supervision/plan/submit
 # 2. l'opérateur l'approuve avec la clé d'opérateur, puis le corps est posté
 quorumproof planapprove -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/approval.json
