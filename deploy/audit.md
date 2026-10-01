@@ -80,8 +80,10 @@ Wired so far:
 |---|---|---|
 | `pepd` — decisions: validator (`TBPD1`/`TBPD2`), OPA client, quota cuts, dry-run refusals | `KindDecision` | `TBP_AUDIT_RECORDS` (journal path) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Required** by `pepd` (no journal ⇒ it does not start). A journal that refuses a write ⇒ no leaf ⇒ an allow becomes a deny (`leaf-write-failed`). |
 | `pepd` — ano rewrite audit (`TBAN1`, #178) | `KindTelemetry` | same journal (shared) |
+| `brokerd` — decision chain (`TBPD1`), OPA client, plan contracts (`TBPL1`/`TBPL2`, signature included), class-W quorum (`TBPQ1`) | `KindDecision`, `KindContract`, `KindQuorum` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: `brokerd` does not start without them). Same fail-closed order: journal refuses ⇒ no leaf ⇒ the emission is refused. |
 
-Every other producer (brokerd, supervisord, the dry-run telemetry leaf, clock
-alarms, mode switches, fail-closed trips, provisioning, …) still appends a bare
-leaf: its leaves have no journal entry and `tbp-audit` has nothing to say about
-them. Wiring them is tracked in #275, one producer at a time.
+Every other producer (supervisord, the epoch tracker, the OPA revision watcher,
+the provisioning guard, dev-mode flags, the manifest, anchoring, the dry-run
+telemetry leaf, clock alarms, mode switches, fail-closed trips, …) still appends
+a bare leaf: its leaves have no journal entry and `tbp-audit` has nothing to say
+about them. Wiring them is tracked in #275, one producer at a time.

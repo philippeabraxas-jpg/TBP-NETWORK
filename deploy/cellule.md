@@ -366,6 +366,11 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   TBP_SALT=<32-char hex — salt of the BROKER's chain, generated here>
 #   TBP_POLICY_ID=<$POLICY_ID chosen at step 4 — NOT the bundle's own hash>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/broker
+#   TBP_AUDIT_RECORDS=/var/lib/tbp/broker-audit/records.jsonl  # #275: REQUIRED —
+#   TBP_AUDIT_RECORDS_KEY_FILE=/etc/tbp/broker-records.key  # encrypted cleartext of
+#                                      # the broker's decision / contract / quorum
+#                                      # leaves; key 0600 from `tbp-audit keygen`
+#                                      # (deploy/audit.md)
 #   TBP_OPA_ENDPOINT=http://opa/v1/data/tbp/example/action  # host part
 #                                      # irrelevant over TBP_OPA_SOCKET
 #   TBP_OPA_SOCKET=/run/tbp/opa.sock  # security review #92, A3: REQUIRED

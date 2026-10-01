@@ -37,6 +37,8 @@
 //	TBP_CELL_ID             identité de la cellule (ex. cell-a)
 //	TBP_SALT                sel des feuilles, hex ≥ 32 caractères (§6.2 —
 //	                        ne quitte JAMAIS la cellule)
+//	TBP_AUDIT_RECORDS       journal chiffré du clair des feuilles (#275, #271)
+//	TBP_AUDIT_RECORDS_KEY_FILE  sa clé (0600 ; `tbp-audit keygen`)
 //	TBP_POLICY_ID           hash du bundle de règles, hex 64 (§3, épinglé)
 //	TBP_REGISTRY_DIR        répertoire du CellLog du broker (sa propre
 //	                        chaîne — le broker feuille comme toute cellule)
@@ -253,7 +255,9 @@ type config struct {
 	devFlags    []string // échappatoires dev actives — consignées en feuille (#208)
 	policyID    [32]byte
 	registryDir string
-	opaEndpoint string
+	// journal d'enregistrements d'audit (#275) : clair chiffré des feuilles
+	auditRecords, auditKeyFile string
+	opaEndpoint                string
 	// Transport OPA durci (revue de sécurité #92, finding A3) : EXACTEMENT
 	// un des deux — opaSocket+opaExpectedUID (Unix + SO_PEERCRED) OU
 	// opaInsecureTCPDev (TCP non authentifié, dev/lab EXPLICITE).
@@ -323,6 +327,14 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	var policy [32]byte
 	copy(policy[:], policyBytes)
 	registryDir, err := envRequired(getenv, "TBP_REGISTRY_DIR")
+	if err != nil {
+		return nil, err
+	}
+	auditRecords, err := envRequired(getenv, "TBP_AUDIT_RECORDS")
+	if err != nil {
+		return nil, err
+	}
+	auditKeyFile, err := envRequired(getenv, "TBP_AUDIT_RECORDS_KEY_FILE")
 	if err != nil {
 		return nil, err
 	}
@@ -483,6 +495,8 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		devFlags:             devFlags,
 		policyID:             policy,
 		registryDir:          registryDir,
+		auditRecords:         auditRecords,
+		auditKeyFile:         auditKeyFile,
 		opaEndpoint:          opaEndpoint,
 		opaSocket:            opaSocket,
 		opaExpectedUID:       opaExpectedUID,
@@ -568,6 +582,16 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 	}()
 
+	// Journal des enregistrements d'audit (#275, #271) : le clair des feuilles de
+	// décision, de contrat et de quorum, chiffré, vérifiable avec `tbp-audit
+	// verify`. REQUIS : un brokerd dont les décisions ne seraient pas vérifiables
+	// ne démarre pas.
+	auditStore, err := registry.OpenRecordStoreFiles(cfg.auditRecords, cfg.auditKeyFile)
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275): %w", err)
+	}
+	defer auditStore.Close()
+
 	onTrip := func(reason string) { log.Printf("brokerd: ALARME: %s", reason) }
 
 	// Mesure des fichiers de provisionnement (issue #192) : AVANT que brokerd
@@ -605,6 +629,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		CellID:     cfg.cellID,
 		Salt:       cfg.salt,
 		Leaves:     cellLog,
+		Journal:    auditStore,
 		OnTrip:     onTrip,
 	})
 	if err != nil {
@@ -698,6 +723,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		CellID:      cfg.cellID,
 		Salt:        cfg.salt,
 		Leaves:      cellLog,
+		Journal:     auditStore,
 		Controllers: controllers,
 		K:           cfg.quorumMin,
 		PolicyID:    cfg.policyID,
@@ -747,6 +773,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		OperatorKeys: operatorKeys,
 		Salt:         cfg.salt,
 		Leaves:       cellLog,
+		Journal:      auditStore,
 	})
 	if err != nil {
 		return fmt.Errorf("contract store: %w", err)
@@ -798,6 +825,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		CellID:     cfg.cellID,
 		Salt:       cfg.salt,
 		Leaves:     cellLog,
+		Journal:    auditStore,
 		OPA:        opaClient,
 		Translator: broker.StructuredTranslator{},
 		Issuer:     issuer,

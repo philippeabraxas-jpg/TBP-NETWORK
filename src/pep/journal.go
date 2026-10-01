@@ -22,13 +22,5 @@ import (
 // appendLeaf inscrit la feuille (kind, cellID, hash salé de record, ts) et, si
 // journal != nil, journalise d'abord (sel, record).
 func appendLeaf(ctx context.Context, sink LeafSink, journal *registry.RecordStore, kind byte, cellID string, salt, record []byte, ts int64) (uint64, error) {
-	if journal != nil {
-		return registry.AppendSealed(ctx, sink, journal, kind, cellID, salt, record, ts)
-	}
-	return sink.Append(ctx, registry.Leaf{
-		Kind:        kind,
-		CellID:      cellID,
-		PayloadHash: registry.HashPayload(salt, record),
-		Timestamp:   ts,
-	})
+	return registry.AppendLeaf(ctx, sink, journal, kind, cellID, salt, record, ts)
 }

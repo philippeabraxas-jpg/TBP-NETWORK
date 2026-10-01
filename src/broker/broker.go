@@ -310,6 +310,10 @@ type BrokerOptions struct {
 	// Leaves est la couture registre (T7) : chaque décision laisse une
 	// feuille (§4.1). Requis.
 	Leaves pep.LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// brokerd le renseigne toujours.
+	Journal *registry.RecordStore
 	// OPA est le client d'évaluation T11 (circuit-breaker 5 ms,
 	// fail-closed, feuille « TBPD1 » par évaluation). Requis.
 	OPA *pep.OPAClient
@@ -370,6 +374,7 @@ type Broker struct {
 	cellID     string
 	salt       []byte
 	leaves     pep.LeafSink
+	journal    *registry.RecordStore
 	opa        *pep.OPAClient
 	translator Translator
 	issuer     *Issuer
@@ -444,6 +449,7 @@ func NewBroker(opts BrokerOptions) (*Broker, error) {
 		cellID:     opts.CellID,
 		salt:       salt,
 		leaves:     opts.Leaves,
+		journal:    opts.Journal,
 		opa:        opts.OPA,
 		translator: opts.Translator,
 		issuer:     opts.Issuer,
@@ -888,13 +894,7 @@ func (b *Broker) writeLeaf(ctx context.Context, r *Result) {
 	record = append(record, verdict, byte(len(r.Reason)))
 	record = append(record, r.Reason...)
 
-	leaf := registry.Leaf{
-		Kind:        registry.KindDecision,
-		CellID:      b.cellID,
-		PayloadHash: registry.HashPayload(b.salt, record),
-		Timestamp:   b.now().UnixNano(),
-	}
-	if _, err := b.leaves.Append(ctx, leaf); err != nil {
+	if _, err := registry.AppendLeaf(ctx, b.leaves, b.journal, registry.KindDecision, b.cellID, b.salt, record, b.now().UnixNano()); err != nil {
 		r.LeafErr = err
 		if r.Allow { // pas de preuve, pas d'accès (même doctrine que T9/T11)
 			r.Allow = false

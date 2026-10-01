@@ -249,6 +249,10 @@ type ContractOptions struct {
 	// un événement de contrat sans feuille est une faute (pas de preuve,
 	// pas de contrat ; même doctrine que T9/T11/T29).
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// brokerd le renseigne toujours.
+	Journal *registry.RecordStore
 	// MaxPending / MaxApproved bornent les plans VIVANTS (pending /
 	// approved) — 0 ⇒ 64. Les entrées expirées ou révoquées restent
 	// inspectables mais ne comptent plus dans les quotas.
@@ -285,6 +289,7 @@ type ContractStore struct {
 	operatorKeys  []ed25519.PublicKey
 	salt          []byte
 	leaves        LeafSink
+	journal       *registry.RecordStore
 	maxPending    int
 	maxApproved   int
 	maxTombstones int
@@ -358,6 +363,7 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 		operatorKeys:  keys,
 		salt:          salt,
 		leaves:        opts.Leaves,
+		journal:       opts.Journal,
 		maxPending:    maxPending,
 		maxApproved:   maxApproved,
 		maxTombstones: maxTombstones,
@@ -812,12 +818,7 @@ func (s *ContractStore) writeLeafLocked(ctx context.Context, event byte, planHas
 	record = binary.BigEndian.AppendUint16(record, step)
 	record = append(record, verdict, byte(len(reason)))
 	record = append(record, reason...)
-	_, err := s.leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindContract,
-		CellID:      s.cellID,
-		PayloadHash: registry.HashPayload(s.salt, record),
-		Timestamp:   now.UnixNano(),
-	})
+	_, err := appendLeaf(ctx, s.leaves, s.journal, registry.KindContract, s.cellID, s.salt, record, now.UnixNano())
 	return err
 }
 
@@ -854,12 +855,7 @@ func (s *ContractStore) writeSignedLeafLocked(ctx context.Context, event byte, p
 	record = append(record, kid[:]...)
 	record = binary.BigEndian.AppendUint64(record, uint64(expiry.Unix()))
 	record = append(record, sig...)
-	_, err := s.leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindContract,
-		CellID:      s.cellID,
-		PayloadHash: registry.HashPayload(s.salt, record),
-		Timestamp:   now.UnixNano(),
-	})
+	_, err := appendLeaf(ctx, s.leaves, s.journal, registry.KindContract, s.cellID, s.salt, record, now.UnixNano())
 	return err
 }
 
