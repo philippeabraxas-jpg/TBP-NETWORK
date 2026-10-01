@@ -143,6 +143,40 @@ test_egress_malformed_and_opaque_uris if {
 	"opaque-uri" in viol({"action": "read", "class": 0, "resource": "javascript:alert(1)"})
 }
 
+# #239 : un schéma réseau sans « // » n'est pas une URL de sortie reconnue ni une autorité
+# mal formée « classique », mais les clients HTTP le normalisent vers « https://hote/x ».
+# Chaque refus a son voisin autorisé (la forme canonique vers un hôte autorisé, et les
+# ressources qui ne sont PAS des URL réseau).
+test_network_scheme_without_double_slash_is_refused if {
+	cfg := {"allowed_domains": ["api.example.org"]}
+	every r in [
+		"https:/evil.example/x", "https:evil.example/x", "HTTPS:/evil.example", "http:evil.example",
+		"https:\\evil.example", "ftp:/files.example/a", "ssh:evil.example", "wss:/evil.example/s",
+	] {
+		"malformed-authority" in viol_cfg({"action": "read", "class": 0, "resource": r}, cfg)
+	}
+
+	# même hôte AUTORISÉ, forme canonique : accepté (le correctif ne refuse pas tout)
+	ok_cfg := object.union({"action": "read", "class": 0}, {"resource": "https://api.example.org/x"})
+	h.ok with input as ok_cfg with data.tbp.hardening as cfg
+}
+
+test_non_network_scheme_resources_are_not_malformed_authority if {
+	every r in ["doc-1", "db:users", "c:/dir/file.txt", "c:\\dir\\file.txt", "file:/srv/data/report.txt", "git-notes/x", "https-log.txt", "/a/https:b"] {
+		not "malformed-authority" in viol({"action": "read", "class": 0, "resource": r})
+	}
+}
+
+# #239 (voisin) : les clients ignorent les contrôles C0 et espaces de TÊTE ; la liste d'hôtes aussi.
+test_leading_blanks_do_not_hide_an_egress_url if {
+	cfg := {"allowed_domains": ["api.example.org"]}
+	every r in [" https://evil.example/x", "\thttps://evil.example/x", "\nhttps://evil.example/x", "\u0001https://evil.example/x", " https:/evil.example/x"] {
+		viol_cfg({"action": "read", "class": 0, "resource": r}, cfg) != set()
+	}
+	"egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": " https://evil.example/x"}, cfg)
+	not "egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": " https://api.example.org/x"}, cfg)
+}
+
 test_non_urls_not_subject_to_egress_and_file_scheme_is_local if {
 	ok_({"action": "read", "class": 0, "resource": "doc-1"})
 	ok_({"action": "read", "class": 0, "resource": "/reports?action=list"})
