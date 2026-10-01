@@ -378,6 +378,14 @@ func (a *Ano) maskLeaf(ctx context.Context, ex *exchange, path []string, raw []b
 // reste passe tel quel. Commun aux feuilles gardées par chemin et à celles que le
 // classifieur laisse passer.
 func (a *Ano) emitKept(ex *exchange, raw []byte, text string, isString bool, out *bytes.Buffer, rep *Report) error {
+	if !isString && len(a.rules.findSpans(text)) > 0 {
+		// Un nombre ne peut pas porter un jeton partiel : la correspondance d'un motif sur sa
+		// forme texte masque la feuille ENTIÈRE (#238). Sans cela « l'IA ne peut que renforcer »
+		// était faux — un classifieur répondant « garder » laissait sortir 4111111111111111.
+		// Le jeton restitue le nombre d'origine, avec son type, au retour (Unmask).
+		rep.Spans++
+		return a.writeLeafToken(ex, raw, out)
+	}
 	if isString {
 		if spans := a.rules.findSpans(text); len(spans) > 0 {
 			var sb strings.Builder

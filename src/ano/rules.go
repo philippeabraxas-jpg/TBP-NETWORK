@@ -28,6 +28,10 @@ package ano
 // Seul mask_paths masque une feuille en entier ; seule une chaîne SANS motif
 // sort inchangée d'un chemin gardé.
 //
+// Les motifs s'appliquent aussi à la forme TEXTE d'un nombre JSON (#238) : un
+// nombre ne peut pas porter un jeton partiel, une correspondance masque donc la
+// feuille entière (le jeton restitue le nombre d'origine au retour).
+//
 // Les motifs sont des regex RE2 (bibliothèque standard Go : temps linéaire,
 // pas de retour arrière catastrophique) appliquées aux CHAÎNES restantes
 // (celles qui ne sont pas masquées en entier). Ils ne sont jamais
