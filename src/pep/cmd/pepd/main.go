@@ -823,6 +823,13 @@ func loadKeyring(path string) (map[[16]byte]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("keyring: %w", err)
 	}
+	return parseKeyring(data)
+}
+
+// parseKeyring décode un trousseau JSON {kid_hex: pub_hex}. Séparé de loadKeyring pour
+// que le provisionnement (#218) puisse lire le trousseau ATTESTÉ (octets du témoin) et
+// non le fichier courant.
+func parseKeyring(data []byte) (map[[16]byte]ed25519.PublicKey, error) {
 	var raw map[string]string
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("keyring JSON: %w", err)

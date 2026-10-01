@@ -62,7 +62,7 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 	files := []registry.ProvisioningFile{
 		{Name: "operator-keys", Path: cfg.operatorKeysFile},
 		{Name: "agent-registry", Path: cfg.agentRegistryFile},
-		{Name: "genesis-manifest", Path: filepath.Join(cfg.genesisDir, "manifest.json")},
+		{Name: "genesis-manifest", Path: filepath.Join(cfg.genesisDir, "manifest.json"), Authority: true},
 	}
 	if cfg.skillRegistryFile != "" {
 		files = append(files, registry.ProvisioningFile{Name: "skill-registry", Path: cfg.skillRegistryFile})
@@ -81,18 +81,27 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 		log.Printf("brokerd: mesure du provisionnement désactivée EXPLICITEMENT (TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1, issue #192) — DEV/LABO UNIQUEMENT, jamais en production : une édition hors-bande de agents.json, des clés d'opérateurs ou du registre de skills passe sans alarme")
 		return nil
 	}
-	var authorize func() error
+	// Preuve vérifiée contre les contrôleurs du manifeste ATTESTÉ (octets du témoin),
+	// jamais contre le manifeste courant (issue #218) ; repli TOFU sans témoin antérieur.
+	var authorize func(prev map[string][]byte) error
 	if cfg.provProofFile != "" {
-		controllers, err := loadGenesisControllers(filepath.Join(cfg.genesisDir, "manifest.json"))
-		if err != nil {
-			return err
-		}
-		keyring := make(map[[16]byte]ed25519.PublicKey, len(controllers))
-		for _, pub := range controllers {
-			keyring[pep.KeyIDFromPublicKey(pub)] = pub
-		}
 		path := cfg.provProofFile
-		authorize = func() error {
+		manifest := filepath.Join(cfg.genesisDir, "manifest.json")
+		authorize = func(prev map[string][]byte) error {
+			var controllers map[int]ed25519.PublicKey
+			var err error
+			if raw, ok := prev["genesis-manifest"]; ok {
+				controllers, err = parseGenesisControllers(raw)
+				if err != nil {
+					return fmt.Errorf("manifeste de genèse attesté illisible: %w", err)
+				}
+			} else if controllers, err = loadGenesisControllers(manifest); err != nil {
+				return err
+			}
+			keyring := make(map[[16]byte]ed25519.PublicKey, len(controllers))
+			for _, pub := range controllers {
+				keyring[pep.KeyIDFromPublicKey(pub)] = pub
+			}
 			return pep.VerifyQuorumProofFile(path, conditionProvisioningTransition, cfg.cellID, keyring, cfg.quorumMin)
 		}
 	}

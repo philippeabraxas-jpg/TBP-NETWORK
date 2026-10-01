@@ -6,6 +6,7 @@ package registry
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -266,7 +267,7 @@ func TestAuthorizedTransitionReEngagesTheReference(t *testing.T) {
 	e.edit("agents.json", `{"agent-1":{"class":2},"agent-2":{"class":3}}`) // ajout légitime d'un agent
 
 	var asked int
-	e.opts.AuthorizeTransition = func() error { asked++; return nil }
+	e.opts.AuthorizeTransition = func(map[string][]byte) error { asked++; return nil }
 	if err := e.guard().Check(context.Background()); err != nil {
 		t.Fatalf("transition autorisée refusée : %v", err)
 	}
@@ -298,7 +299,7 @@ func TestRefusedAuthorizationKeepsTheBootRefused(t *testing.T) {
 	}
 	e.log.size = 1
 	e.edit("agents.json", `{"agent-1":{"class":0}}`)
-	e.opts.AuthorizeTransition = func() error { return errors.New("quorum insuffisant") }
+	e.opts.AuthorizeTransition = func(map[string][]byte) error { return errors.New("quorum insuffisant") }
 	err := e.guard().Check(context.Background())
 	if !errors.Is(err, ErrProvisioningDivergence) || !strings.Contains(err.Error(), "quorum insuffisant") {
 		t.Fatalf("transition non autorisée acceptée ou raison perdue : %v", err)
@@ -331,7 +332,7 @@ func TestErasedWitnessOnUsedLogIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.log.size = 5
-	e.opts.AuthorizeTransition = func() error { return nil }
+	e.opts.AuthorizeTransition = func(map[string][]byte) error { return nil }
 	if err := e.guard().Check(context.Background()); err != nil {
 		t.Fatalf("ré-engagement autorisé refusé : %v", err)
 	}
@@ -556,5 +557,148 @@ func TestParseProvisioningExtra(t *testing.T) {
 	got, _ = ParseProvisioningExtra("agent-registry=/x")
 	if got[0].Name == "agent-registry" {
 		t.Fatal("un extra peut usurper le nom « agent-registry »")
+	}
+}
+
+// --- instantané des fichiers d'autorité (issue #218) --------------------------------
+
+// authEnv : agents.json est un fichier d'AUTORITÉ (comme le trousseau de contrôleurs).
+func authEnv(t *testing.T) *provEnv {
+	t.Helper()
+	e := newProvEnv(t, nil)
+	e.files[0].Authority = true // partage le tableau sous-jacent avec e.opts.Files
+	return e
+}
+
+func TestAuthoritySnapshotIsCommittedAndPassedToAuthorize(t *testing.T) {
+	e := authEnv(t)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 1
+	if got := string(e.readWitness().Authorities["agents.json"]); got != `{"agent-1":{"class":2}}` {
+		t.Fatalf("instantané non engagé : %q", got)
+	}
+	// le fichier est remplacé : l'autorisation reçoit l'ANCIEN contenu, pas le courant
+	e.edit("agents.json", `{"attacker":{"class":3}}`)
+	var seen string
+	e.opts.AuthorizeTransition = func(prev map[string][]byte) error {
+		seen = string(prev["agents.json"])
+		return nil
+	}
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatalf("transition autorisée refusée : %v", err)
+	}
+	if seen != `{"agent-1":{"class":2}}` {
+		t.Fatalf("l'autorisation a vu %q au lieu de l'attesté", seen)
+	}
+	// la transition engage le NOUVEAU contenu comme attesté suivant
+	if got := string(e.readWitness().Authorities["agents.json"]); got != `{"attacker":{"class":3}}` {
+		t.Fatalf("nouvel instantané non engagé : %q", got)
+	}
+}
+
+func TestNonAuthorityFileIsNotSnapshotted(t *testing.T) {
+	e := authEnv(t)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.readWitness().Authorities["operators.json"]; ok {
+		t.Fatal("un fichier ordinaire est copié dans le témoin")
+	}
+}
+
+func TestWitnessV2RoundTripAndTruncationRefused(t *testing.T) {
+	w := ProvisioningWitness{
+		CellID: "c", Component: "x", Seq: 3,
+		Files:       []ProvisioningFileHash{{Name: "a", Hash: [32]byte{1}}},
+		Authorities: map[string][]byte{"b": []byte("bb"), "a": []byte("aaa")},
+		IssuedAt:    time.Unix(1_800_000_000, 0),
+	}
+	rec := marshalWitnessRecord(w)
+	got, err := parseWitnessRecord(rec)
+	if err != nil || got.Legacy || string(got.Authorities["a"]) != "aaa" || string(got.Authorities["b"]) != "bb" {
+		t.Fatalf("aller-retour : %+v %v", got, err)
+	}
+	if string(marshalWitnessRecord(w)) != string(rec) {
+		t.Fatal("sérialisation non déterministe")
+	}
+	for cut := 1; cut < len(rec); cut += 7 {
+		if _, err := parseWitnessRecord(rec[:len(rec)-cut]); err == nil {
+			t.Fatalf("témoin tronqué de %d octets accepté", cut)
+		}
+	}
+}
+
+// legacyWitness réécrit le témoin courant au format v1 (sans instantané), signé.
+func (e *provEnv) legacyWitness() {
+	e.t.Helper()
+	w := e.readWitness()
+	rec := marshalWitnessRecord(w)
+	// v1 = v2 sans la section autorités et avec l'octet de version à 1
+	authLen := 1
+	for n, c := range w.Authorities {
+		authLen += 1 + len(n) + 4 + len(c)
+	}
+	tail := rec[len(rec)-8:]
+	body := append([]byte(nil), rec[:len(rec)-8-authLen]...)
+	body[6] = 1
+	v1 := append(body, tail...)
+	sig, err := e.opts.Signer.Sign(v1)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := e.guard().persist(witnessFile{Record: hex.EncodeToString(v1), Signature: hex.EncodeToString(sig)}); err != nil {
+		e.t.Fatal(err)
+	}
+	if !e.readWitness().Legacy {
+		e.t.Fatal("témoin v1 non reconnu")
+	}
+}
+
+func TestLegacyWitnessIsUpgradedInPlaceWhenUnchanged(t *testing.T) {
+	e := authEnv(t)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 1
+	e.legacyWitness()
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatalf("mise à niveau refusée : %v", err)
+	}
+	w := e.readWitness()
+	if w.Legacy || string(w.Authorities["agents.json"]) != `{"agent-1":{"class":2}}` {
+		t.Fatalf("pas de mise à niveau : %+v", w)
+	}
+}
+
+func TestLegacyWitnessDivergenceIsRefusedEvenWithAProof(t *testing.T) {
+	e := authEnv(t)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 1
+	e.legacyWitness()
+	e.edit("agents.json", `{"attacker":{"class":3}}`)
+	e.opts.AuthorizeTransition = func(map[string][]byte) error { return nil } // « preuve » valide
+	if err := e.guard().Check(context.Background()); !errors.Is(err, ErrProvisioningDivergence) {
+		t.Fatalf("rétrogradation par témoin v1 acceptée : %v", err)
+	}
+}
+
+func TestReEngagementPassesNilPrev(t *testing.T) {
+	e := authEnv(t)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(e.opts.WitnessFile); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 5
+	called := false
+	var gotPrev map[string][]byte = map[string][]byte{"x": nil}
+	e.opts.AuthorizeTransition = func(prev map[string][]byte) error { called = true; gotPrev = prev; return nil }
+	if err := e.guard().Check(context.Background()); err != nil || !called || gotPrev != nil {
+		t.Fatalf("ré-engagement : err=%v called=%v prev=%v", err, called, gotPrev)
 	}
 }
