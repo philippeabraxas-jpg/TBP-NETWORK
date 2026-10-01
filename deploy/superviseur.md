@@ -142,8 +142,10 @@ broken chain) is an ALARM, not an incident to work around.
 
 #### Step 5 — Healthy windows and promotion (§7.4)
 
-**Verifiable prerequisite**: steps 1-4 green; the master chain anchors the
-bundles per epoch.
+**Verifiable prerequisite**: steps 1-4 green. *Honest status: the library below reads the epoch
+anchor and the healthy window through an interface that has no production implementation yet — the master
+does not publish them today. The target architecture, settled at the first multi-cell deployment, is in
+[design-promotion.md](design-promotion.md) (#233).*
 
 **Command**:
 
@@ -155,8 +157,7 @@ bundles per epoch.
 grep -n "HealthyWindow\|BundleAnchor" src/cluster/promotion.go | head -5
 ```
 
-**Observable success criterion**: anchors and windows are published
-per epoch in the master; the fencing selftest proves admission (healthy
+**Observable success criterion**: the fencing selftest, against a stub master, proves admission (healthy
 window) and refusal (partition) with `KindPromotion` leaves on both sides.
 
 **On failure: STOP** — without an epoch anchor, no promotion is
