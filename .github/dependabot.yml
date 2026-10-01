@@ -1,0 +1,30 @@
+# Issue #193 : les actions sont épinglées par SHA de commit (immuable) ; sans
+# outil, un SHA ne se met jamais à jour et on y perd les correctifs de
+# sécurité amont. Dependabot propose chaque mise à jour en PR (SHA + version en
+# commentaire), relue comme n'importe quel changement.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+  - package-ecosystem: gomod
+    directory: /scripts/genesis
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"

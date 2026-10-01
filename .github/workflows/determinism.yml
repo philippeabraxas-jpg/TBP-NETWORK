@@ -9,12 +9,12 @@ jobs:
   rego-determinism:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: open-policy-agent/setup-opa@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: open-policy-agent/setup-opa@34a30e8a924d1b03ce2cf7abe97250bbb1f332b5  # v2.2.0
         with:
           # Épinglé — même raison et même version que .github/workflows/lint.yml.
           version: 1.20.2
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
