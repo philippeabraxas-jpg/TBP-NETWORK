@@ -61,9 +61,10 @@ commande avec le même `-key` échoue (une clé existante n'est jamais écrasée
 
 **En cas d'échec : STOP** — un trousseau de plus d'une entrée n'est pas
 l'échelle 1, et un trousseau vide bloque toute bascule. La clé est logicielle :
-c'est le prix de l'échelle 1 (clé perdue ou volée = réépingler un nouveau
-trousseau, ce qui est lui-même un acte gouverné). Garder la copie hors machine
-**maintenant** ; sans elle, il n'y a pas de procédure de récupération (#199).
+c'est le prix de l'échelle 1 (clé perdue ou volée : l'ancien quorum n'existe plus
+pour autoriser son remplaçant — c'est un ré-engagement de la confiance de la cellule, voir
+[recovery.fr.md](recovery.fr.md) B). Garder la copie hors machine **maintenant** ; `pepd` vous le
+rappelle à chaque démarrage.
 
 #### Étape 3 — Démarrer pepd avec les réglages de l'échelle 1
 

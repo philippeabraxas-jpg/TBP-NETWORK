@@ -362,6 +362,17 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	}
 	s.add(ph, "pepd démarré (OPA branché, registre réel)", true, pepdURL)
 
+	// Avertissement de quorum fragile (issue #199) : k = 1 (scale1) ou 2-sur-2 sans clé de
+	// rechange (mono) — dit au démarrage, dans le journal du démon.
+	wantNotice := "sans clé de rechange"
+	if prof.quorumMin == 1 {
+		wantNotice = "quorum k=1"
+	}
+	logBytes, _ := os.ReadFile(filepath.Join(cfg.out, "pepd.log"))
+	s.add(ph, "#199 : pepd avertit au démarrage d'un quorum fragile ("+wantNotice+")",
+		strings.Contains(string(logBytes), "AVERTISSEMENT") && strings.Contains(string(logBytes), wantNotice),
+		fmt.Sprintf("k=%d", prof.quorumMin))
+
 	// Posture au démarrage : monitor, jamais closed (§5.3).
 	var modeView struct {
 		Mode string `json:"mode"`

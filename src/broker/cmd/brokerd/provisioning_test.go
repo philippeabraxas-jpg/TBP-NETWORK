@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 )
 
@@ -436,5 +437,123 @@ func TestBrokerdManifestTransitionCannotBeSelfAuthorized(t *testing.T) {
 	signProof(t, fx, proof, conditionProvisioningTransition, 2)
 	if err := boot(t, fx, sock); err != nil {
 		t.Fatalf("transition signée par le quorum attesté refusée : %v", err)
+	}
+}
+
+// --- procédure de secours (issue #199, deploy/recovery.md) -----------------------
+
+// writeManifest réécrit le manifeste de genèse avec ces clés publiques, dans CET ordre.
+func writeManifest(t *testing.T, fx *runFixture, pubs ...ed25519.PublicKey) {
+	t.Helper()
+	var mf genesisManifest
+	for _, p := range pubs {
+		mf.PubKeys = append(mf.PubKeys, hex.EncodeToString(p))
+	}
+	data, _ := json.Marshal(mf)
+	if err := os.WriteFile(filepath.Join(fx.genDir, "manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pubs(privs []ed25519.PrivateKey) []ed25519.PublicKey {
+	var out []ed25519.PublicKey
+	for _, p := range privs {
+		out = append(out, p.Public().(ed25519.PublicKey))
+	}
+	return out
+}
+
+// Un contrôleur sur trois est perdu (2-sur-3). Le manifeste est réécrit EN PLACE (la
+// clé perdue est remplacée au même rang : key_id indexe le manifeste) et la transition est
+// signée par les deux contrôleurs restants, vérifiés contre le manifeste ATTESTÉ.
+func TestBrokerdLostControllerKeyIsReplacedInPlace(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+
+	lost := fx.controllerPrivs[2] // le rang 3 ne signe pas l'epoch0 (rangs 1 et 2)
+	_, fresh, _ := ed25519.GenerateKey(nil)
+	fx.controllerPrivs = []ed25519.PrivateKey{fx.controllerPrivs[0], fx.controllerPrivs[1], fresh}
+	writeManifest(t, fx, pubs(fx.controllerPrivs)...)
+	signProof(t, fx, proof, conditionProvisioningTransition, 2) // rangs 1 et 2 : les contrôleurs restants
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("remplacement en place signé par les 2 contrôleurs restants refusé : %v", err)
+	}
+	delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("nouvelle référence non retenue : %v", err)
+	}
+
+	// la clé perdue ne vaut plus : une transition ultérieure (remplacer encore le rang 3)
+	// signée par elle + le rang 1 est refusée ; signée par le rang 1 + le rang 2, acceptée.
+	_, fresh2, _ := ed25519.GenerateKey(nil)
+	old := append([]ed25519.PrivateKey(nil), fx.controllerPrivs...)
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	writeManifest(t, fx, old[0].Public().(ed25519.PublicKey), old[1].Public().(ed25519.PublicKey), fresh2.Public().(ed25519.PublicKey))
+	fx.controllerPrivs = []ed25519.PrivateKey{old[0], lost}
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("la clé de contrôleur perdue (retirée du manifeste) compte encore dans le quorum")
+	}
+	fx.controllerPrivs = []ed25519.PrivateKey{old[0], old[1]}
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("rangs 1 et 2 refusés : %v", err)
+	}
+}
+
+// Remplacer un rang qui a signé l'epoch0 invalide l'epoch0 : il faut le re-signer par les
+// contrôleurs restants (scripts/genesis renew) — sans quoi le démarrage est refusé.
+func TestBrokerdEpoch0SignerReplacedNeedsResign(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	signProof(t, fx, proof, conditionProvisioningTransition, 2) // rangs 1 et 2, attestés
+
+	_, fresh, _ := ed25519.GenerateKey(nil)
+	signers := []ed25519.PrivateKey{fx.controllerPrivs[0], fresh, fx.controllerPrivs[2]} // le rang 2 est remplacé
+	writeManifest(t, fx, pubs(signers)...)
+	if err := boot(t, fx, sock); err == nil || !strings.Contains(err.Error(), "epoch0") {
+		t.Fatalf("epoch0 signé par une clé retirée accepté, ou autre cause : %v", err)
+	}
+	// k contrôleurs du NOUVEAU manifeste re-signent l'epoch0 : le démarrage repart
+	reSigned := signEpochPayload(t, signers, 2, 2, cluster.EpochPayload{
+		N: 0, Authority: "cell-a", IssuedAt: time.Now().UTC().Format(time.RFC3339), TTLSeconds: 60,
+	})
+	if err := os.WriteFile(filepath.Join(fx.genDir, "epoch0.json"), reSigned, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("epoch0 re-signé pour le nouveau manifeste refusé : %v", err)
+	}
+}
+
+// Retirer un contrôleur EN DÉCALANT les rangs casse les signatures (key_id indexe le
+// manifeste) : le démarrage est refusé même avec une preuve de transition valide. D'où la
+// consigne du guide : remplacer en place, ne jamais supprimer ni réordonner.
+func TestBrokerdRemovingAControllerByShiftingRanksIsRefused(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	writeManifest(t, fx, pubs(fx.controllerPrivs[1:])...) // supprime le rang 1 : les rangs glissent
+	err := boot(t, fx, sock)
+	if err == nil || !strings.Contains(err.Error(), "epoch0") {
+		t.Fatalf("manifeste aux rangs décalés accepté, ou autre cause : %v", err)
 	}
 }

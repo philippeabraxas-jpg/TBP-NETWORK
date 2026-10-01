@@ -228,6 +228,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("TBP_QUORUM_KEYRING_FILE: %w", err)
 	}
+	if msg := pep.QuorumResilienceNotice("pepd", quorumMin, len(quorumKeyring)); msg != "" {
+		log.Print(msg)
+	}
 	durabilityAsync, durabilityWindow, err := durabilityFromEnv(os.Getenv)
 	if err != nil {
 		return err

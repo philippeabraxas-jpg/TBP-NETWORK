@@ -637,6 +637,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if cfg.quorumMin > len(controllers) {
 		return fmt.Errorf("TBP_QUORUM_MIN=%d > %d contrôleurs du manifest — un quorum impossible est un refus de démarrage", cfg.quorumMin, len(controllers))
 	}
+	if msg := pep.QuorumResilienceNotice("brokerd", cfg.quorumMin, len(controllers)); msg != "" {
+		log.Print(msg)
+	}
 
 	// Fencing d'époque (T29, §7.2-§7.3) : résout UN problème précis —
 	// empêcher que deux cellules revendiquent l'autorité en même temps.
