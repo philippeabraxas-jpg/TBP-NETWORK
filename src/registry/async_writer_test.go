@@ -171,9 +171,17 @@ func TestAsyncWriterConfigFailClosed(t *testing.T) {
 	}
 }
 
+// fastAcceptBudget est le budget des 20 acceptations de TestAsyncWriterFastAccept (#245).
+// Le plancher SYNCHRONE est ≥ 150 ms × 20 = 3 s (chaque Append attendrait un checkpoint) ; le
+// chemin chaud, lui, coûte quelques ms à vide. Un budget d'1 s tenait seul mais cassait quand
+// toute la suite tourne en parallèle (1,18 s et 1,38 s relevés par la revue sur 24 cœurs saturés ; non reproduits en local, 50–130 ms) : 2 s garde
+// ≥ 1,5× de marge sous charge ET reste sous le plancher synchrone, donc la mutation visée
+// (attendre la publication dans Append) est toujours prise.
+const fastAcceptBudget = 2 * time.Second
+
 // TestAsyncWriterFastAccept : le chemin chaud n'attend PAS la publication.
 // Mutation prise : réintroduire l'attente du checkpoint dans Append
-// coûterait ≥ 150 ms × 20 = 3 s — le budget d'1 s casse.
+// coûterait ≥ 150 ms × 20 = 3 s — le budget (fastAcceptBudget, 2 s) casse.
 func TestAsyncWriterFastAccept(t *testing.T) {
 	ctx := context.Background()
 	signer, verifier := asyncTestKeys(t)
@@ -198,8 +206,8 @@ func TestAsyncWriterFastAccept(t *testing.T) {
 			t.Fatalf("Append %d: index %d — l'index n'est opposable qu'à publication, le contrat impose 0", i, idx)
 		}
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("20 acceptations en %v — le chemin chaud attend la publication (plancher sync ~150 ms/feuille)", elapsed)
+	if elapsed := time.Since(start); elapsed > fastAcceptBudget {
+		t.Fatalf("20 acceptations en %v (budget %v) — le chemin chaud attend la publication (plancher sync ~150 ms/feuille)", elapsed, fastAcceptBudget)
 	}
 
 	// Rattrapage : tout est publié, dans l'ordre, sans intervention.
