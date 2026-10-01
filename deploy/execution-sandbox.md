@@ -113,4 +113,4 @@ shape to start from; add the race-free open above to close the check-then-use wi
 
 Network egress, CPU/memory limits, and what the *allowed* tool does once it runs
 (a shell, a browser, a database client) are the executor's isolation to design.
-Network isolation of the TBP cell itself is a separate subject (#186).
+Network isolation of the TBP cell itself is a separate subject, with its own verification script: [network-isolation.md](network-isolation.md) (#186).

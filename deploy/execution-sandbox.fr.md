@@ -113,4 +113,4 @@ pour fermer la fenêtre vérifier-puis-utiliser.
 
 La sortie réseau, les limites CPU/mémoire et ce que fait l'outil *autorisé* une fois lancé (un shell,
 un navigateur, un client de base de données) relèvent de l'isolation de l'exécuteur, à concevoir.
-L'isolation réseau de la cellule TBP elle-même est un autre sujet (#186).
+L'isolation réseau de la cellule TBP elle-même est un autre sujet, avec son propre script de vérification : [network-isolation.fr.md](network-isolation.fr.md) (#186).
