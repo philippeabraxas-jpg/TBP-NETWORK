@@ -122,7 +122,8 @@ bundle as data, including in the deployment selftest.
   many HTTP clients normalise them to `https://host/x`, so they are reported as
   `malformed-authority` (closed list: http, https, ftp, ftps, sftp, ws, wss, ssh,
   git, smb, ldap, ldaps; an unknown scheme is not guessed). Leading control
-  characters and spaces are ignored before parsing, as clients do (#239).
+  characters and spaces are ignored before parsing, as clients do, and tab / line feed / carriage
+  return are removed everywhere (`ht<TAB>tps://host/x` is `https://host/x`, WHATWG URL) (#239).
 - **`exempt_resources` is an exception, not a fix.** It is exact-match, comes
   from the signed bundle, and should be reviewed like any other policy change.
 

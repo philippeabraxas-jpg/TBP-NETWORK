@@ -288,3 +288,23 @@ test_invalid_action_is_violation if {
 	"action-invalid" in viol({"action": "", "class": 0, "resource": "doc-1"})
 	not ok_({"class": 0, "resource": "doc-1"})
 }
+
+# #239 (re-revue de 8873638) : tabulation, saut de ligne et retour chariot sont retirés PARTOUT par les
+# clients (spec WHATWG URL, urllib.parse de Python 3.13) : « ht<TAB>tps://hote/x » EST https vers hote.
+test_control_characters_inside_the_url_do_not_hide_it if {
+	cfg := {"allowed_domains": ["api.example.org"]}
+	every r in [
+		"ht\ttps://evil.example/x", "https\n://evil.example/x", "https:/\t/evil.example/x",
+		"https:\r\n//evil.example/x", "h\tt\nt\rps://evil.example/x",
+	] {
+		"egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": r}, cfg)
+	}
+
+	# schéma sans « // » ET caractère de contrôle : toujours vu
+	"malformed-authority" in viol_cfg({"action": "read", "class": 0, "resource": "h\tttps:evil.example/x"}, cfg)
+
+	# voisins autorisés : même forme vers l'hôte AUTORISÉ ⇒ pas de sortie refusée ; et une ressource
+	# qui n'est pas une URL réseau reste intacte malgré une tabulation
+	not "egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": "ht\ttps://api.example.org/x"}, cfg)
+	not "malformed-authority" in viol({"action": "read", "class": 0, "resource": "doc\t1"})
+}
