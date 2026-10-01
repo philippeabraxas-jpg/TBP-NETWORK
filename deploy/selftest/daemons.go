@@ -509,7 +509,18 @@ func runDaemons(s *suite, cfg config) {
 	}
 	s.add(phaseDaemons, "clés DEV émises (émetteur 0600, opérateurs, cells.json — custody D97)", true, "")
 
+	// Journal d'audit de brokerd (#275) : REQUIS. Neuf à chaque exécution (base est
+	// vidée au début de la phase).
+	auditKeyPath := filepath.Join(base, "brokerd-audit.key")
+	auditJournalPath := filepath.Join(base, "brokerd-audit-records.jsonl")
+	if err := registry.GenerateRecordKey(auditKeyPath); err != nil {
+		s.fail(phaseDaemons, "clé du journal d'audit de brokerd", err)
+		return
+	}
+
 	brokerEnv := append(os.Environ(),
+		"TBP_AUDIT_RECORDS="+auditJournalPath,
+		"TBP_AUDIT_RECORDS_KEY_FILE="+auditKeyPath,
 		"TBP_CELL_ID="+daemonsCellID,
 		"TBP_SALT="+hex.EncodeToString(cellSalt),
 		"TBP_POLICY_ID="+hex.EncodeToString(policyID[:]),
@@ -871,6 +882,8 @@ func runDaemons(s *suite, cfg config) {
 	s.add(phaseDaemons, "#206 : la même preuve de quorum W présentée une seconde fois → refus au quorum",
 		err == nil && status == http.StatusOK && !actV.Allow && statsR.QuorumDenies == 1,
 		fmt.Sprintf("allow=%v reason=%s quorum_denies=%d", actV.Allow, actV.Reason, statsR.QuorumDenies))
+	// #275 : le clair des décisions, du quorum et des plans de brokerd est vérifiable.
+	verifyAuditJournal(s, phaseDaemons, "brokerd", brokerRegDir, auditJournalPath, auditKeyPath, 3)
 
 	// --- Étape : démarrage supervisord (deploy/superviseur.md étape 3) -------
 	supervisord, err := startDaemon(supervisordBin, supervisorEnv, filepath.Join(base, "supervisord.log"))

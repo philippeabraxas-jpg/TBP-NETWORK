@@ -206,3 +206,35 @@ func TestAppendLeafWithoutJournalIsBareLeaf(t *testing.T) {
 		t.Fatalf("feuille %+v, veut %+v", sink.leaves, want)
 	}
 }
+
+func TestContractLeavesAreJournaled(t *testing.T) {
+	sink := &stubSink{}
+	j, path, key := testJournal(t)
+	clock := &contractClock{t: contractEpochT0}
+	s := newContractStore(t, sink, clock, &contractTrips{}, func(o *ContractOptions) { o.Journal = j })
+
+	hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := clock.now().Add(30 * time.Minute)
+	if err := s.Approve(context.Background(), hash, expiry, signApproval(opKey1(), hash, expiry)); err != nil {
+		t.Fatal(err)
+	}
+	// soumission (TBPL1) + approbation attribuée (TBPL2, signature comprise)
+	assertJournaled(t, path, key, sink, "TBPL")
+	recs, _ := registry.ReadRecords(path, key)
+	if len(recs) != 2 || !bytes.HasPrefix(recs[1].Record, []byte("TBPL2")) {
+		t.Fatalf("%d enregistrements, le second doit être TBPL2 (approbation attribuée)", len(recs))
+	}
+
+	// journal HS : aucune feuille, la soumission échoue (pas de preuve, pas de contrat)
+	_ = j.Close()
+	before := sink.count()
+	if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r", nil)}); !errors.Is(err, ErrPlanStoreFault) {
+		t.Fatalf("soumission sans clair journalisé : %v", err)
+	}
+	if sink.count() != before {
+		t.Fatalf("feuille inscrite sans clair journalisé (%d → %d)", before, sink.count())
+	}
+}

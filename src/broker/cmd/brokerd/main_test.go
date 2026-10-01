@@ -39,6 +39,7 @@ import (
 	"time"
 
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 // mapGetenv adapte une table à la couture getenv du démon.
@@ -52,26 +53,39 @@ func mapGetenv(m map[string]string) func(string) string {
 // donc statPresent (sentinel déclaré) est le défaut de test ici ; seul
 // TestLoadConfigDevEscapeHatchesRequireSentinel exerce statAbsent.
 func statPresent(string) (os.FileInfo, error) { return nil, nil }
-func statAbsent(string) (os.FileInfo, error)  { return nil, os.ErrNotExist }
+
+// auditKeyFile génère une clé de journal d'audit (#275) dans dir.
+func auditKeyFile(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, "audit-records.key")
+	if err := registry.GenerateRecordKey(p); err != nil {
+		t.Fatalf("clé du journal d'audit: %v", err)
+	}
+	return p
+}
+
+func statAbsent(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 
 // validConfigEnv rend une configuration d'environnement complète et
 // cohérente (loadConfig ne touche à aucun fichier — les chemins peuvent
 // être symboliques ici).
 func validConfigEnv() map[string]string {
 	return map[string]string{
-		"TBP_CELL_ID":              "cell-a",
-		"TBP_SALT":                 strings.Repeat("01", 16),
-		"TBP_POLICY_ID":            strings.Repeat("02", 32),
-		"TBP_REGISTRY_DIR":         "/srv/tbp/registry",
-		"TBP_OPA_ENDPOINT":         "http://127.0.0.1:8181/v1/data/tbp/allow",
-		"TBP_OPA_INSECURE_TCP_DEV": "1", // §92.A3 : dev/lab, exempte du transport Unix+SO_PEERCRED
-		"TBP_TRANSLATOR":           "structured",
-		"TBP_ISSUER_SEED_FILE":     "/etc/tbp/issuer.seed",
-		"TBP_GENESIS_DIR":          "/etc/tbp/genesis",
-		"TBP_TOPOLOGY":             "multi",
-		"TBP_CLUSTER_MEMBERS":      "cell-a,cell-b",
-		"TBP_OPERATOR_KEYS_FILE":   "/etc/tbp/operators.json",
-		"TBP_AGENT_REGISTRY_FILE":  "/etc/tbp/agents.json",
+		"TBP_CELL_ID":                "cell-a",
+		"TBP_SALT":                   strings.Repeat("01", 16),
+		"TBP_POLICY_ID":              strings.Repeat("02", 32),
+		"TBP_REGISTRY_DIR":           "/srv/tbp/registry",
+		"TBP_AUDIT_RECORDS":          "/srv/tbp/audit/records.jsonl",
+		"TBP_AUDIT_RECORDS_KEY_FILE": "/etc/tbp/records.key",
+		"TBP_OPA_ENDPOINT":           "http://127.0.0.1:8181/v1/data/tbp/allow",
+		"TBP_OPA_INSECURE_TCP_DEV":   "1", // §92.A3 : dev/lab, exempte du transport Unix+SO_PEERCRED
+		"TBP_TRANSLATOR":             "structured",
+		"TBP_ISSUER_SEED_FILE":       "/etc/tbp/issuer.seed",
+		"TBP_GENESIS_DIR":            "/etc/tbp/genesis",
+		"TBP_TOPOLOGY":               "multi",
+		"TBP_CLUSTER_MEMBERS":        "cell-a,cell-b",
+		"TBP_OPERATOR_KEYS_FILE":     "/etc/tbp/operators.json",
+		"TBP_AGENT_REGISTRY_FILE":    "/etc/tbp/agents.json",
 		// #192 : le témoin de provisionnement est requis (hors du registre)
 		"TBP_PROVISIONING_WITNESS_FILE": "/var/lib/tbp/provisioning-witness.json",
 	}
@@ -145,6 +159,8 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		{"salt_trop_court", func(e map[string]string) { e["TBP_SALT"] = "aabb" }, "hex ≥ 16 octets"},
 		{"policy_invalide", func(e map[string]string) { e["TBP_POLICY_ID"] = "zz" }, "hex ≥ 32 octets"},
 		{"registry_absent", func(e map[string]string) { delete(e, "TBP_REGISTRY_DIR") }, "TBP_REGISTRY_DIR requis"},
+		{"journal_absent", func(e map[string]string) { delete(e, "TBP_AUDIT_RECORDS") }, "TBP_AUDIT_RECORDS requis"},
+		{"cle_journal_absente", func(e map[string]string) { delete(e, "TBP_AUDIT_RECORDS_KEY_FILE") }, "TBP_AUDIT_RECORDS_KEY_FILE requis"},
 		{"opa_absent", func(e map[string]string) { delete(e, "TBP_OPA_ENDPOINT") }, "TBP_OPA_ENDPOINT requis"},
 		{"traducteur_refuse", func(e map[string]string) { e["TBP_TRANSLATOR"] = "natural" }, "structured"},
 		{"traducteur_vide_refuse", func(e map[string]string) { delete(e, "TBP_TRANSLATOR") }, "structured"},
@@ -415,6 +431,8 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 			"TBP_SALT":                      hex.EncodeToString(salt),
 			"TBP_POLICY_ID":                 hex.EncodeToString(policy),
 			"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
+			"TBP_AUDIT_RECORDS":             filepath.Join(dir, "audit-records.jsonl"),
+			"TBP_AUDIT_RECORDS_KEY_FILE":    auditKeyFile(t, dir),
 			"TBP_OPA_ENDPOINT":              "http://127.0.0.1:1/opa", // pas de connexion à la construction
 			"TBP_OPA_INSECURE_TCP_DEV":      "1",                      // §92.A3 : dev/lab
 			"TBP_TRANSLATOR":                "structured",
@@ -878,6 +896,8 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		"TBP_SALT":                      hex.EncodeToString(salt),
 		"TBP_POLICY_ID":                 policyHex,
 		"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
+		"TBP_AUDIT_RECORDS":             filepath.Join(dir, "audit-records.jsonl"),
+		"TBP_AUDIT_RECORDS_KEY_FILE":    auditKeyFile(t, dir),
 		"TBP_OPA_ENDPOINT":              opa.URL,
 		"TBP_OPA_INSECURE_TCP_DEV":      "1",
 		"TBP_TRANSLATOR":                "structured",

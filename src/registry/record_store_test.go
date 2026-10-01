@@ -284,3 +284,67 @@ func swapField(t *testing.T, a, b string) string {
 	}
 	return strings.Replace(a, get(a), get(b), 1)
 }
+
+func TestAppendLeafSealedOrBare(t *testing.T) {
+	ctx := context.Background()
+	rec := []byte("record-de-test")
+	// sans journal : feuille nue historique
+	bare := &captureSink{}
+	if _, err := AppendLeaf(ctx, bare, nil, KindDecision, "c", testSalt, rec, 42); err != nil {
+		t.Fatal(err)
+	}
+	want := Leaf{Kind: KindDecision, CellID: "c", PayloadHash: HashPayload(testSalt, rec), Timestamp: 42}
+	if len(bare.leaves) != 1 || bare.leaves[0] != want {
+		t.Fatalf("feuille nue %+v, veut %+v", bare.leaves, want)
+	}
+	// avec journal : clair journalisé, même feuille
+	key := testRecordKey(t)
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	st, err := OpenRecordStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := &captureSink{}
+	if _, err := AppendLeaf(ctx, sealed, st, KindDecision, "c", testSalt, rec, 42); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ReadRecords(path, key)
+	if err != nil || len(recs) != 1 || recs[0].Leaf != sealed.leaves[0] || !bytes.Equal(recs[0].Record, rec) {
+		t.Fatalf("journal %+v err=%v", recs, err)
+	}
+	// journal fermé : aucune feuille
+	_ = st.Close()
+	none := &captureSink{}
+	if _, err := AppendLeaf(ctx, none, st, KindDecision, "c", testSalt, rec, 43); err == nil || len(none.leaves) != 0 {
+		t.Fatalf("journal HS : err=%v feuilles=%d", err, len(none.leaves))
+	}
+}
+
+func TestOpenRecordStoreFiles(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "k")
+	if err := GenerateRecordKey(keyFile); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := OpenRecordStoreFiles(filepath.Join(dir, "j"), keyFile); err != nil {
+		t.Fatalf("configuration valide : %v", err)
+	} else {
+		_ = st.Close()
+	}
+	for name, args := range map[string][2]string{
+		"chemin vide": {"", keyFile}, "clé vide": {filepath.Join(dir, "j"), ""},
+		"clé absente": {filepath.Join(dir, "j"), filepath.Join(dir, "absent")},
+	} {
+		if st, err := OpenRecordStoreFiles(args[0], args[1]); err == nil {
+			_ = st.Close()
+			t.Errorf("%s : accepté", name)
+		}
+	}
+}
+
+type captureSink struct{ leaves []Leaf }
+
+func (c *captureSink) Append(_ context.Context, l Leaf) (uint64, error) {
+	c.leaves = append(c.leaves, l)
+	return uint64(len(c.leaves)), nil
+}

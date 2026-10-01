@@ -227,6 +227,31 @@ func AppendSealed(ctx context.Context, sink LeafAppender, store *RecordStore, ki
 	return sink.Append(ctx, leaf)
 }
 
+// AppendLeaf inscrit la feuille (kind, cellID, hash salé de record, ts) ; si
+// store != nil, le clair est journalisé d'abord (AppendSealed), sinon c'est la
+// feuille nue historique (bibliothèque, tests). Les producteurs de feuilles
+// l'appellent au lieu de répéter ce branchement.
+func AppendLeaf(ctx context.Context, sink LeafAppender, store *RecordStore, kind byte, cellID string, salt, record []byte, ts int64) (uint64, error) {
+	if store != nil {
+		return AppendSealed(ctx, sink, store, kind, cellID, salt, record, ts)
+	}
+	return sink.Append(ctx, Leaf{Kind: kind, CellID: cellID, PayloadHash: HashPayload(salt, record), Timestamp: ts})
+}
+
+// OpenRecordStoreFiles ouvre le journal path avec la clé lue dans keyFile
+// (LoadRecordKey : 0600 exigé). Un des deux chemins vide ⇒ erreur : les démons
+// l'appellent avec leurs variables d'environnement, requises ensemble.
+func OpenRecordStoreFiles(path, keyFile string) (*RecordStore, error) {
+	if path == "" || keyFile == "" {
+		return nil, errors.New("journal d'enregistrements : chemin du journal et fichier de clé requis ensemble")
+	}
+	key, err := LoadRecordKey(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	return OpenRecordStore(path, key)
+}
+
 // ReadRecords relit et déchiffre tout le journal. Une ligne altérée, une clé
 // erronée ou une feuille éditée fait échouer la lecture (ErrRecordUndecryptable)
 // avec le numéro de ligne : un journal partiellement lisible ne passe pas pour

@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 const (
@@ -161,11 +163,20 @@ func runScale2(s *suite, cfg config) {
 			return
 		}
 	}
+	// Journal d'audit de brokerd (#275) : REQUIS (base est neuf à chaque exécution).
+	auditKeyPath := filepath.Join(base, "brokerd-audit.key")
+	auditJournalPath := filepath.Join(base, "brokerd-audit-records.jsonl")
+	if err := registry.GenerateRecordKey(auditKeyPath); err != nil {
+		s.fail(ph, "clé du journal d'audit de brokerd", err)
+		return
+	}
 	brokerSock := filepath.Join(base, "broker.sock")
 	adminSock := filepath.Join(base, "broker-admin.sock")
 	witness := filepath.Join(base, "brokerd-provisioning-witness.json")
 	brokerEnv := func(k string) []string {
 		return append(os.Environ(),
+			"TBP_AUDIT_RECORDS="+auditJournalPath,
+			"TBP_AUDIT_RECORDS_KEY_FILE="+auditKeyPath,
 			"TBP_CELL_ID="+scale2CellID,
 			"TBP_SALT="+hex.EncodeToString(cellSalt),
 			"TBP_POLICY_ID="+policyHex,
@@ -279,6 +290,8 @@ func runScale2(s *suite, cfg config) {
 	two := act(twoP)
 	s.add(ph, "classe W avec DEUX contrôleurs (le 2e est indisponible : n = k + 1) → autorisé, jeton émis",
 		twoP != "" && two.Allow && two.Token != "", fmt.Sprintf("allow=%v reason=%s", two.Allow, two.Reason))
+	// #275 : le clair des décisions, du quorum et des plans de brokerd est vérifiable.
+	verifyAuditJournal(s, ph, "brokerd", regDir, auditJournalPath, auditKeyPath, 2)
 
 	// --- Étape 5 : l'échelle est attestée (#224) ----------------------------------------------
 	brokerd.stop()

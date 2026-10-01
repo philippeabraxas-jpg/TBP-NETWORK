@@ -459,7 +459,7 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	// Chaque décision rendue ci-dessus a laissé sa feuille ET son clair dans le
 	// journal : le clair redonne le hash de la feuille, et la feuille est dans
 	// le log sous un checkpoint signé (preuve d'inclusion RFC 6962).
-	verifyAuditJournal(s, ph, regDir, auditJournalPath, auditKeyPath)
+	verifyAuditJournal(s, ph, "pepd", regDir, auditJournalPath, auditKeyPath, 3)
 
 	// --- Étape : bascule gouvernée monitor→closed (§5.3) --------------------
 	// Preuve de quorum RÉELLE (revue de sécurité #89) : k signatures Ed25519
@@ -726,25 +726,25 @@ func postUnixRaw(hc *http.Client, url, body string) (int, []byte, error) {
 // verifyAuditJournal relit le journal d'audit de pepd et vérifie chaque
 // enregistrement contre le log de la cellule — ce que fait `tbp-audit verify
 // -log … -vkey-file …` pour un auditeur externe (#275, #271).
-func verifyAuditJournal(s *suite, ph, regDir, journalPath, keyPath string) {
+func verifyAuditJournal(s *suite, ph, who, regDir, journalPath, keyPath string, minDecisions int) {
 	key, err := registry.LoadRecordKey(keyPath)
 	if err != nil {
-		s.add(ph, "#275 : clé du journal d'audit lisible", false, err.Error())
+		s.add(ph, "#275 : "+who+" — clé du journal d'audit lisible", false, err.Error())
 		return
 	}
 	recs, err := registry.ReadRecords(journalPath, key)
 	if err != nil {
-		s.add(ph, "#275 : journal d'audit de pepd lisible et déchiffrable", false, err.Error())
+		s.add(ph, "#275 : journal d'audit de "+who+" lisible et déchiffrable", false, err.Error())
 		return
 	}
 	vkeyRaw, err := os.ReadFile(filepath.Join(regDir, "cell_log.vkey"))
 	if err != nil {
-		s.add(ph, "#275 : clé publique du log", false, err.Error())
+		s.add(ph, "#275 : "+who+" — clé publique du log", false, err.Error())
 		return
 	}
 	verifier, err := registry.NewVerifier(string(vkeyRaw))
 	if err != nil {
-		s.add(ph, "#275 : clé publique du log valide", false, err.Error())
+		s.add(ph, "#275 : "+who+" — clé publique du log valide", false, err.Error())
 		return
 	}
 	fetch := client.FileFetcher{Root: regDir}
@@ -768,7 +768,7 @@ func verifyAuditJournal(s *suite, ph, regDir, journalPath, keyPath string) {
 			decisions++
 		}
 	}
-	s.add(ph, "#275 : le clair de chaque décision est vérifiable (hash + inclusion dans le log signé)",
-		bad == "" && decisions >= 3,
+	s.add(ph, "#275 : "+who+" — le clair de chaque feuille est vérifiable (hash + inclusion dans le log signé)",
+		bad == "" && decisions >= minDecisions,
 		fmt.Sprintf("%d enregistrements, %d décisions %s", len(recs), decisions, bad))
 }

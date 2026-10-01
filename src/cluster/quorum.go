@@ -72,6 +72,10 @@ type QuorumGateConfig struct {
 	Salt []byte
 	// Leaves : chaque décision de quorum laisse une feuille (§4.1). Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// brokerd le renseigne toujours.
+	Journal *registry.RecordStore
 	// Controllers : manifest des clés publiques des contrôleurs (T3,
 	// hors-bande §3.2). Requis.
 	Controllers map[int]ed25519.PublicKey
@@ -96,16 +100,17 @@ type QuorumGateConfig struct {
 // après construction (la fraîcheur est lue sur l'horloge injectée) —
 // sûr pour un usage concurrent. Implémente broker.QuorumGate.
 type QuorumGate struct {
-	cellID string
-	salt   []byte
-	leaves LeafSink
-	ctrls  map[int]ed25519.PublicKey
-	k      int
-	policy [32]byte
-	maxTTL time.Duration
-	now    func() time.Time
-	used   ProofStore
-	mu     sync.Mutex // sérialise feuilles + lecture d'horloge
+	cellID  string
+	salt    []byte
+	leaves  LeafSink
+	journal *registry.RecordStore
+	ctrls   map[int]ed25519.PublicKey
+	k       int
+	policy  [32]byte
+	maxTTL  time.Duration
+	now     func() time.Time
+	used    ProofStore
+	mu      sync.Mutex // sérialise feuilles + lecture d'horloge
 }
 
 // NewQuorumGate construit le gate — configuration complète exigée.
@@ -149,7 +154,7 @@ func NewQuorumGate(cfg QuorumGateConfig) (*QuorumGate, error) {
 		ctrls[id] = append(ed25519.PublicKey(nil), pub...)
 	}
 	return &QuorumGate{
-		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves,
+		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves, journal: cfg.Journal,
 		ctrls: ctrls, k: cfg.K, policy: cfg.PolicyID,
 		maxTTL: time.Duration(maxTTL) * time.Second, now: now, used: cfg.Consumed,
 	}, nil
@@ -274,11 +279,6 @@ func (g *QuorumGate) leafLocked(ctx context.Context, verdict byte, valid, k int8
 	rec = append(rec, action...)
 	rec = append(rec, byte(len(reason)))
 	rec = append(rec, reason...)
-	_, err := g.leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindQuorum,
-		CellID:      g.cellID,
-		PayloadHash: registry.HashPayload(g.salt, rec),
-		Timestamp:   g.now().UnixNano(),
-	})
+	_, err := registry.AppendLeaf(ctx, g.leaves, g.journal, registry.KindQuorum, g.cellID, g.salt, rec, g.now().UnixNano())
 	return err
 }
