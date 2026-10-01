@@ -128,6 +128,18 @@ quorumproof wproof -manifest /etc/tbp/genesis/manifest.json -action read -resour
 # 4. the agent's intent carries plan_binding and quorum_proof (both hex) — POST /v1/actions
 ```
 
+**Cutting a plan approved by mistake (#244).** Do not wait for it to expire (up to 24 h): the operator revokes it,
+signed like an approval — the signed message is different (`TBPR1`), so an approval signature never revokes:
+
+```bash
+quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/revocation.json
+curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.json \
+  http://localhost/v1/supervision/plan/revoke
+```
+
+The agent's next step is then refused `plan-revoked`; an unsigned or wrongly signed revocation is refused and
+leaves a refusal leaf, a valid one leaves a leaf naming the operator. Works on a pending plan too.
+
 **Observable success criterion**: the same action is **refused** with no proof (`quorum-required`) and with
 one controller's proof (`quorum-insufficient`), and **allowed with a token** with two — here controllers 1 and
 3, because 2 is unavailable: that is what the spare is for. The proof does not work a second time.

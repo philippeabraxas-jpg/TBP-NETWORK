@@ -131,6 +131,20 @@ quorumproof wproof -manifest /etc/tbp/genesis/manifest.json -action read -resour
 # 4. l'intention de l'agent porte plan_binding et quorum_proof (tous deux en hex) — POST /v1/actions
 ```
 
+**Couper un plan approuvé par erreur (#244).** Inutile d'attendre son expiration (jusqu'à 24 h) : l'opérateur le
+révoque, signé comme une approbation — le message signé est différent (`TBPR1`), donc une signature
+d'approbation ne révoque jamais :
+
+```bash
+quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/revocation.json
+curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.json \
+  http://localhost/v1/supervision/plan/revoke
+```
+
+L'étape suivante de l'agent est alors refusée `plan-revoked` ; une révocation non signée ou mal signée est
+refusée et laisse une feuille de refus, une valide laisse une feuille qui nomme l'opérateur. Vaut aussi pour un
+plan en attente.
+
 **Critère de succès observable** : la même action est **refusée** sans preuve (`quorum-required`) et avec la
 preuve d'un seul contrôleur (`quorum-insufficient`), et **autorisée avec un jeton** avec deux — ici les
 contrôleurs 1 et 3, parce que le 2 est indisponible : c'est à cela que sert la rechange. La preuve ne vaut pas

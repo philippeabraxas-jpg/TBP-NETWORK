@@ -511,3 +511,44 @@ func TestPlanOfAnotherAgentDenied(t *testing.T) {
 		t.Fatalf("le destinataire du plan est refusé après l'essai étranger : %q", res.Reason)
 	}
 }
+
+// TestPlanRevokedDenied (#244) : un plan approuvé puis révoqué par l'opérateur n'émet plus
+// rien — « plan-revoked », aucun jeton ; une révocation SANS signature valide ne l'a pas coupé.
+func TestPlanRevokedDenied(t *testing.T) {
+	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
+	defer srv.Close()
+
+	params := []byte(`{"to":"ops@example.com","n":3}`)
+	store := newContractStore(t, &leafRecorder{}, nil)
+	planHash := approvePlan(t, store, []pep.PlanStep{contractStep(params)})
+	binding, err := pep.BuildBinding(planHash, params)
+	if err != nil {
+		t.Fatalf("BuildBinding: %v", err)
+	}
+	tr := staticTranslator{tr: Translation{
+		Action:      "http.send",
+		Resource:    "https://api.example.com/v1/messages",
+		PlanBinding: binding,
+	}}
+	b, _, _, _ := newContractBroker(t, srv.URL, tr, store)
+	intent := simpleIntent(t, "http.send", "https://api.example.com/v1/messages")
+	ctx := context.Background()
+
+	// Révocation non signée par l'opérateur : refusée, le plan reste vivant.
+	exp := time.Now().Add(5 * time.Minute)
+	if err := store.Revoke(ctx, planHash, exp, make([]byte, 64)); err == nil {
+		t.Fatal("révocation sans signature valide acceptée")
+	}
+
+	// Révocation signée : la prochaine étape est refusée plan-revoked, sans jeton.
+	if err := store.Revoke(ctx, planHash, exp, ed25519.Sign(testOperatorKey(), pep.RevocationMessage(planHash, exp))); err != nil {
+		t.Fatalf("révocation signée refusée : %v", err)
+	}
+	res := b.HandleAction(ctx, contractSubjectID, intent)
+	if res.Allow || res.Reason != ReasonPlanRevoked {
+		t.Fatalf("allow=%v reason=%q, veut deny/plan-revoked", res.Allow, res.Reason)
+	}
+	if len(res.Token) != 0 {
+		t.Fatal("un jeton a été émis pour un plan révoqué")
+	}
+}

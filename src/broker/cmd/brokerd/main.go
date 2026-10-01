@@ -16,7 +16,7 @@
 // Le serveur expose AUSSI trois lectures de supervision (GET-only) :
 // /v1/supervision/stats, /v1/supervision/epoch, /v1/supervision/arbitration
 // — et, depuis #177, le canal d'opérateur du contrat de plan (§4.2, T30) :
-// POST /v1/supervision/plan/submit et /plan/approve. Ce sont des handlers
+// POST /v1/supervision/plan/submit, /plan/approve et /plan/revoke (#244). Ce sont des handlers
 // d'assemblage qui appellent ce que les méthodes publiques des briques
 // exposent déjà (ContractStore.Submit/Approve pour les deux routes de
 // plan) — zéro modification de bibliothèque (D109), zéro logique métier
@@ -956,6 +956,47 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 	})
+	// POST /v1/supervision/plan/revoke (#244) : la révocation d'un plan (soumis OU approuvé)
+	// — « la discrétion humaine coupe dans les deux sens ». ContractStore.Revoke existait
+	// sans aucune route : un plan approuvé par erreur vivait jusqu'à son expiration (jusqu'à
+	// 24 h). Même forme que approve : un acte d'OPÉRATEUR signé (Ed25519 sur
+	// RevocationMessage, domaine distinct de l'approbation), vérifié contre le trousseau
+	// épinglé par le store lui-même — ce handler désérialise et relaie, rien d'autre.
+	// Toute tentative invalide laisse une feuille de refus ; une révocation réussie laisse
+	// une feuille attribuée (kid de l'opérateur).
+	adminMux.HandleFunc("POST /v1/supervision/plan/revoke", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPlanApproveBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"corps illisible"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxPlanApproveBytes {
+			http.Error(w, `{"error":"corps trop volumineux"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		var req planRevokeRequest
+		if err := decodeStrictJSON(body, &req); err != nil {
+			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
+			return
+		}
+		hashBytes, err := hex.DecodeString(req.PlanHash)
+		if err != nil || len(hashBytes) != 32 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan_hash invalide (32 octets hex)"})
+			return
+		}
+		var hash [32]byte
+		copy(hash[:], hashBytes)
+		sig, err := hex.DecodeString(req.Signature)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+			return
+		}
+		if err := contracts.Revoke(r.Context(), hash, req.ExpiresAt, sig); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	})
 	// POST /v1/epoch/renew (issue #126) : renouvellement du bail d'époque
 	// pour un déploiement multi-cellules déjà en service. N'ajoute AUCUNE
 	// logique de fencing — expose l'admission déjà exercée par le tracker au
@@ -1174,6 +1215,14 @@ type planSubmitResponse struct {
 type planApproveRequest struct {
 	PlanHash  string    `json:"plan_hash"`  // hex, 32 octets
 	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans ApprovalMessage (D59)
+	Signature string    `json:"signature"`  // hex Ed25519, trousseau opérateur épinglé (§12)
+}
+
+// planRevokeRequest est le corps de POST /v1/supervision/plan/revoke (#244) : même forme
+// que l'approbation, signature sur RevocationMessage (domaine « TBPR1 »).
+type planRevokeRequest struct {
+	PlanHash  string    `json:"plan_hash"`  // hex, 32 octets
+	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans RevocationMessage
 	Signature string    `json:"signature"`  // hex Ed25519, trousseau opérateur épinglé (§12)
 }
 

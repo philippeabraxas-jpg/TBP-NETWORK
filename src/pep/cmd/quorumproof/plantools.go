@@ -5,6 +5,10 @@ package main
 //	quorumproof planapprove -plan-hash HEX64 [-ttl S] -key FILE -out APPROBATION.json
 //	    signe l'approbation d'un plan avec la clé d'OPÉRATEUR (celle de TBP_OPERATOR_KEYS_FILE) et écrit
 //	    le corps à poster sur POST /v1/supervision/plan/approve (socket d'administration de brokerd)
+//	quorumproof planrevoke -plan-hash HEX64 [-ttl S] -key FILE -out REVOCATION.json
+//	    signe la RÉVOCATION d'un plan (soumis ou approuvé, #244) avec la clé d'opérateur et écrit le corps
+//	    à poster sur POST /v1/supervision/plan/revoke (même socket d'administration). Le message signé est
+//	    distinct de celui de l'approbation : l'une ne vaut jamais l'autre.
 //	quorumproof planbind -plan-hash HEX64 [-params-hex HEX]
 //	    affiche le plan_binding (hex) à placer dans l'intention de l'agent
 //
@@ -16,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"time"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -56,6 +61,39 @@ func cmdPlanApprove(args []string) error {
 	}
 	exp := time.Now().Add(time.Duration(*ttl) * time.Second).UTC()
 	sig := ed25519.Sign(key, pep.ApprovalMessage(h, exp))
+	return writeJSON0600(*out, map[string]string{
+		"plan_hash":  *planHash,
+		"expires_at": exp.Format(time.RFC3339),
+		"signature":  hex.EncodeToString(sig),
+	})
+}
+
+func cmdPlanRevoke(args []string) error {
+	fs := flag.NewFlagSet("planrevoke", flag.ContinueOnError)
+	planHash := fs.String("plan-hash", "", "hash du plan (hex 64)")
+	ttl := fs.Int("ttl", 300, "durée de validité de la révocation, en secondes")
+	keyFile := fs.String("key", "", "clé d'opérateur (fichier de graine ou de clé, hex)")
+	out := fs.String("out", "", "corps JSON à écrire (0600)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *planHash == "" || *keyFile == "" || *out == "" {
+		return errors.New("-plan-hash, -key et -out requis")
+	}
+	if *ttl < 10 || *ttl > 3600 {
+		return errors.New("-ttl hors bornes [10, 3600] s")
+	}
+	h, err := parsePlanHash(*planHash)
+	if err != nil {
+		return err
+	}
+	key, err := loadKey(*keyFile)
+	if err != nil {
+		return err
+	}
+	exp := time.Now().Add(time.Duration(*ttl) * time.Second).UTC()
+	sig := ed25519.Sign(key, pep.RevocationMessage(h, exp))
+	fmt.Fprintf(os.Stderr, "quorumproof: révocation du plan %s signée, expire %s\n", *planHash, exp.Format(time.RFC3339))
 	return writeJSON0600(*out, map[string]string{
 		"plan_hash":  *planHash,
 		"expires_at": exp.Format(time.RFC3339),

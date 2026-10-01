@@ -406,3 +406,54 @@ func TestSignedTransitionConditionBindsTheTargetState(t *testing.T) {
 		}
 	}
 }
+
+// #244 : planrevoke signe RevocationMessage (« TBPR1 »), pas l'approbation : le corps vérifie
+// contre le message de révocation, et la même signature ne vaut pas approbation.
+func TestPlanRevokeSignsTheRevocationMessageNotTheApproval(t *testing.T) {
+	dir := t.TempDir()
+	op, keyPath := keyFile(t, dir, "operator", 7)
+	hash := [32]byte{0xab, 0xcd}
+	hashHex := hex.EncodeToString(hash[:])
+	out := filepath.Join(dir, "revocation.json")
+	if err := cmdPlanRevoke([]string{"-plan-hash", hashHex, "-ttl", "120", "-key", keyPath, "-out", out}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		PlanHash  string `json:"plan_hash"`
+		ExpiresAt string `json:"expires_at"`
+		Signature string `json:"signature"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := time.Parse(time.RFC3339, body.ExpiresAt)
+	if err != nil || body.PlanHash != hashHex {
+		t.Fatalf("corps mal formé : %+v (%v)", body, err)
+	}
+	sig, err := hex.DecodeString(body.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := op.Public().(ed25519.PublicKey)
+	if !ed25519.Verify(pub, pep.RevocationMessage(hash, exp), sig) {
+		t.Fatal("la signature ne vérifie pas contre RevocationMessage")
+	}
+	if ed25519.Verify(pub, pep.ApprovalMessage(hash, exp), sig) {
+		t.Fatal("la signature de révocation vaut aussi approbation (domaines non séparés)")
+	}
+	// TTL hors bornes et hash mal formé : refusés
+	for name, args := range map[string][]string{
+		"ttl trop court": {"-plan-hash", hashHex, "-ttl", "1", "-key", keyPath, "-out", out},
+		"ttl trop long":  {"-plan-hash", hashHex, "-ttl", "99999", "-key", keyPath, "-out", out},
+		"hash invalide":  {"-plan-hash", "zz", "-key", keyPath, "-out", out},
+		"sans clé":       {"-plan-hash", hashHex, "-out", out},
+	} {
+		if err := cmdPlanRevoke(args); err == nil {
+			t.Fatalf("%s accepté", name)
+		}
+	}
+}

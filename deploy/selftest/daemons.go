@@ -235,6 +235,9 @@ func runDaemons(s *suite, cfg config) {
 	brokerSock := filepath.Join(base, "broker.sock")
 	brokerAdminSock := filepath.Join(base, "broker-admin.sock")
 	consoleSock := filepath.Join(base, "supervision.sock")
+	// Un témoin de provisionnement ou un registre d'une exécution précédente ferait un faux échec
+	// (brokerd repartirait « conforme » au lieu d'exiger l'adoption) — même précaution que scale2.
+	_ = os.RemoveAll(base)
 	for _, d := range []string{binDir, opaDir, genesisDir, manifestDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			s.fail(phaseDaemons, "préparation des répertoires", err)
@@ -694,6 +697,49 @@ func runDaemons(s *suite, cfg config) {
 	})
 	s.add(phaseDaemons, "brokerd: plan approuvé (signature opérateur Ed25519 — #177)",
 		approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
+
+	// --- #244 : la révocation d'un plan est un acte d'opérateur signé -------------
+	// Un SECOND plan, approuvé puis révoqué, sans toucher au plan de l'action de bout en bout
+	// (les compteurs de requêtes plus bas restent exacts). Une révocation sans signature valide
+	// (ici : la signature d'APPROBATION, domaine distinct) est refusée ; la signée coupe le plan ;
+	// la rejouer est refusée (déjà révoqué).
+	{
+		st2, raw2, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
+			"subject": "agent-1",
+			"steps":   []map[string]string{{"action": "read", "resource": "doc-revoke", "params_hex": ""}},
+		})
+		var sub2 daemonPlanSubmitResponse
+		if st2 == http.StatusOK {
+			_ = json.Unmarshal(raw2, &sub2)
+		}
+		hb2, derr := hex.DecodeString(sub2.PlanHash)
+		if st2 != http.StatusOK || derr != nil || len(hb2) != 32 {
+			s.fail(phaseDaemons, "brokerd: second plan soumis (révocation, #244)", fmt.Errorf("status=%d err=%v", st2, derr))
+			return
+		}
+		var h2 [32]byte
+		copy(h2[:], hb2)
+		exp2 := time.Now().Add(5 * time.Minute)
+		apSt, _, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
+			"plan_hash":  sub2.PlanHash,
+			"expires_at": exp2.UTC().Format(time.RFC3339),
+			"signature":  hex.EncodeToString(ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(h2, exp2))),
+		})
+		revoke := func(sig []byte) int {
+			st, _, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/revoke", map[string]any{
+				"plan_hash":  sub2.PlanHash,
+				"expires_at": exp2.UTC().Format(time.RFC3339),
+				"signature":  hex.EncodeToString(sig),
+			})
+			return st
+		}
+		badSt := revoke(ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(h2, exp2)))
+		okSt := revoke(ed25519.Sign(devKey("operator-1"), pep.RevocationMessage(h2, exp2)))
+		replaySt := revoke(ed25519.Sign(devKey("operator-1"), pep.RevocationMessage(h2, exp2)))
+		s.add(phaseDaemons, "brokerd: plan approuvé puis révoqué par l'opérateur (signature de révocation distincte de l'approbation — #244)",
+			apSt == http.StatusOK && badSt == http.StatusBadRequest && okSt == http.StatusOK && replaySt == http.StatusBadRequest,
+			fmt.Sprintf("approbation=%d révocation(sig d'approbation)=%d révocation signée=%d rejeu=%d", apSt, badSt, okSt, replaySt))
+	}
 
 	planBinding, err := pep.BuildBinding(planHash, nil)
 	if err != nil {
