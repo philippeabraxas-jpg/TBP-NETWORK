@@ -660,6 +660,20 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   de l'un ne vaut jamais pour l'autre, ni pour une bascule de posture). Les contrôleurs dont
   la clé est dans un HSM utilisent `quorumproof message` (ce qu'il faut signer) puis
   `quorumproof assemble`.
+- **Qui peut signer un changement (issue #218).** La preuve est vérifiée contre les clés de
+  contrôleurs *telles qu'attestées dans le témoin* (trousseau de quorum pour `pepd`,
+  manifeste de genèse pour `brokerd`), jamais contre le fichier présent sur le disque. Sinon
+  qui peut écrire ce fichier y ajoute ses propres k clés et signe sa propre transition.
+  Conséquence : une **rotation légitime des contrôleurs eux-mêmes** est signée par les
+  ANCIENS contrôleurs ; le nouvel ensemble devient ensuite la référence. Un témoin écrit
+  avant ce correctif n'a pas d'instantané : un démarrage sans changement le met à niveau sur
+  place, mais un fichier *modifié* est refusé, avec ou sans preuve — ré-engager explicitement
+  (ci-dessous).
+- **Ré-engager après un témoin perdu.** Il n'y a rien d'attesté à opposer : la preuve se
+  vérifie alors contre le trousseau actuellement sur le disque — confiance à la première
+  utilisation, comme au premier démarrage. C'est un acte d'installation de l'administrateur,
+  pas une transition ; sauvegarder le témoin (lecture seule, hors de l'hôte de la cellule) et
+  traiter sa perte comme un incident.
 - **Adopter cette brique sur une cellule qui a déjà tourné.** Sans témoin et avec un registre
   qui a déjà vécu, le démon refuse de démarrer (un fichier édité serait sinon adopté comme un
   « premier démarrage », §111) : fournir une fois une preuve de transition comme ci-dessus.

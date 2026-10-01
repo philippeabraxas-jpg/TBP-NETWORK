@@ -58,13 +58,26 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 	}
 	files := append([]registry.ProvisioningFile{
 		{Name: "issuer-keyring", Path: in.keyringFile},
-		{Name: "quorum-keyring", Path: in.quorumKeyringFile},
+		{Name: "quorum-keyring", Path: in.quorumKeyringFile, Authority: true},
 	}, extra...)
 
-	var authorize func() error
+	// La preuve de transition est vérifiée contre le trousseau de contrôleurs ATTESTÉ
+	// (celui du témoin, avant l'édition), jamais contre le fichier courant : sinon
+	// l'attaquant qui édite le fichier y ajoute ses clés et signe sa propre transition
+	// (issue #218). Sans témoin antérieur (premier démarrage, ré-engagement après perte
+	// du témoin) il n'y a pas d'attesté : repli TOFU sur le trousseau courant.
+	var authorize func(prev map[string][]byte) error
 	if proof := getenv("TBP_PROVISIONING_TRANSITION_PROOF_FILE"); proof != "" {
-		authorize = func() error {
-			return pep.VerifyQuorumProofFile(proof, conditionProvisioningTransition, in.cellID, in.quorumKeyring, in.quorumMin)
+		authorize = func(prev map[string][]byte) error {
+			keyring := in.quorumKeyring
+			if raw, ok := prev["quorum-keyring"]; ok {
+				attested, err := parseKeyring(raw)
+				if err != nil {
+					return fmt.Errorf("trousseau de contrôleurs attesté illisible: %w", err)
+				}
+				keyring = attested
+			}
+			return pep.VerifyQuorumProofFile(proof, conditionProvisioningTransition, in.cellID, keyring, in.quorumMin)
 		}
 	}
 	g, err := registry.NewProvisioningGuard(registry.ProvisioningGuardOptions{

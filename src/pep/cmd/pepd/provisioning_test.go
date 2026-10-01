@@ -32,13 +32,29 @@ func newProvFixture(t *testing.T) *provFixture {
 		quorumKeyring:       filepath.Join(base, "quorum-keyring.json"),
 		witness:             filepath.Join(base, "pepd-provisioning.json"),
 	}
-	for _, p := range []string{pf.keyring, pf.quorumKeyring} {
-		if err := os.WriteFile(p, []byte(`{"00":"aa"}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(pf.keyring, []byte(`{"00":"aa"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	// le trousseau de contrôleurs est un VRAI trousseau : la preuve de transition est
+	// vérifiée contre son contenu attesté (#218)
+	pf.writeQuorumKeyring(t, fx.quorumKeyring)
 	fx.env["TBP_PROVISIONING_WITNESS_FILE"] = pf.witness
 	return pf
+}
+
+func (pf *provFixture) writeQuorumKeyring(t *testing.T, kr map[[16]byte]ed25519.PublicKey) {
+	t.Helper()
+	raw := map[string]string{}
+	for kid, pub := range kr {
+		raw[hex.EncodeToString(kid[:])] = hex.EncodeToString(pub)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pf.quorumKeyring, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (pf *provFixture) setup(t *testing.T) error {
@@ -173,5 +189,63 @@ func TestPepdProvisioningTransitionNeedsAPepdQuorumProof(t *testing.T) {
 	delete(pf.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
 	if err := pf.setup(t); err != nil {
 		t.Fatalf("nouvelle référence non retenue : %v", err)
+	}
+}
+
+// Faille trouvée en préparant #199 : une transition du trousseau de quorum était
+// autorisée par une preuve vérifiée contre le trousseau MODIFIÉ — celui que
+// l'attaquant vient d'éditer. Qui peut écrire TBP_QUORUM_KEYRING_FILE ajoute ses
+// propres clés, signe une preuve avec elles, et la mesure l'« autorise » : la
+// protection du trousseau le plus sensible était vide. La preuve doit être
+// vérifiée contre le trousseau tel qu'il était ATTESTÉ par le témoin.
+func TestPepdKeyringTransitionCannotBeSelfAuthorized(t *testing.T) {
+	pf := newProvFixture(t)
+	legit := pf.measuredBootFixture.quorumKeyring
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+
+	// L'attaquant ajoute assez de SES clés pour atteindre k, et signe avec elles.
+	forged := map[[16]byte]ed25519.PublicKey{}
+	for k, v := range legit {
+		forged[k] = v
+	}
+	attackerPrivs := map[[16]byte]ed25519.PrivateKey{}
+	for i := 0; i < pf.quorumMin; i++ {
+		pub, priv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kid := pep.KeyIDFromPublicKey(pub)
+		forged[kid], attackerPrivs[kid] = pub, priv
+	}
+	pf.writeQuorumKeyring(t, forged)
+	expiry := time.Now().Add(60 * time.Second)
+	msg := pep.QuorumMessage(conditionProvisioningTransition, pf.cellID, expiry)
+	var sigs []measuredBootTransitionSigWire
+	for kid, priv := range attackerPrivs {
+		sigs = append(sigs, measuredBootTransitionSigWire{KeyID: hex.EncodeToString(kid[:]), Signature: hex.EncodeToString(ed25519.Sign(priv, msg))})
+	}
+	data, err := json.Marshal(measuredBootTransitionProofFile{Expiry: expiry.Unix(), Signatures: sigs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofPath := filepath.Join(filepath.Dir(pf.witness), "forged-proof.json")
+	if err := os.WriteFile(proofPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proofPath
+
+	// main chargerait le trousseau ÉDITÉ : c'est ce que reçoit setupProvisioning.
+	pf.measuredBootFixture.quorumKeyring = forged
+	if err := pf.setup(t); err == nil {
+		t.Fatal("un trousseau de quorum édité par l'attaquant a été « autorisé » par une preuve qu'il a lui-même signée")
+	}
+
+	// Cas voisin autorisé : les VRAIS contrôleurs (le trousseau attesté) signent la
+	// même transition.
+	pf.proof(t, conditionProvisioningTransition, pf.quorumMin)
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("transition signée par le quorum ATTESTÉ refusée : %v", err)
 	}
 }

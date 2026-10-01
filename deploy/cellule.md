@@ -623,6 +623,18 @@ scope used to pass without any alarm.
   Conditions: `provisioning-transition-brokerd` and `provisioning-transition-pepd` (a
   proof for one never works for the other, nor for a posture switch). Controllers whose
   keys live in an HSM use `quorumproof message` (what to sign) and `quorumproof assemble`.
+- **Who may sign a change (issue #218).** The proof is checked against the controller
+  keys *as attested in the witness* (the quorum keyring for `pepd`, the genesis manifest
+  for `brokerd`), never against the file now on disk. Otherwise whoever can write that
+  file could add their own k keys and sign their own transition. Consequence: a legitimate
+  **rotation of the controllers themselves** is signed by the OLD controllers; the new set
+  then becomes the reference. Witnesses written before this fix carry no snapshot: an
+  unchanged start upgrades them in place, but a *changed* file is refused, with or without
+  a proof — re-engage explicitly (below).
+- **Re-engaging after a lost witness.** There is nothing attested to check against, so the
+  proof falls back to the keyring currently on disk: trust on first use, as at a first
+  start. This is an installation act by the administrator, not a transition; keep the
+  witness backed up (read-only, off the cell host) and treat its loss as an incident.
 - **Adopting this on a cell that already ran.** With no witness and a registry that has
   already lived, the daemon refuses to start (an edited file would otherwise be adopted as
   a "first start", §111): provide one transition proof as above, once.

@@ -1246,6 +1246,13 @@ func loadGenesisControllers(path string) (map[int]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifest de genèse: %w", err)
 	}
+	return parseGenesisControllers(data)
+}
+
+// parseGenesisControllers décode les contrôleurs d'un manifeste de genèse. Séparé de
+// loadGenesisControllers pour que le provisionnement (#218) puisse lire le manifeste
+// ATTESTÉ (octets du témoin) et non le fichier courant.
+func parseGenesisControllers(data []byte) (map[int]ed25519.PublicKey, error) {
 	var mf genesisManifest
 	if err := json.Unmarshal(data, &mf); err != nil {
 		return nil, fmt.Errorf("manifest de genèse JSON: %w", err)

@@ -84,6 +84,13 @@ var (
 type ProvisioningFile struct {
 	Name string
 	Path string
+	// Authority marque un fichier qui DÉCIDE qui peut autoriser un changement (le
+	// trousseau de quorum, le manifeste de genèse). Le témoin en conserve le
+	// CONTENU : une transition est autorisée par une preuve vérifiée contre ce
+	// contenu ATTESTÉ, jamais contre le fichier tel qu'il est maintenant — sinon qui
+	// édite le trousseau y ajoute ses clés et signe lui-même sa « transition »
+	// (issue #218).
+	Authority bool
 }
 
 // ProvisioningFileHash est le hash mesuré d'un fichier.
@@ -99,26 +106,48 @@ type ProvisioningFileHash struct {
 // Liste vide, nom vide/trop long/dupliqué, fichier illisible ou trop gros : erreur
 // (jamais un fichier « passé » — même doctrine que ComponentPaths).
 func MeasureProvisioning(files []ProvisioningFile) ([32]byte, []ProvisioningFileHash, error) {
+	digest, per, _, err := measureProvisioning(files)
+	return digest, per, err
+}
+
+// maxAuthorityBytes borne le contenu d'un fichier d'autorité conservé dans le
+// témoin : un trousseau de clés publiques, pas une image disque.
+const maxAuthorityBytes = 64 << 10
+
+// measureProvisioning est MeasureProvisioning qui rend en plus le contenu des
+// fichiers d'AUTORITÉ. Le hash et l'instantané viennent des MÊMES octets, lus une
+// seule fois : pas de fenêtre entre « ce qu'on a mesuré » et « ce qu'on retient ».
+func measureProvisioning(files []ProvisioningFile) ([32]byte, []ProvisioningFileHash, map[string][]byte, error) {
 	var digest [32]byte
 	if len(files) == 0 {
-		return digest, nil, fmt.Errorf("%w : aucun fichier — un condensé vide n'atteste rien", ErrProvisioningConfig)
+		return digest, nil, nil, fmt.Errorf("%w : aucun fichier — un condensé vide n'atteste rien", ErrProvisioningConfig)
 	}
 	if len(files) > maxProvisioningFiles {
-		return digest, nil, fmt.Errorf("%w : %d fichiers (max %d)", ErrProvisioningConfig, len(files), maxProvisioningFiles)
+		return digest, nil, nil, fmt.Errorf("%w : %d fichiers (max %d)", ErrProvisioningConfig, len(files), maxProvisioningFiles)
 	}
 	seen := make(map[string]bool, len(files))
 	per := make([]ProvisioningFileHash, 0, len(files))
+	authorities := map[string][]byte{}
 	for _, f := range files {
 		if f.Name == "" || len(f.Name) > maxProvisioningName {
-			return digest, nil, fmt.Errorf("%w : nom vide ou > %d octets", ErrProvisioningConfig, maxProvisioningName)
+			return digest, nil, nil, fmt.Errorf("%w : nom vide ou > %d octets", ErrProvisioningConfig, maxProvisioningName)
 		}
 		if seen[f.Name] {
-			return digest, nil, fmt.Errorf("%w : nom en double %q", ErrProvisioningConfig, f.Name)
+			return digest, nil, nil, fmt.Errorf("%w : nom en double %q", ErrProvisioningConfig, f.Name)
 		}
 		seen[f.Name] = true
+		if f.Authority {
+			raw, err := readBoundedBytes(f.Path, maxAuthorityBytes)
+			if err != nil {
+				return digest, nil, nil, fmt.Errorf("%w : %q : %v", ErrProvisioningMeasure, f.Name, err)
+			}
+			authorities[f.Name] = raw
+			per = append(per, ProvisioningFileHash{Name: f.Name, Hash: sha256.Sum256(raw)})
+			continue
+		}
 		h, err := hashBoundedFile(f.Path)
 		if err != nil {
-			return digest, nil, fmt.Errorf("%w : %q : %v", ErrProvisioningMeasure, f.Name, err)
+			return digest, nil, nil, fmt.Errorf("%w : %q : %v", ErrProvisioningMeasure, f.Name, err)
 		}
 		per = append(per, ProvisioningFileHash{Name: f.Name, Hash: h})
 	}
@@ -131,7 +160,31 @@ func MeasureProvisioning(files []ProvisioningFile) ([32]byte, []ProvisioningFile
 		h.Write(p.Hash[:])
 	}
 	copy(digest[:], h.Sum(nil))
-	return digest, per, nil
+	return digest, per, authorities, nil
+}
+
+// readBoundedBytes lit un fichier régulier d'au plus max octets.
+func readBoundedBytes(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, errors.New("n'est pas un fichier régulier")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > max {
+		return nil, fmt.Errorf("plus de %d octets", max)
+	}
+	return raw, nil
 }
 
 // hashBoundedFile lit le fichier avec une borne dure : au-delà, refus.
@@ -172,12 +225,18 @@ func hashBoundedFile(path string) ([32]byte, error) {
 // Layout du record canonique « TBP-V1 » du témoin (champs fixes, pas de map :
 // déterminisme §11.3).
 //
-//	"TBP-V1" ‖ v(u8=1) ‖ u8 len(cellID) ‖ cellID ‖ u8 len(component) ‖ component
+//	"TBP-V1" ‖ v(u8) ‖ u8 len(cellID) ‖ cellID ‖ u8 len(component) ‖ component
 //	         ‖ seq(u64 BE) ‖ prev(32) ‖ digest(32)
-//	         ‖ u16 nfiles ‖ nfiles × (u8 len(name) ‖ name ‖ hash(32)) ‖ issuedAt(u64 BE)
+//	         ‖ u16 nfiles ‖ nfiles × (u8 len(name) ‖ name ‖ hash(32))
+//	         ‖ [v ≥ 2 : u8 nauth ‖ nauth × (u8 len(name) ‖ name ‖ u32 len ‖ contenu)]
+//	         ‖ issuedAt(u64 BE)
+//
+// v1 : sans instantané des fichiers d'autorité (témoins d'avant #218). v2 : avec.
+// Le préfixe reste « TBP-V1 » (identité du format) ; c'est l'octet de version qui
+// distingue.
 const (
 	witnessPrefix = "TBP-V1"
-	witnessVer    = 1
+	witnessVer    = 2
 )
 
 // ProvisioningWitness est la forme parsée du témoin.
@@ -188,7 +247,11 @@ type ProvisioningWitness struct {
 	Prev      [32]byte
 	Digest    [32]byte
 	Files     []ProvisioningFileHash
-	IssuedAt  time.Time
+	// Authorities : contenu des fichiers d'autorité tel qu'ATTESTÉ (v2).
+	Authorities map[string][]byte
+	// Legacy : témoin v1, sans instantané. Jamais écrit, seulement lu.
+	Legacy   bool
+	IssuedAt time.Time
 }
 
 func marshalWitnessRecord(w ProvisioningWitness) []byte {
@@ -207,6 +270,18 @@ func marshalWitnessRecord(w ProvisioningWitness) []byte {
 		r = append(r, f.Name...)
 		r = append(r, f.Hash[:]...)
 	}
+	names := make([]string, 0, len(w.Authorities))
+	for n := range w.Authorities {
+		names = append(names, n)
+	}
+	sort.Strings(names) // déterministe (§11.3)
+	r = append(r, byte(len(names)))
+	for _, n := range names {
+		r = append(r, byte(len(n)))
+		r = append(r, n...)
+		r = binary.BigEndian.AppendUint32(r, uint32(len(w.Authorities[n])))
+		r = append(r, w.Authorities[n]...)
+	}
 	return binary.BigEndian.AppendUint64(r, uint64(w.IssuedAt.Unix()))
 }
 
@@ -218,9 +293,11 @@ func parseWitnessRecord(r []byte) (ProvisioningWitness, error) {
 	if len(r) < 6+1+1 || string(r[:6]) != witnessPrefix {
 		return bad("préfixe")
 	}
-	if r[6] != witnessVer {
+	ver := r[6]
+	if ver != 1 && ver != witnessVer {
 		return bad("version inconnue")
 	}
+	w.Legacy = ver == 1
 	p := 7
 	readStr := func() (string, bool) {
 		if p >= len(r) {
@@ -267,6 +344,32 @@ func parseWitnessRecord(r []byte) (ProvisioningWitness, error) {
 		copy(fh.Hash[:], r[p:])
 		p += 32
 		w.Files = append(w.Files, fh)
+	}
+	if ver >= 2 {
+		if p >= len(r) {
+			return bad("autorités")
+		}
+		nauth := int(r[p])
+		p++
+		if nauth > 0 {
+			w.Authorities = make(map[string][]byte, nauth)
+		}
+		for i := 0; i < nauth; i++ {
+			name, ok := readStr()
+			if !ok || p+4 > len(r) {
+				return bad("autorité")
+			}
+			n := int(binary.BigEndian.Uint32(r[p:]))
+			p += 4
+			if n > maxAuthorityBytes || p+n > len(r) {
+				return bad("autorité : contenu")
+			}
+			if _, dup := w.Authorities[name]; dup {
+				return bad("autorité en double")
+			}
+			w.Authorities[name] = append([]byte(nil), r[p:p+n]...)
+			p += n
+		}
 	}
 	if len(r)-p != 8 {
 		return bad("longueur")
@@ -340,7 +443,13 @@ type ProvisioningGuardOptions struct {
 	// AuthorizeTransition autorise un changement délibéré (ou le ré-engagement d'un
 	// témoin effacé). Nil ⇒ toute divergence est refusée. C'est le RÉGLAGE D'ÉCHELLE :
 	// preuve d'un administrateur (k = 1) ou d'un quorum k-of-n.
-	AuthorizeTransition func() error
+	//
+	// prev est le contenu des fichiers d'AUTORITÉ tel que le dernier témoin l'a
+	// ATTESTÉ : la preuve se vérifie contre CES clés, jamais contre le fichier
+	// courant que l'attaquant vient d'éditer (issue #218). prev est nil quand il n'y
+	// a rien d'attesté à opposer — premier démarrage, ou ré-engagement après
+	// effacement du témoin (confiance à la première utilisation, documentée).
+	AuthorizeTransition func(prev map[string][]byte) error
 	OnTrip              func(reason string)
 	Now                 func() time.Time
 }
@@ -406,7 +515,7 @@ func (g *ProvisioningGuard) Check(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	digest, per, err := MeasureProvisioning(g.o.Files)
+	digest, per, authorities, err := measureProvisioning(g.o.Files)
 	if err != nil {
 		g.trip("provisioning-measure-fault")
 		return g.refuse(ctx, [32]byte{}, 0, "measure-fault", err)
@@ -427,28 +536,47 @@ func (g *ProvisioningGuard) Check(ctx context.Context) error {
 		if size == 0 {
 			// Premier démarrage : confiance à la première utilisation, assumée et
 			// documentée (même scission que la genèse du manifeste TBP-M1).
-			return g.commit(ctx, provEventGenesis, ProvisioningWitness{Seq: 0}, digest, per, "genesis")
+			return g.commit(ctx, provEventGenesis, ProvisioningWitness{Seq: 0, Authorities: authorities}, digest, per, "genesis")
 		}
 		// Témoin absent alors que le journal a déjà vécu.
 		if g.o.AuthorizeTransition == nil {
 			g.trip("provisioning-witness-missing")
 			return g.refuse(ctx, digest, 0, "witness-missing", ErrProvisioningWitnessMissing)
 		}
-		if aerr := g.o.AuthorizeTransition(); aerr != nil {
+		// Rien d'attesté à opposer (le témoin est perdu) : prev = nil, le démon
+		// retombe sur le trousseau courant. C'est un acte d'installation, pas une
+		// transition — documenté (issue #218).
+		if aerr := g.o.AuthorizeTransition(nil); aerr != nil {
 			g.trip("provisioning-witness-missing")
 			return g.refuse(ctx, digest, 0, "witness-missing", fmt.Errorf("%w : autorisation refusée : %v", ErrProvisioningWitnessMissing, aerr))
 		}
-		return g.commit(ctx, provEventTransition, ProvisioningWitness{Seq: 0}, digest, per, "re-engaged")
+		return g.commit(ctx, provEventTransition, ProvisioningWitness{Seq: 0, Authorities: authorities}, digest, per, "re-engaged")
 	}
 
 	if last.Digest == digest {
+		if last.Legacy {
+			// Témoin d'avant #218 (sans instantané des fichiers d'autorité) : les
+			// fichiers n'ont pas changé, donc leur contenu courant EST l'attesté —
+			// mise à niveau sur place, sans autorisation.
+			next := ProvisioningWitness{Seq: last.Seq + 1, Prev: HashManifest(marshalWitnessRecord(*last)), Authorities: authorities}
+			return g.commit(ctx, provEventTransition, next, digest, per, "witness-upgraded")
+		}
 		return g.leaf(ctx, provEventBoot, digest, last.Seq, 1, "ok")
 	}
 
 	changed := changedNames(last.Files, per)
+	if last.Legacy {
+		// Divergence face à un témoin SANS instantané : il n'y a pas de trousseau
+		// attesté contre lequel vérifier une preuve, et retomber sur le trousseau
+		// courant serait précisément la faille #218 (rétrogradation par rejeu d'un
+		// vieux témoin). Refus : le ré-engagement (effacer le témoin) est l'acte
+		// d'installation explicite.
+		g.trip("provisioning-divergence")
+		return g.refuse(ctx, digest, last.Seq, "divergence", fmt.Errorf("%w : %s (témoin d'avant #218 sans instantané des fichiers d'autorité : ré-engager explicitement)", ErrProvisioningDivergence, changed))
+	}
 	if g.o.AuthorizeTransition != nil {
-		if aerr := g.o.AuthorizeTransition(); aerr == nil {
-			next := ProvisioningWitness{Seq: last.Seq + 1, Prev: HashManifest(marshalWitnessRecord(*last))}
+		if aerr := g.o.AuthorizeTransition(last.Authorities); aerr == nil {
+			next := ProvisioningWitness{Seq: last.Seq + 1, Prev: HashManifest(marshalWitnessRecord(*last)), Authorities: authorities}
 			return g.commit(ctx, provEventTransition, next, digest, per, "transition")
 		} else {
 			g.trip("provisioning-divergence")
@@ -506,7 +634,7 @@ func changedNames(old, cur []ProvisioningFileHash) string {
 func (g *ProvisioningGuard) commit(ctx context.Context, event byte, base ProvisioningWitness, digest [32]byte, per []ProvisioningFileHash, reason string) error {
 	w := ProvisioningWitness{
 		CellID: g.o.CellID, Component: g.o.Component,
-		Seq: base.Seq, Prev: base.Prev, Digest: digest, Files: per, IssuedAt: g.now(),
+		Seq: base.Seq, Prev: base.Prev, Digest: digest, Files: per, Authorities: base.Authorities, IssuedAt: g.now(),
 	}
 	rec := marshalWitnessRecord(w)
 	sig, err := g.o.Signer.Sign(rec)

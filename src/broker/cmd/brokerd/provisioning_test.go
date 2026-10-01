@@ -386,3 +386,55 @@ func TestBrokerdRefusesToStartOnOneByteChangeInEachMeasuredFile(t *testing.T) {
 		})
 	}
 }
+
+// Issue #218 : la preuve de transition était vérifiée contre le manifeste de genèse
+// COURANT — celui que l'attaquant vient d'éditer. Il y ajoute ses clés, signe avec
+// elles, et la mesure « l'autorise ». La preuve doit être vérifiée contre les
+// contrôleurs du manifeste tel qu'il était ATTESTÉ.
+func TestBrokerdManifestTransitionCannotBeSelfAuthorized(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	manifest := filepath.Join(fx.genDir, "manifest.json")
+	legit, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+
+	// l'attaquant ajoute k clés à lui au manifeste et signe avec elles
+	var mf genesisManifest
+	if err := json.Unmarshal(legit, &mf); err != nil {
+		t.Fatal(err)
+	}
+	var attackerPrivs []ed25519.PrivateKey
+	for i := 0; i < 2; i++ { // k = 2
+		pub, priv, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mf.PubKeys = append(mf.PubKeys, hex.EncodeToString(pub))
+		attackerPrivs = append(attackerPrivs, priv)
+	}
+	forged, _ := json.Marshal(mf)
+	if err := os.WriteFile(manifest, forged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	saved := fx.controllerPrivs
+	fx.controllerPrivs = attackerPrivs
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	fx.controllerPrivs = saved
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("un manifeste de genèse édité par l'attaquant a été « autorisé » par une preuve qu'il a lui-même signée")
+	}
+
+	// cas voisin : les contrôleurs ATTESTÉS signent la même transition
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("transition signée par le quorum attesté refusée : %v", err)
+	}
+}
