@@ -759,6 +759,27 @@ signé, pas ses signatures — un autre sous-ensemble de signataires du même
   preuves encore dans leur TTL (≤ 300 s). Il fait partie de l'état de la
   cellule : à protéger comme la clé du registre.
 
+## Bornes de requête et délais de lecture (issue #209)
+
+`pepd` borne chaque corps de requête et le temps de le lire, sur tous ses
+listeners, pour qu'un client de la cellule (le port de données, les sockets Unix)
+ne puisse pas tenir de la mémoire ou des goroutines avec une requête énorme ou
+calée :
+
+- `/v1/evaluate` et `/v1/passport/consume` : 16 Kio au plus (la plus grande
+  requête légitime — un jeton de 1024 octets, action ≤ 255, ressource ≤ 1024,
+  échappement JSON le plus défavorable — fait environ 9 Kio) ; `/v1/mode` et
+  `/v1/failclosed/clear` : 64 Kio au plus. Au-delà, la réponse est **413**, sans
+  que le corps soit traité.
+- Chaque serveur de `pepd` et de `brokerd` : 5 s pour lire les en-têtes, 10 s pour
+  lire la requête entière (corps compris), 60 s de connexion persistante
+  inactive. Un client qui envoie les en-têtes puis cale est coupé à 10 s.
+- **Exception, volontaire :** le proxy bloquant (`TBP_PROXY_ADDR`) relaie du vrai
+  trafic, donc n'a pas de délai de lecture (un téléversement ou un flux long est
+  légitime) ; ses délais d'en-têtes et d'inactivité restent appliqués.
+- Ces bornes ne sont pas des réglages : une requête qui n'y tient pas n'est pas
+  une requête TBP.
+
 ## Unités systemd
 
 Patron de durcissement : `src/translator/tbp-translator.service` (T24 —

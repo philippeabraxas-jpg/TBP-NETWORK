@@ -385,8 +385,7 @@ func (l *Listener) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in EvaluateRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+	if !decodeBoundedJSON(w, r, maxEvaluateBodyBytes, &in) {
 		return
 	}
 	wire, err := base64.StdEncoding.DecodeString(in.Token)
@@ -431,8 +430,7 @@ func (l *Listener) handleConsume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in ConsumeRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+	if !decodeBoundedJSON(w, r, maxEvaluateBodyBytes, &in) {
 		return
 	}
 	wire, err := base64.StdEncoding.DecodeString(in.Token)
@@ -487,8 +485,7 @@ func (l *Listener) handleMode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ModeResponse{Mode: l.mode.Mode().String()})
 	case http.MethodPost:
 		var in ModeChangeRequest
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+		if !decodeBoundedJSON(w, r, maxAdminBodyBytes, &in) {
 			return
 		}
 		m, err := ParsePEPMode(in.Mode)
@@ -511,10 +508,6 @@ func (l *Listener) handleMode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "méthode GET|POST requise"})
 	}
 }
-
-// maxFailClosedBody borne le corps de /v1/failclosed/clear (preuve de quorum
-// comprise : quelques signatures hex).
-const maxFailClosedBody = 64 << 10
 
 // FailClosedClearRequest demande la levée d'une condition basculée. Pour
 // une condition classe W, Expiry et Signatures portent la preuve de quorum
@@ -552,8 +545,7 @@ func (l *Listener) handleFailClosedClear(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in FailClosedClearRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxFailClosedBody)).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+	if !decodeBoundedJSON(w, r, maxAdminBodyBytes, &in) {
 		return
 	}
 	if in.Condition == "" {

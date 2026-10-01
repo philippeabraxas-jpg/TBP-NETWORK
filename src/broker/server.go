@@ -47,6 +47,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 )
 
 // Défauts du serveur.
@@ -164,10 +166,11 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 // interrompue au milieu de la chaîne laisserait une feuille sans jeton,
 // ou pire un jeton sans feuille si l'ordre change un jour).
 func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
-	srv := &http.Server{
-		Handler:           s.mux,
-		ReadHeaderTimeout: defaultReadHeaderTimeout,
-	}
+	srv := pep.NewServer(s.mux, pep.ServerTimeouts{
+		ReadHeader: defaultReadHeaderTimeout,
+		Read:       pep.DefaultServerTimeouts.Read, // issue #209 : corps calé coupé
+		Idle:       pep.DefaultServerTimeouts.Idle,
+	})
 	go func() {
 		<-ctx.Done()
 		// Budget d'arrêt généreux : une évaluation OPA tient en 5 ms (T11),

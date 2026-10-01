@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -136,6 +137,9 @@ type cellProfile struct {
 	phase     string // étiquette des contrôles dans le rapport
 	dir       string // sous-répertoire de sortie (registre, logs, socket)
 	quorumMin int    // TBP_QUORUM_MIN, = nombre de clés du trousseau
+	// drillSlowBody joue l'exercice du corps calé (≈ 10 s : le ReadTimeout de
+	// pepd) — une seule fois par exécution du selftest, dans scale1.
+	drillSlowBody bool
 }
 
 // runMono exécute la phase mono-cellule. Les échecs sont enregistrés dans
@@ -145,7 +149,7 @@ func runMono(s *suite, cfg config) {
 }
 
 func runScale1(s *suite, cfg config) {
-	runCell(s, cfg, cellProfile{phase: phaseScale1, dir: "scale1", quorumMin: 1})
+	runCell(s, cfg, cellProfile{phase: phaseScale1, dir: "scale1", quorumMin: 1, drillSlowBody: true})
 }
 
 // runCell exécute la séquence cellule unique sous un profil donné. Les échecs
@@ -593,6 +597,34 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	s.add(ph, "#208 : les échappatoires dev actives de pepd sont consignées en feuille KindTelemetry (recalculable par re-hash)",
 		derr == nil && foundDev, fmt.Sprintf("trouvée=%v err=%v", foundDev, derr))
 
+	// --- Issue #209 (R-16) : corps bornés et lecture à délai sur le vrai pepd ---
+	bigBody := `{"action":"read","resource":"doc-1","token":"` + strings.Repeat("A", 1<<20) + `"}`
+	bigStatus, _, bigErr := postJSONRaw(pepdURL+"/v1/evaluate", bigBody)
+	s.add(ph, "#209 : un corps de 1 Mio sur /v1/evaluate est refusé en 413 sans être traité (plan de données)",
+		bigErr == nil && bigStatus == http.StatusRequestEntityTooLarge, fmt.Sprintf("status=%d err=%v", bigStatus, bigErr))
+	bigMode := `{"mode":"closed","expiry":1,"signatures":[],"x":"` + strings.Repeat("A", 1<<20) + `"}`
+	modeStatus, _, modeErr := postUnixRaw(adminHC, "http://pepd-admin/v1/mode", bigMode)
+	s.add(ph, "#209 : un corps de 1 Mio sur /v1/mode est refusé en 413 (plan d'administration)",
+		modeErr == nil && modeStatus == http.StatusRequestEntityTooLarge, fmt.Sprintf("status=%d err=%v", modeStatus, modeErr))
+	if prof.drillSlowBody {
+		// Les en-têtes, puis un seul octet de corps, puis le silence : pepd doit couper
+		// la connexion au ReadTimeout (10 s) au lieu de la tenir indéfiniment.
+		conn, derr := net.Dial("tcp", monoPEPDAddr)
+		cut, took := false, time.Duration(0)
+		if derr == nil {
+			_, _ = fmt.Fprintf(conn, "POST /v1/evaluate HTTP/1.1\r\nHost: t\r\nContent-Length: 1000\r\n\r\nX")
+			_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+			start := time.Now()
+			_, rerr := io.ReadAll(conn)
+			took = time.Since(start)
+			nerr, isNet := rerr.(net.Error)
+			cut = !(isNet && nerr.Timeout()) && took < 15*time.Second
+			_ = conn.Close()
+		}
+		s.add(ph, "#209 : un client dont le corps est calé est coupé par pepd (ReadTimeout), pas tenu indéfiniment",
+			derr == nil && cut, fmt.Sprintf("coupé après %s", took.Round(100*time.Millisecond)))
+	}
+
 	// --- Issue #205 (R-18) : un redémarrage d'OPA ne doit PAS immobiliser la
 	// cellule. OPA est tué, pepd refuse (fail-closed, par requête puis par
 	// verrou global), OPA revient sur le MÊME bundle signé : pepd reprend
@@ -634,4 +666,26 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	_, erUp, errUp := evaluate(pepdURL, tokUp, "read", "doc-1")
 	s.add(ph, "#205: la cellule redécide après la reprise, sans redémarrage de pepd ni quorum",
 		errUp == nil && erUp.Allow, fmt.Sprintf("allow=%v reason=%s", erUp.Allow, erUp.Reason))
+}
+
+// postJSONRaw POSTe un corps déjà sérialisé (postJSON re-marshale).
+func postJSONRaw(url, body string) (int, []byte, error) {
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, raw, err
+}
+
+// postUnixRaw est postUnixJSON pour un corps déjà sérialisé.
+func postUnixRaw(hc *http.Client, url, body string) (int, []byte, error) {
+	resp, err := hc.Post(url, "application/json", strings.NewReader(body)) //nolint:noctx
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, raw, err
 }
