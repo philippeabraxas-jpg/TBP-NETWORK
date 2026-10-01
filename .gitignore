@@ -79,3 +79,4 @@ deploy/selftest/out/
 /supervisord
 /quorumproof
 /tmetrics
+/tbp-audit

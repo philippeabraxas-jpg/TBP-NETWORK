@@ -23,6 +23,8 @@ custody des clés et les étapes communes.
 
 Prouver qu'aucune route de sortie n'existe hors TBP : [network-isolation.fr.md](network-isolation.fr.md). Architecture cible de l'ancrage des bundles et de la promotion du canari (conception, #233) : [design-promotion.fr.md](design-promotion.fr.md). Clé perdue, quorum perdu, k = 1 : [recovery.fr.md](recovery.fr.md). Ce que l'intégrateur doit savoir (sceau objet, bornes, friction) : [integration-contract.fr.md](integration-contract.fr.md). Confiner ce qu'exécute le harnais de l'intégrateur : [execution-sandbox.fr.md](execution-sandbox.fr.md). Briques de sécurité par échelle : [scales.fr.md](scales.fr.md). Une machine, l'administrateur seul : [scale-1.fr.md](scale-1.fr.md). Un petit site derrière un `brokerd`, `k = 2` sur 3 : [scale-2.fr.md](scale-2.fr.md).
 
+Où vit le clair derrière une feuille hash-only et comment le vérifier (journal d'enregistrements, `tbp-audit`, #271) : [audit.fr.md](audit.fr.md).
+
 Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.fr.md).
 Checklists de recette par machine : [checklists/](checklists/).
 
