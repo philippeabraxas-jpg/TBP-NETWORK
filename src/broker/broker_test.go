@@ -143,7 +143,7 @@ func (permissiveAgentRegistry) Resolve(_ string) (AgentRecord, bool) {
 // avec un pep.ContractStore véritable et sa doctrine de séquence stricte).
 type permissiveContractGate struct{}
 
-func (permissiveContractGate) VerifyStep(_ context.Context, binding []byte, _, _ string) ([32]byte, error) {
+func (permissiveContractGate) VerifyStep(_ context.Context, _ string, binding []byte, _, _ string) ([32]byte, error) {
 	return sha256.Sum256(binding), nil
 }
 

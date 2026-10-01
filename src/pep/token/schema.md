@@ -284,7 +284,7 @@ publique de la cellule (« a lied decision remains attributable », §1).
 
 | Clé | Nom | Type CDDL | Présence | Contraintes | Réf. |
 |---|---|---|---|---|---|
-| −8 | `plan_seal` | `bstr .size 32` | optionnel (v2 uniquement) | hash du plan approuvé (`TBPC1`, `plan_contract.go`) ; présent ⇒ le jeton a été émis comme étape consommée d'un plan arbitré ; le PEP le recopie dans sa feuille d'exécution (record `TBPD2`) | §4.2 |
+| −8 | `plan_seal` | `bstr .size 32` | optionnel (v2 uniquement) | hash du plan approuvé (`TBPC2`, `plan_contract.go`) ; présent ⇒ le jeton a été émis comme étape consommée d'un plan arbitré ; le PEP le recopie dans sa feuille d'exécution (record `TBPD2`) | §4.2 |
 
 Règles de versionnement (application de §10) :
 

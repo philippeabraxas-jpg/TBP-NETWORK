@@ -54,6 +54,7 @@ const (
 	// claims −2 / −3 du schéma de jeton (schema.cddl) : une étape de plan
 	// décrit exactement ce qu'un jeton peut porter.
 	maxPlanActionLen   = 255
+	maxPlanSubjectLen  = 255 // #235 : u8 dans le sceau
 	maxPlanResourceLen = 1024
 
 	// DefaultMaxPendingPlans / DefaultMaxApprovedPlans bornent l'état du
@@ -101,6 +102,7 @@ var (
 	ErrPlanExpired               = errors.New("pep: plan expiré")
 	ErrPlanRevoked               = errors.New("pep: plan révoqué par l'opérateur")
 	ErrPlanDeviation             = errors.New("pep: déviation du plan approuvé (étape, paramètre, ordre, rejeu)")
+	ErrPlanSubjectMismatch       = errors.New("pep: plan destiné à un autre agent (#235)")
 	ErrPlanApprovalExpiryInvalid = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
 	ErrPlanApprovalSignature     = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
 	ErrPlanStoreSaturated        = errors.New("pep: store de plans saturé (§4.3 : refus + alarme, jamais d'éviction)")
@@ -130,18 +132,27 @@ func HashParams(params []byte) [32]byte {
 // HashPlan calcule le sceau du plan (D58) — séparation de domaine et forme
 // canonique à liste ordonnée (aucune map : déterminisme §11.3 natif) :
 //
-//	SHA-256("TBPC1" ‖ u8 len(cellID) ‖ cellID ‖ submittedAt(u64 BE, unix s)
+//	SHA-256("TBPC2" ‖ u8 len(cellID) ‖ cellID ‖ u8 len(subject) ‖ subject
+//	        ‖ submittedAt(u64 BE, unix s)
 //	        ‖ policyID(32) ‖ n(u16 BE)
 //	        ‖ par étape : u8 len(action)‖action ‖ u16 BE len(resource)‖resource
 //	                      ‖ paramsHash(32))
 //
 // submittedAt entre dans le sceau : deux soumissions du même plan sont deux
-// contrats distincts. Exporté pour l'audit (§6 : vérifiable par un tiers).
-func HashPlan(cellID string, submittedAt time.Time, policyID [32]byte, steps []PlanStep) [32]byte {
+// contrats distincts. subject (l'agent à qui le plan est destiné) y entre
+// aussi (#235) : l'opérateur signe QUEL agent est autorisé à dérouler ces
+// étapes — sans cela un plan approuvé pour l'agent A serait consommable par
+// tout agent B qui en connaît le hash (le binding est un secret de
+// transport, pas une identité). Le domaine passe de « TBPC1 » à « TBPC2 » :
+// un sceau sans sujet ne peut pas être confondu avec un sceau avec sujet.
+// Exporté pour l'audit (§6 : vérifiable par un tiers).
+func HashPlan(cellID, subject string, submittedAt time.Time, policyID [32]byte, steps []PlanStep) [32]byte {
 	h := sha256.New()
-	h.Write([]byte("TBPC1"))
+	h.Write([]byte("TBPC2"))
 	h.Write([]byte{byte(len(cellID))})
 	h.Write([]byte(cellID))
+	h.Write([]byte{byte(len(subject))})
+	h.Write([]byte(subject))
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(submittedAt.Unix()))
 	h.Write(buf[:])
@@ -195,6 +206,7 @@ const (
 
 // planEntry est l'état borné d'un plan (§4.3).
 type planEntry struct {
+	subject     string // agent destinataire du plan (#235) — entre dans le sceau
 	steps       []PlanStep
 	submittedAt time.Time
 	expiresAt   time.Time // pending : soumission + PendingTTL ; approved : expiry signé
@@ -352,8 +364,13 @@ func (s *ContractStore) clock() time.Time {
 // Submit scelle un plan soumis par l'agent (D58) et le met en attente
 // d'approbation. Renvoie le hash scellé — c'est lui qui est présenté (avec
 // le plan en clair) à l'opérateur. Saturation ou feuille impossible =
-// refus fail-closed : pas de preuve, pas de contrat.
-func (s *ContractStore) Submit(ctx context.Context, steps []PlanStep) ([32]byte, error) {
+// refus fail-closed : pas de preuve, pas de contrat. subject est l'agent
+// pour lequel le plan est soumis (#235) : lui seul pourra consommer les
+// étapes (VerifyStep compare au sujet résolu par le broker).
+func (s *ContractStore) Submit(ctx context.Context, subject string, steps []PlanStep) ([32]byte, error) {
+	if len(subject) < 1 || len(subject) > maxPlanSubjectLen {
+		return [32]byte{}, ErrPlanSubmissionInvalid
+	}
 	if len(steps) < 1 || len(steps) > MaxPlanSteps {
 		return [32]byte{}, ErrPlanSubmissionInvalid
 	}
@@ -367,7 +384,7 @@ func (s *ContractStore) Submit(ctx context.Context, steps []PlanStep) ([32]byte,
 	defer s.mu.Unlock()
 	now := s.clock()
 	s.expireLocked(ctx, now)
-	hash := HashPlan(s.cellID, now, s.policyID, steps)
+	hash := HashPlan(s.cellID, subject, now, s.policyID, steps)
 	// Même cellule, même instant, mêmes étapes = même contrat : la
 	// soumission en double est idempotente — tracée (chaque événement de
 	// contrat laisse une feuille, §4.1), sans créer de second plan.
@@ -390,6 +407,7 @@ func (s *ContractStore) Submit(ctx context.Context, steps []PlanStep) ([32]byte,
 	cp := make([]PlanStep, len(steps))
 	copy(cp, steps)
 	s.plans[hash] = &planEntry{
+		subject:     subject,
 		steps:       cp,
 		submittedAt: now,
 		expiresAt:   now.Add(s.pendingTTL),
@@ -483,6 +501,7 @@ func (s *ContractStore) Revoke(ctx context.Context, planHash [32]byte) error {
 // pas une route HTTP — T30).
 type PendingPlan struct {
 	Hash        [32]byte
+	Subject     string // agent destinataire (#235) — l'arbitre voit POUR QUI il signe
 	SubmittedAt time.Time
 	ExpiresAt   time.Time
 	Steps       int
@@ -512,6 +531,7 @@ func (s *ContractStore) Snapshot() ([]PendingPlan, error) {
 		}
 		out = append(out, PendingPlan{
 			Hash:        h,
+			Subject:     e.subject,
 			SubmittedAt: e.submittedAt,
 			ExpiresAt:   e.expiresAt,
 			Steps:       len(e.steps),
@@ -567,7 +587,7 @@ func (s *ContractStore) SnapshotWithPolicy() ([]PendingPlan, [32]byte, error) {
 // émis puis jamais exécuté consomme l'étape — le plan se termine en impasse
 // et repart par une nouvelle approbation (friction bornée, direction sûre ;
 // trade-off documenté D61, validé en revue #31).
-func (s *ContractStore) VerifyStep(ctx context.Context, binding []byte, action, resource string) ([32]byte, error) {
+func (s *ContractStore) VerifyStep(ctx context.Context, subject string, binding []byte, action, resource string) ([32]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock()
@@ -580,6 +600,12 @@ func (s *ContractStore) VerifyStep(ctx context.Context, binding []byte, action, 
 	e, ok := s.plans[planHash]
 	if !ok {
 		return [32]byte{}, s.writeRefusalLocked(ctx, planHash, planStepNA, "plan-unknown", ErrPlanUnknown, now)
+	}
+	if subject != e.subject {
+		// #235 : le plan est scellé pour un autre agent. Refus + feuille,
+		// AVANT toute lecture d'état du plan (un agent étranger n'apprend
+		// ni son statut ni son curseur) ; le curseur n'avance pas.
+		return [32]byte{}, s.writeRefusalLocked(ctx, planHash, planStepNA, "plan-subject-mismatch", ErrPlanSubjectMismatch, now)
 	}
 	if e.expired {
 		// La transition a été tracée par expireLocked (une fois) — chaque

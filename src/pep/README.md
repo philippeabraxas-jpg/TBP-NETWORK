@@ -61,8 +61,10 @@ Local policy enforcement point. Responsibilities, per the technical note:
 - **Plan contract store** (`plan_contract.go`, T30, §4.2) — "the
   approved plan is a contract: execution is verified against the hash of
   the validated plan; deviation = refusal". Submission seals the plan
-  hash (`HashPlan`, domain « TBPC1 » — plan = ordered bounded list of
-  steps `(action, resource, params_hash)`, ≤ 64 steps); approval is an
+  hash (`HashPlan`, domain « TBPC2 » — plan = the target agent (`subject`,
+  #235: the operator signs *which* agent may run it; another agent presenting
+  the exact binding is refused `plan-subject-mismatch`) + ordered bounded
+  list of steps `(action, resource, params_hash)`, ≤ 64 steps); approval is an
   Ed25519 **operator signature** over « TBPA1 » ‖ planHash ‖ expiry
   (pinned operator keyring, TTL ∈ [60 s, 24 h], default 1 h) —
   "arbitration is a signature, not a read". Execution presents an
@@ -94,7 +96,7 @@ Local policy enforcement point. Responsibilities, per the technical note:
   triples — value opaque (no-DPI), never in any leaf (hash-only §6.2),
   bounds §4.3 with explicit `ErrSealBounds` (never silent truncation).
   Reconciled — not merged — with the two neighboring seals (T16 plan
-  seal in C, T30 « TBPC1 » arbitration-plan seal): one SHA-256-over-
+  seal in C, T30 « TBPC2 » arbitration-plan seal): one SHA-256-over-
   canonical-form motif, three domains, proven by a cross-test (golden
   vector of the documented T16 formula + functional issue → seal → T9
   accept/mismatch path).

@@ -667,7 +667,8 @@ func runDaemons(s *suite, cfg config) {
 	// opérateur emprunterait avant d'autoriser "agent-1" à exécuter
 	// "read"/"doc-1".
 	submitStatus, raw, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
-		"steps": []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
+		"subject": "agent-1",
+		"steps":   []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
 	})
 	var planSub daemonPlanSubmitResponse
 	if submitStatus == http.StatusOK {

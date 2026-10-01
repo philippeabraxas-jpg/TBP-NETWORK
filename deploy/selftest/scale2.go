@@ -208,8 +208,17 @@ func runScale2(s *suite, cfg config) {
 		!strings.Contains(string(logBytes), "AVERTISSEMENT quorum"), "")
 
 	// --- Étape 4 : une action de classe W exige 2 contrôleurs ----------------------------------
+	// Un plan sans destinataire, ou pour un agent hors registre, n'existe pas (#235).
+	for name, subj := range map[string]string{"sans sujet": "", "sujet hors registre": "agent-inconnu"} {
+		st, _, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
+			"subject": subj,
+			"steps":   []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
+		})
+		s.add(ph, "plan "+name+" refusé à la soumission (#235)", st == http.StatusBadRequest, fmt.Sprintf("status=%d", st))
+	}
 	submitStatus, raw, err := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
-		"steps": []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
+		"subject": "agent-w",
+		"steps":   []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
 	})
 	var planSub daemonPlanSubmitResponse
 	if submitStatus == http.StatusOK {

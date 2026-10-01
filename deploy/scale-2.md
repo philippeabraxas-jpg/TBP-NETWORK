@@ -113,9 +113,9 @@ the cell (the bundle hash).
 action; the agent presents both:
 
 ```bash
-# 1. submit the plan (admin socket) — it answers {"plan_hash": "<hex>"}
+# 1. submit the plan FOR one agent (admin socket; "subject" must be in the registry, and only that agent can run it, #235) — it answers {"plan_hash": "<hex>"}
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
-  -d '{"steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
+  -d '{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
   http://localhost/v1/supervision/plan/submit
 # 2. the operator approves it with the operator key, then the body is posted
 quorumproof planapprove -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/approval.json

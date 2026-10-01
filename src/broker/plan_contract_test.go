@@ -115,12 +115,15 @@ func newContractStore(t *testing.T, sink *leafRecorder, onTrip func(string)) *pe
 	return store
 }
 
+// contractSubjectID : l'agent des tests de contrat (plan scellé pour lui, #235).
+const contractSubjectID = "spiffe://tbp.example/agent/test"
+
 // approvePlan soumet puis approuve un plan (signature opérateur valide,
 // expiry 30 min) et rend le hash du plan scellé.
 func approvePlan(t *testing.T, store *pep.ContractStore, steps []pep.PlanStep) [32]byte {
 	t.Helper()
 	ctx := context.Background()
-	planHash, err := store.Submit(ctx, steps)
+	planHash, err := store.Submit(ctx, contractSubjectID, steps)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -162,7 +165,7 @@ func TestPlanBindingWithoutGateDenied(t *testing.T) {
 	// I/W exige un chemin nominal fonctionnel pour ses autres tests).
 	b, _, _, _ := newContractBroker(t, srv.URL, tr, nil)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonPlanUnverified {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-unverified", res.Allow, res.Reason)
@@ -198,7 +201,7 @@ func TestPlanConformantExecutionIssuesSealedToken(t *testing.T) {
 	}}
 	b, issuer, leaves, _ := newContractBroker(t, srv.URL, tr, store)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if !res.Allow || res.Reason != pep.ReasonOK {
 		t.Fatalf("exécution conforme refusée : %q", res.Reason)
@@ -263,7 +266,7 @@ func TestPlanDeviationDeniedThoughOPAAllows(t *testing.T) {
 	}}
 	b, _, _, _ := newContractBroker(t, srv.URL, tr, store)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonPlanDeviation {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-deviation", res.Allow, res.Reason)
@@ -282,7 +285,7 @@ func TestPlanDeviationDeniedThoughOPAAllows(t *testing.T) {
 		Resource:    "https://api.example.com/v1/messages",
 		PlanBinding: conform,
 	}}, store)
-	res2 := b2.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res2 := b2.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if !res2.Allow {
 		t.Fatalf("étape conforme après déviation refusée : %q", res2.Reason)
@@ -297,7 +300,7 @@ func TestPlanPendingDenied(t *testing.T) {
 
 	params := []byte(`{"n":1}`)
 	store := newContractStore(t, &leafRecorder{}, nil)
-	planHash, err := store.Submit(context.Background(), []pep.PlanStep{contractStep(params)})
+	planHash, err := store.Submit(context.Background(), contractSubjectID, []pep.PlanStep{contractStep(params)})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -309,7 +312,7 @@ func TestPlanPendingDenied(t *testing.T) {
 	}}
 	b, _, _, _ := newContractBroker(t, srv.URL, tr, store)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonPlanPending {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-pending", res.Allow, res.Reason)
@@ -334,7 +337,7 @@ func TestPlanUnknownDenied(t *testing.T) {
 	}}
 	b, _, _, _ := newContractBroker(t, srv.URL, tr, store)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonPlanUnknown {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-unknown", res.Allow, res.Reason)
@@ -366,7 +369,7 @@ func TestPlanStoreFaultAlarms(t *testing.T) {
 	}}
 	b, _, _, brokerTrips := newContractBroker(t, srv.URL, tr, store)
 
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonPlanStoreFault {
 		t.Fatalf("allow=%v reason=%q, veut deny/plan-store-fault", res.Allow, res.Reason)
@@ -392,7 +395,7 @@ func TestPlanStoreFaultAlarms(t *testing.T) {
 	storeSink.mu.Lock()
 	storeSink.failFromCall = 0
 	storeSink.mu.Unlock()
-	res2 := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res2 := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if !res2.Allow {
 		t.Fatalf("étape après guérison refusée : %q (le curseur a été avancé sans preuve)", res2.Reason)
@@ -450,7 +453,7 @@ func TestPlanContractStacksWithQuorum(t *testing.T) {
 		PlanBinding: binding,
 	}}
 	b, _, _, _ := newContractBroker(t, srv.URL, badProof, store)
-	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res := b.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if res.Allow || res.Reason != ReasonQuorumInsufficient {
 		t.Fatalf("allow=%v reason=%q, veut deny/quorum-insufficient", res.Allow, res.Reason)
@@ -463,9 +466,48 @@ func TestPlanContractStacksWithQuorum(t *testing.T) {
 		PlanBinding: binding,
 	}}
 	b2, _, _, _ := newContractBroker(t, srv.URL, goodProof, store)
-	res2 := b2.HandleAction(context.Background(), "spiffe://tbp.example/agent/test",
+	res2 := b2.HandleAction(context.Background(), contractSubjectID,
 		simpleIntent(t, "http.send", "https://api.example.com/v1/messages"))
 	if !res2.Allow {
 		t.Fatalf("étape après refus de quorum refusée : %q (curseur consommé par un refus amont)", res2.Reason)
+	}
+}
+
+// TestPlanOfAnotherAgentDenied (#235) : un plan scellé et approuvé pour
+// l'agent A est refusé à l'agent B, même avec le binding exact — pas de
+// jeton, raison dédiée, et le plan reste consommable par A (le refus n'a
+// pas avancé le curseur).
+func TestPlanOfAnotherAgentDenied(t *testing.T) {
+	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
+	defer srv.Close()
+
+	params := []byte(`{"to":"ops@example.com","n":3}`)
+	store := newContractStore(t, &leafRecorder{}, nil)
+	planHash := approvePlan(t, store, []pep.PlanStep{contractStep(params)})
+	binding, err := pep.BuildBinding(planHash, params)
+	if err != nil {
+		t.Fatalf("BuildBinding: %v", err)
+	}
+	tr := staticTranslator{tr: Translation{
+		Action:      "http.send",
+		Resource:    "https://api.example.com/v1/messages",
+		PlanBinding: binding,
+	}}
+	b, _, _, _ := newContractBroker(t, srv.URL, tr, store)
+	intent := simpleIntent(t, "http.send", "https://api.example.com/v1/messages")
+
+	res := b.HandleAction(context.Background(), "spiffe://tbp.example/agent/other", intent)
+	if res.Allow || res.Reason != ReasonPlanSubjectMismatch {
+		t.Fatalf("allow=%v reason=%q, veut deny/plan-subject-mismatch", res.Allow, res.Reason)
+	}
+	if len(res.Token) != 0 {
+		t.Fatal("un jeton a été émis pour un plan destiné à un autre agent")
+	}
+	if got := statsOf(t, b).PlanDenies; got != 1 {
+		t.Fatalf("PlanDenies=%d, veut 1", got)
+	}
+	// Le destinataire du plan, lui, l'exécute.
+	if res := b.HandleAction(context.Background(), contractSubjectID, intent); !res.Allow {
+		t.Fatalf("le destinataire du plan est refusé après l'essai étranger : %q", res.Reason)
 	}
 }

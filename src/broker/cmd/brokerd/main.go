@@ -887,6 +887,10 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
 			return
 		}
+		if _, known := agentRegistry.Resolve(req.Subject); !known {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "subject absent du registre d'agents (#235)"})
+			return
+		}
 		steps := make([]pep.PlanStep, 0, len(req.Steps))
 		for _, s := range req.Steps {
 			params, err := hex.DecodeString(s.ParamsHex)
@@ -900,7 +904,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 				ParamsHash: pep.HashParams(params),
 			})
 		}
-		hash, err := contracts.Submit(r.Context(), steps)
+		hash, err := contracts.Submit(r.Context(), req.Subject, steps)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1153,7 +1157,11 @@ type planSubmitStepRequest struct {
 }
 
 type planSubmitRequest struct {
-	Steps []planSubmitStepRequest `json:"steps"`
+	// Subject : l'agent pour qui le plan est soumis (#235). Requis, et
+	// connu du registre d'agents — l'opérateur signe QUEL agent déroule le
+	// plan ; un plan sans destinataire n'existe plus.
+	Subject string                  `json:"subject"`
+	Steps   []planSubmitStepRequest `json:"steps"`
 }
 
 type planSubmitResponse struct {
