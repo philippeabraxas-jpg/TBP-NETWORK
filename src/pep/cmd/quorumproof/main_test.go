@@ -334,3 +334,46 @@ func TestWMessageAndAssembleMatchTheGate(t *testing.T) {
 		t.Fatal("ttl hors bornes accepté")
 	}
 }
+
+// --- contrat de plan : planapprove / planbind -------------------------------------------
+
+func TestPlanApproveAndBindMatchWhatBrokerdVerifies(t *testing.T) {
+	dir := t.TempDir()
+	op, fop := keyFile(t, dir, "operator", 4)
+	var h [32]byte
+	h[0], h[31] = 0xab, 0xcd
+	hexHash := hex.EncodeToString(h[:])
+	out := filepath.Join(dir, "approve.json")
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-key", fop, "-out", out}); err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		PlanHash  string `json:"plan_hash"`
+		ExpiresAt string `json:"expires_at"`
+		Signature string `json:"signature"`
+	}
+	raw, _ := os.ReadFile(out)
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := time.Parse(time.RFC3339, body.ExpiresAt)
+	if err != nil || body.PlanHash != hexHash {
+		t.Fatalf("corps d'approbation : %+v (%v)", body, err)
+	}
+	sig, _ := hex.DecodeString(body.Signature)
+	if !ed25519.Verify(op.Public().(ed25519.PublicKey), pep.ApprovalMessage(h, exp), sig) {
+		t.Fatal("la signature n'est pas celle que brokerd vérifie (ApprovalMessage)")
+	}
+	if ed25519.Verify(op.Public().(ed25519.PublicKey), pep.ApprovalMessage([32]byte{1}, exp), sig) {
+		t.Fatal("signature valable pour un autre plan")
+	}
+	if err := cmdPlanApprove([]string{"-plan-hash", "zz", "-key", fop, "-out", out}); err == nil {
+		t.Fatal("hash mal formé accepté")
+	}
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-key", fop, "-ttl", "99999", "-out", out}); err == nil {
+		t.Fatal("ttl hors bornes accepté")
+	}
+	if err := cmdPlanBind([]string{"-plan-hash", hexHash, "-params-hex", "gg"}); err == nil {
+		t.Fatal("paramètres mal formés acceptés")
+	}
+}

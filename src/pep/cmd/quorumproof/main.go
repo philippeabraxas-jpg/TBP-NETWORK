@@ -20,6 +20,7 @@
 //	    assemble des signatures faites ailleurs (KID = SHA-256(pub)[:16], hex)
 //
 //	quorumproof wproof | wmessage | wassemble   — preuves de classe W pour brokerd (voir wproof.go)
+//	quorumproof planapprove | planbind          — approbation et liaison d'un plan (voir plantools.go)
 //
 // Conditions : « provisioning-transition-brokerd », « provisioning-transition-pepd »,
 // « measured-boot-transition », « mode-closed », « mode-monitor ». La condition est
@@ -73,6 +74,10 @@ func main() {
 		err = cmdSign(os.Args[2:])
 	case "assemble":
 		err = cmdAssemble(os.Args[2:])
+	case "planapprove":
+		err = cmdPlanApprove(os.Args[2:])
+	case "planbind":
+		err = cmdPlanBind(os.Args[2:])
 	case "wproof":
 		err = cmdWProof(os.Args[2:])
 	case "wmessage":
@@ -90,14 +95,16 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble> [flags]
+	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble|planapprove|planbind> [flags]
   keygen   -key FILE -keyring TROUSSEAU.json
   message  -condition C -cell ID [-ttl 240]
   sign     -condition C -cell ID [-ttl 240] -key FILE [-key FILE …] -out PREUVE.json
   assemble -expiry UNIX -sig KID=SIGHEX [-sig …] -out PREUVE.json
   wproof    -manifest M -action A -resource R -policy HEX64 [-epoch N] [-ttl S] -key FILE [-key …] -out P   (classe W, brokerd)
   wmessage  -action A -resource R -policy HEX64 [-epoch N] [-ttl S] -out DECLARATION.json
-  wassemble -statement DECLARATION.json -sig ID=SIGHEX [-sig …] -quorum K-of-N -out P`)
+  wassemble -statement DECLARATION.json -sig ID=SIGHEX [-sig …] -quorum K-of-N -out P
+  planapprove -plan-hash HEX64 [-ttl S] -key CLE_OPERATEUR -out APPROBATION.json   (contrat de plan, #177)
+  planbind    -plan-hash HEX64 [-params-hex HEX]`)
 }
 
 func expiryFrom(ttl int, now time.Time) (time.Time, error) {
