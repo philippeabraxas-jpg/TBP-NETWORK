@@ -28,6 +28,10 @@
 #   - une ressource qui n'est pas une URL (chemin, identifiant) n'est pas
 #     soumise à la liste d'hôtes ; une ressource sans schéma qui « ressemble »
 #     à un hôte (« evil.example/x ») n'est pas reconnue comme URL.
+#   - un schéma réseau connu (http, https, ftp, ftps, sftp, ws, wss, ssh, git, smb,
+#     ldap, ldaps) non suivi de « // » (« https:/hote/x », « https:hote/x ») est
+#     refusé comme autorité mal formée : les clients HTTP les normalisent vers
+#     « https://hote/x ». Les blancs de tête sont ignorés avant l'analyse.
 #
 # Fail-closed : une entrée absente, non chaîne, ou dont l'encodage est invalide
 # est une violation — jamais une règle silencieusement indéfinie.
@@ -132,9 +136,13 @@ is_credential_store if endswith(path_no_query, "/etc/gshadow")
 
 # --- URL et hôte ---------------------------------------------------------
 
+# La ressource telle qu'un client HTTP la lit : les contrôles C0 et espaces de tête sont
+# ignorés par les navigateurs et les bibliothèques courantes (« \thttps://hote/x »).
+url_input := trim_left(lower(input.resource), "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009\u000a\u000b\u000c\u000d\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f ")
+
 # [complet, schéma, autorité] ; le schéma est vide pour « //hote/… ». Le
 # séparateur accepte « \ » (les navigateurs le traitent comme « / »).
-url_match := regex.find_all_string_submatch_n(`^(?:([a-z][a-z0-9+.-]*):)?[/\\]{2}([^/\\?#]*)`, lower(input.resource), 1)
+url_match := regex.find_all_string_submatch_n(`^(?:([a-z][a-z0-9+.-]*):)?[/\\]{2}([^/\\?#]*)`, url_input, 1)
 
 url_scheme := url_match[0][1]
 
@@ -179,6 +187,19 @@ malformed_authority if {
 	url_scheme != "file"
 	url_authority == ""
 }
+
+# Schéma réseau SANS « // » (« https:/hote/x », « https:hote/x », « https:\\hote ») : ce
+# n'est ni une URL de sortie reconnue ni une autorité mal formée au sens ci-dessus,
+# mais beaucoup de clients HTTP normalisent ces formes vers « https://hote/x ».
+# Refusé (#239) plutôt que laissé passer. Liste FERMÉE de schémas réseau : un schéma
+# inconnu n'est pas deviné (un identifiant « a:b » reste une ressource ordinaire) ;
+# « file: » reste local, jugé par les règles de fichier.
+network_scheme_without_slashes if {
+	regex.match(`^(?:https?|ftps?|sftp|wss?|ssh|git|smb|ldaps?):`, url_input)
+	not url_match[0]
+}
+
+malformed_authority if network_scheme_without_slashes
 
 host_allowed if url_host in allowed_domains
 
