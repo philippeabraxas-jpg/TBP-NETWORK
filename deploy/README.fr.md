@@ -21,7 +21,7 @@ custody des clés et les étapes communes.
 | Serveur | hôte applicatif (PostgreSQL, …) | PEP (pepd), acceptation via le broker de SA cellule uniquement | [serveur.md](serveur.fr.md) |
 | Superviseur | VM indépendante | registre maître (master chain), moniteur indépendant, console | [superviseur.md](superviseur.fr.md) |
 
-Confiner ce qu'exécute le harnais de l'intégrateur : [execution-sandbox.fr.md](execution-sandbox.fr.md). Briques de sécurité par échelle : [scales.fr.md](scales.fr.md). Une machine, l'administrateur seul : [scale-1.fr.md](scale-1.fr.md).
+Clé perdue, quorum perdu, k = 1 : [recovery.fr.md](recovery.fr.md). Ce que l'intégrateur doit savoir (sceau objet, bornes, friction) : [integration-contract.fr.md](integration-contract.fr.md). Confiner ce qu'exécute le harnais de l'intégrateur : [execution-sandbox.fr.md](execution-sandbox.fr.md). Briques de sécurité par échelle : [scales.fr.md](scales.fr.md). Une machine, l'administrateur seul : [scale-1.fr.md](scale-1.fr.md).
 
 Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.fr.md).
 Checklists de recette par machine : [checklists/](checklists/).

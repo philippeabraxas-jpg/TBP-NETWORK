@@ -143,9 +143,12 @@ type ClockWatchdog struct {
 	onTrip      func(reason string)
 	now         func() time.Time
 
-	mu     sync.Mutex
-	mode   ClockMode
-	reason string
+	// transMu sérialise les transitions (Check) ; mu ne protège que mode/reason et n'est
+	// jamais tenu pendant une écriture de feuille (R-17).
+	transMu sync.Mutex
+	mu      sync.Mutex
+	mode    ClockMode
+	reason  string
 }
 
 // NewClockWatchdog construit le watchdog. Fail-closed : émetteur local,
@@ -211,29 +214,59 @@ func (w *ClockWatchdog) SkewBound() time.Duration { return w.skewBound }
 // unsync / sonde en échec ⇒ dégradé alarmé ; skew > borne ⇒ dégradé +
 // trip T14 ; retour sain ⇒ normal tracé. Idempotent sans transition
 // (jamais de feuille en double).
+//
+// L'écriture de la feuille (≈ 150–250 ms : checkpoint + sondage POSIX) se fait HORS du
+// verrou de lecture w.mu — celui que prennent Mode / IssuerAllowed / NaturalLanguageAllowed
+// sur le chemin chaud (budget ≈ 5 ms) : un battement chrony ne les fige plus (issue #210,
+// R-17). transMu sérialise les transitions entre elles. L'ordre garde la doctrine fail-closed :
+// ENTRER en dégradé (plus strict) est effectif AVANT la feuille ; REVENIR à la normale
+// (plus permissif) n'est effectif qu'APRÈS sa feuille — le retour aussi est prouvé (§6.2).
 func (w *ClockWatchdog) Check() ClockMode {
 	sample, err := w.probe()
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.transMu.Lock()
+	defer w.transMu.Unlock()
 
+	degraded, reason := true, ""
 	switch {
 	case err != nil:
 		// Impossible de prouver l'heure ⇒ fail-closed (§6.2).
-		w.enterLocked(ReasonClockProbeError)
+		reason = ReasonClockProbeError
 	case sample.Unsync:
-		w.enterLocked(ReasonClockUnsync)
+		reason = ReasonClockUnsync
 	case sample.EstError > w.skewBound:
-		// Fraîcheur refusée immédiatement : trip T14 à chaque ENTRÉE en
-		// dégradé pour skew (T14 possède le latch global).
-		if !(w.mode == ClockModeDegraded && w.reason == ReasonClockSkew) && w.onTrip != nil {
-			w.onTrip(ReasonClockSkew)
-		}
-		w.enterLocked(ReasonClockSkew)
+		reason = ReasonClockSkew
 	default:
-		w.exitLocked()
+		degraded = false
 	}
-	return w.mode
+
+	w.mu.Lock()
+	curMode, curReason := w.mode, w.reason
+	w.mu.Unlock()
+
+	if !degraded {
+		if curMode == ClockModeNormal {
+			return curMode
+		}
+		w.writeLeaf(ReasonClockResync, ClockPriorityInfo) // la feuille PRÈCÈDE le relâchement
+		w.mu.Lock()
+		w.mode, w.reason = ClockModeNormal, ""
+		w.mu.Unlock()
+		return ClockModeNormal
+	}
+	if curMode == ClockModeDegraded && curReason == reason {
+		return curMode // déjà dans cet état précis : pas de doublon
+	}
+	// Fraîcheur refusée immédiatement : trip T14 à chaque ENTRÉE en dégradé pour skew
+	// (T14 possède le latch global).
+	if reason == ReasonClockSkew && !(curMode == ClockModeDegraded && curReason == ReasonClockSkew) && w.onTrip != nil {
+		w.onTrip(ReasonClockSkew)
+	}
+	w.mu.Lock()
+	w.mode, w.reason = ClockModeDegraded, reason
+	w.mu.Unlock()
+	w.writeLeaf(reason, ClockPriorityHigh)
+	return ClockModeDegraded
 }
 
 // Run poll l'état noyau jusqu'à annulation du contexte — la boucle de
@@ -252,29 +285,9 @@ func (w *ClockWatchdog) Run(ctx context.Context) {
 	}
 }
 
-// enterLocked bascule en dégradé EXPLICITE et tracé — alarme prioritaire
-// au registre. Sans effet si déjà dans cet état précis (pas de doublon).
-func (w *ClockWatchdog) enterLocked(reason string) {
-	if w.mode == ClockModeDegraded && w.reason == reason {
-		return
-	}
-	w.mode, w.reason = ClockModeDegraded, reason
-	w.writeLeafLocked(reason, ClockPriorityHigh)
-}
-
-// exitLocked revient à la normale — tracé (§6.2 : le retour aussi est
-// prouvé). Sans effet si déjà normal.
-func (w *ClockWatchdog) exitLocked() {
-	if w.mode == ClockModeNormal {
-		return
-	}
-	w.mode, w.reason = ClockModeNormal, ""
-	w.writeLeafLocked(ReasonClockResync, ClockPriorityInfo)
-}
-
-// writeLeafLocked inscrit la feuille d'alarme (KindTelemetry : une alarme
-// n'est pas une décision). Hash-only : le registre ne voit que l'engagement.
-func (w *ClockWatchdog) writeLeafLocked(reason string, priority byte) {
+// writeLeaf inscrit la feuille d'alarme (KindTelemetry : une alarme n'est pas une
+// décision). Hash-only : le registre ne voit que l'engagement. Appelé sans w.mu.
+func (w *ClockWatchdog) writeLeaf(reason string, priority byte) {
 	leaf := registry.Leaf{
 		Kind:        registry.KindTelemetry,
 		CellID:      w.cellID,
