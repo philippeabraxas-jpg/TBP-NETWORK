@@ -84,3 +84,22 @@ pourquoi `require_skill_registry` est un réglage explicite par échelle
 ci-dessus et non un défaut : l'activer partout où `brokerd` fait front aux
 agents. Il n'y a pas d'escalade au-delà du plancher `risk_tier` pour les
 classes I et W.
+
+## Décisions consignées
+
+- **R-12 — `risk_tier` d'un skill face à la classe de l'agent : affaire de déploiement (#210).** Le
+  registre ne recoupe pas le palier d'un skill avec la classe de l'agent qui l'appelle, et TBP
+  n'ajoutera pas une seconde escalade au-dessus du paquet : un agent enregistré hors F/I/W qui appelle un
+  skill provisionné `critical` est retenu par `tbp.pack.skill_tier` (`high` exige la classe I ou W,
+  `critical` exige W), **à condition que le déploiement charge le paquet et pose
+  `require_skill_registry`**. C'est le réglage par échelle du tableau ci-dessus ; le résidu est le même
+  que pour #195 et se ferme de la même façon (enregistrer en classe W tout agent capable d'un acte
+  irréversible ; donner `risk_tier: critical` à tout skill irréversible ; relire le fichier de registre,
+  que le témoin de provisionnement #192 protège). Décidé avec l'auteur après la revue red team ; aucun
+  code.
+- **#181 — profil comportemental par séquence : après l'échelle 2.** La détection de salami /
+  décomposition, des anomalies de coût et un plafond de coût par exécution demandent du vrai trafic
+  multi-agents pour être spécifiés, et le passage à l'échelle ouvrira des besoins qu'on ne voit pas
+  encore. Ce n'est donc **pas** une brique de l'échelle 2 : les lignes de catalogue qui en dépendent
+  restent 🔴, suivies dans #181, et seront rouvertes quand le labo de l'échelle 2 aura produit des
+  données pour concevoir.
