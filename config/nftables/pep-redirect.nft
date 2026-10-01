@@ -13,6 +13,10 @@
 # src/pep/proxy.go) : lui REÇOIT le vrai trafic et ne transmet au backend
 # QUE sur un verdict appliqué favorable.
 #
+# VÉRIFICATION (#186) : une fois les règles calibrées, prouver qu'aucune route de sortie hors du proxy
+# n'existe avec deploy/verify_network_isolation.sh (voir deploy/network-isolation.md) — un fichier
+# .nft présent n'est pas une garantie, seule une connexion qui échoue depuis le contexte de l'agent l'est.
+#
 # NE PAS déployer tel quel : les ports/adresses ci-dessous sont des
 # exemples à adapter à la topologie réelle du pilote P1 (§13). À tester
 # d'abord en mode "monitor" (log sans bloquer), jamais "closed" en
