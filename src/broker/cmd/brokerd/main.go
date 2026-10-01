@@ -1010,8 +1010,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return fmt.Errorf("plan de données réseau (écoute %s): %w", cfg.netListenAddr, err)
 		}
 	}
-	httpSrv := &http.Server{Handler: dataMux, ReadHeaderTimeout: readHeaderTimeout}
-	adminSrv := &http.Server{Handler: adminMux, ReadHeaderTimeout: readHeaderTimeout}
+	// Délais de lecture bornés (issue #209, R-16) : mêmes bornes que pepd.
+	httpSrv := pep.NewServer(dataMux, pep.DefaultServerTimeouts)
+	adminSrv := pep.NewServer(adminMux, pep.DefaultServerTimeouts)
 	go func() {
 		<-ctx.Done()
 		// Même budget d'arrêt que le serveur broker (30 s) : une requête

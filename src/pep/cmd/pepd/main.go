@@ -554,11 +554,10 @@ func run() error {
 
 	// Plan de données (agent gouverné) : /v1/evaluate, /v1/passport/consume
 	// — TCP, redirigé par nftables (PEP_PORT, config/nftables/pep-redirect.nft).
-	srv := &http.Server{
-		Addr:              listenAddr,
-		Handler:           listener.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	// Délais de lecture bornés (issue #209, R-16) : un client qui cale sur le
+	// corps ne tient plus une connexion indéfiniment.
+	srv := pep.NewServer(listener.Handler(), pep.DefaultServerTimeouts)
+	srv.Addr = listenAddr
 	// Plan d'ADMINISTRATION (revue de sécurité #95, finding A10) :
 	// /v1/mode (bascule de posture) et /healthz — socket Unix SÉPARÉ,
 	// jamais sur le canal de l'agent. Doctrine déjà établie pour la
@@ -572,10 +571,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("plan d'administration: %w", err)
 	}
-	adminSrv := &http.Server{
-		Handler:           listener.AdminHandler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	adminSrv := pep.NewServer(listener.AdminHandler(), pep.DefaultServerTimeouts)
 
 	// Proxy bloquant (revue de sécurité #94) : OPTIONNEL — désactivé sauf
 	// déclaration explicite de TBP_PROXY_ADDR+TBP_PROXY_BACKEND. Sans lui,
@@ -605,11 +601,14 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("pepd: proxy bloquant (§94): %w", err)
 		}
-		proxySrv = &http.Server{
-			Addr:              proxyAddr,
-			Handler:           proxy,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		// Le proxy relaie le vrai trafic : pas de ReadTimeout (un téléversement
+		// ou un flux long est légitime), mais en-têtes et connexions inactives
+		// restent bornés.
+		proxySrv = pep.NewServer(proxy, pep.ServerTimeouts{
+			ReadHeader: pep.DefaultServerTimeouts.ReadHeader,
+			Idle:       pep.DefaultServerTimeouts.Idle,
+		})
+		proxySrv.Addr = proxyAddr
 		log.Printf("pepd: proxy bloquant (§94) en écoute sur %s → backend %s", proxyAddr, backend)
 	}
 

@@ -358,9 +358,9 @@ func TestAdminClearErrorsAndBounds(t *testing.T) {
 	if rec := adminPost(h, "/v1/failclosed/clear", `{}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("sans condition : %d", rec.Code)
 	}
-	big := `{"condition":"` + strings.Repeat("a", maxFailClosedBody) + `"}`
-	if rec := adminPost(h, "/v1/failclosed/clear", big); rec.Code != http.StatusBadRequest {
-		t.Fatalf("corps hors borne : %d", rec.Code)
+	big := `{"condition":"` + strings.Repeat("a", maxAdminBodyBytes) + `"}`
+	if rec := adminPost(h, "/v1/failclosed/clear", big); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("corps hors borne : %d, veut 413", rec.Code)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/failclosed/clear", bytes.NewReader(nil)))

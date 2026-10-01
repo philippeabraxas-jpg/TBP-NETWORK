@@ -716,6 +716,24 @@ a different subset of signers of the same statement is the same authorization.
   proofs still in their TTL (≤ 300 s). It is part of the cell's state: protect
   it like the registry key.
 
+## Request bounds and read timeouts (issue #209)
+
+`pepd` bounds every request body and the time it takes to read one, on all its
+listeners, so that a client of the cell (the data port, the Unix sockets) cannot
+hold memory or goroutines with a huge or stalled request:
+
+- `/v1/evaluate` and `/v1/passport/consume`: at most 16 KiB (the largest
+  legitimate request — a 1024-byte token, action ≤ 255, resource ≤ 1024, worst-case
+  JSON escaping — is about 9 KiB); `/v1/mode` and `/v1/failclosed/clear`: at most
+  64 KiB. Beyond the bound the answer is **413**, without the body being processed.
+- Every `pepd` and `brokerd` server: 5 s to read the headers, 10 s to read the
+  whole request (body included), 60 s of idle keep-alive. A client that sends the
+  headers and then stalls is cut at 10 s.
+- **Exception, on purpose:** the blocking proxy (`TBP_PROXY_ADDR`) relays real
+  traffic, so it has no read timeout (a long upload or stream is legitimate); its
+  header and idle timeouts still apply.
+- These bounds are not settings: a request that does not fit is not a TBP request.
+
 ## systemd units
 
 Hardening pattern: `src/translator/tbp-translator.service` (T24 —
