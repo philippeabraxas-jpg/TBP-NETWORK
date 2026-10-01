@@ -24,15 +24,30 @@ jobs:
           version: 1.20.2
       - name: opa fmt --diff
         run: opa fmt --list --diff policies/rego/
-      - name: opa check
-        run: opa check policies/rego/
+      # Les capabilities se génèrent AVANT le contrôle du bundle (#243) : « opa check » seul
+      # accepte time.now_ns, http.send, rand.intn… — seul le validateur statique les attrapait.
+      - name: gen_capabilities.sh (fails if a forbidden built-in vanishes from a newer OPA release)
+        run: policies/gen_capabilities.sh
+      # Le bundle est vérifié CONTRE le fichier restreint : un built-in interdit échoue ici,
+      # au chargement, comme il échouera à « opa build --capabilities » (guide de déploiement).
+      - name: opa check --capabilities (bundle)
+        run: opa check --capabilities policies/capabilities.json policies/rego/
+      # Témoin négatif : sans lui, un fichier de capabilities vide ou ignoré ferait passer
+      # l'étape précédente sans rien prouver. Ces règles utilisent des built-ins interdits.
+      - name: opa check --capabilities (témoin négatif — les built-ins interdits sont refusés)
+        run: |
+          for f in policies/testdata/rule_http_send.rego policies/testdata/rule_rand_intn.rego; do
+            if opa check --capabilities policies/capabilities.json "$f" >/dev/null 2>&1; then
+              echo "ERREUR: $f accepté malgré les capabilities restreintes (built-in interdit non refusé)" >&2
+              exit 1
+            fi
+            echo "refusé comme attendu : $f"
+          done
       # Tests des paquets de règles (policies/tests/, volontairement hors du
       # bundle et du validateur de déterminisme). Un paquet qui refuse tout
       # passerait sans eux : chaque refus y a son cas voisin autorisé.
       - name: opa test (paquets de règles)
         run: opa test policies/rego/ policies/tests/
-      - name: gen_capabilities.sh (fails if a forbidden built-in vanishes from a newer OPA release)
-        run: policies/gen_capabilities.sh
 
   # Le catalogue de conformité (tbp-compliance/) est un actif vivant : ce job
   # échoue s'il dérive (ligne partielle, 🔴 sans issue, ⚪ sans motif, état de
