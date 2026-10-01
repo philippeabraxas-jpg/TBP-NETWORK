@@ -114,7 +114,7 @@ func (cfx *consoleFixture) submitPlan(t *testing.T, n int) [32]byte {
 	for i := range steps {
 		steps[i] = pep.PlanStep{Action: "db.write", Resource: "users", ParamsHash: pep.HashParams([]byte{byte(i), byte(n)})}
 	}
-	h, err := cfx.contracts.Submit(testCtx, steps)
+	h, err := cfx.contracts.Submit(testCtx, "agent-1", steps)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}

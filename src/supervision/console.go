@@ -187,7 +187,8 @@ func (c *Console) Serve(ctx context.Context, lis net.Listener) error {
 // l'API de la console) —
 
 type pendingPlanView struct {
-	Hash        string    `json:"hash"` // sceau du plan, hex
+	Hash        string    `json:"hash"`    // sceau du plan, hex
+	Subject     string    `json:"subject"` // agent destinataire (#235)
 	SubmittedAt time.Time `json:"submitted_at"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	Steps       int       `json:"steps"`
@@ -257,6 +258,7 @@ func (c *Console) handleArbitration(w http.ResponseWriter, _ *http.Request) {
 	for _, p := range snap {
 		view.Pending = append(view.Pending, pendingPlanView{
 			Hash:        hex.EncodeToString(sliceOf(p.Hash)),
+			Subject:     p.Subject,
 			SubmittedAt: p.SubmittedAt.UTC(),
 			ExpiresAt:   p.ExpiresAt.UTC(),
 			Steps:       p.Steps,

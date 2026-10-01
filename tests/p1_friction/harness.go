@@ -457,7 +457,7 @@ func runTier2(st *pepStack, cfg Config, tier string, plans int) (samples []Sampl
 		}
 		// Soumission (tracée KindContract, D64).
 		start := time.Now()
-		hash, err := st.contracts.Submit(ctx, []pep.PlanStep{step})
+		hash, err := st.contracts.Submit(ctx, "agent-friction", []pep.PlanStep{step})
 		if err != nil {
 			return nil, 0, 0, fmt.Errorf("submit plan %d: %w", i, err)
 		}
@@ -484,7 +484,7 @@ func runTier2(st *pepStack, cfg Config, tier string, plans int) (samples []Sampl
 			return nil, 0, 0, fmt.Errorf("binding plan %d: %w", i, err)
 		}
 		start = time.Now()
-		_, verr := st.contracts.VerifyStep(ctx, binding, step.Action, resource)
+		_, verr := st.contracts.VerifyStep(ctx, "agent-friction", binding, step.Action, resource)
 		el := time.Since(start)
 		if denied && verr == nil {
 			return nil, 0, 0, fmt.Errorf("plan %d : déviation injectée acceptée — harnais invalide", i)

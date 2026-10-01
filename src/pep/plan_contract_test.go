@@ -10,6 +10,7 @@ import (
 	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,9 @@ var (
 	contractSalt    = []byte("t30-contract-salt-0123456789")
 	contractEpochT0 = time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 )
+
+// contractSubject : l'agent pour lequel les plans de test sont scellés (#235).
+const contractSubject = "agent-1"
 
 func opKey1() ed25519.PrivateKey { return ed25519.NewKeyFromSeed(contractOpSeed1) }
 func opKey2() ed25519.PrivateKey { return ed25519.NewKeyFromSeed(contractOpSeed2) }
@@ -238,12 +242,12 @@ func TestSubmitSealsPlanHash(t *testing.T) {
 		stepOf("read.list", "registry/docs/42", []byte(`{"limit":10}`)),
 		stepOf("http.send", "https://api.example.com/v1/messages", nil),
 	}
-	hash, err := s.Submit(context.Background(), steps)
+	hash, err := s.Submit(context.Background(), contractSubject, steps)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	// Le sceau est exactement HashPlan à l'instant de soumission (D58).
-	want := HashPlan("cell-alpha-01", contractEpochT0, arr32(policyV1), steps)
+	want := HashPlan("cell-alpha-01", contractSubject, contractEpochT0, arr32(policyV1), steps)
 	if hash != want {
 		t.Fatalf("sceau ≠ HashPlan attendu")
 	}
@@ -255,7 +259,7 @@ func TestSubmitSealsPlanHash(t *testing.T) {
 
 	// Soumission en double au même instant : idempotente (même sceau,
 	// aucun second plan) mais tracée (chaque événement laisse une feuille).
-	hash2, err := s.Submit(context.Background(), steps)
+	hash2, err := s.Submit(context.Background(), contractSubject, steps)
 	if err != nil {
 		t.Fatalf("Submit doublon: %v", err)
 	}
@@ -269,7 +273,7 @@ func TestSubmitSealsPlanHash(t *testing.T) {
 	// Un instant plus tard, les mêmes étapes forment un NOUVEAU contrat
 	// (submittedAt entre dans le sceau).
 	clock.advance(time.Second)
-	hash3, err := s.Submit(context.Background(), steps)
+	hash3, err := s.Submit(context.Background(), contractSubject, steps)
 	if err != nil {
 		t.Fatalf("Submit nouvel instant: %v", err)
 	}
@@ -286,7 +290,7 @@ func TestSubmitSealsPlanHash(t *testing.T) {
 		{stepOf(string(bytesOf(0x61, 256)), "r", nil)},
 		{stepOf("a", string(bytesOf(0x72, 1025)), nil)},
 	} {
-		if _, err := s.Submit(context.Background(), bad); !errors.Is(err, ErrPlanSubmissionInvalid) {
+		if _, err := s.Submit(context.Background(), contractSubject, bad); !errors.Is(err, ErrPlanSubmissionInvalid) {
 			t.Fatalf("plan invalide accepté : %v", err)
 		}
 	}
@@ -301,7 +305,7 @@ func TestApproveRequiresOperatorSignature(t *testing.T) {
 		sink := &stubSink{}
 		clock := &contractClock{t: contractEpochT0}
 		s := newContractStore(t, sink, clock, &contractTrips{}, nil)
-		hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+		hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
@@ -376,7 +380,7 @@ func TestApproveRequiresOperatorSignature(t *testing.T) {
 		sink := &stubSink{}
 		clock := &contractClock{t: contractEpochT0}
 		s := newContractStore(t, sink, clock, &contractTrips{}, func(o *ContractOptions) { o.PendingTTL = time.Minute })
-		hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+		hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
@@ -396,7 +400,7 @@ func TestApproveRequiresOperatorSignature(t *testing.T) {
 				opKey2().Public().(ed25519.PublicKey),
 			}
 		})
-		hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+		hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
@@ -422,7 +426,7 @@ func TestConformantExecutionConsumesSteps(t *testing.T) {
 		stepOf("http.send", "https://api.example.com/v1/messages", nil),
 		stepOf("storage.append", "storage/artifacts/report.pdf", []byte("blob-bytes")),
 	}
-	hash, err := s.Submit(context.Background(), steps)
+	hash, err := s.Submit(context.Background(), contractSubject, steps)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -431,7 +435,7 @@ func TestConformantExecutionConsumesSteps(t *testing.T) {
 	// Chaque étape conforme, dans l'ordre : acceptée, sceau rendu, curseur avancé.
 	for i, st := range steps {
 		params := [][]byte{[]byte(`{"limit":10}`), nil, []byte("blob-bytes")}[i]
-		seal, err := s.VerifyStep(context.Background(), bindingOf(t, hash, params), st.Action, st.Resource)
+		seal, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, params), st.Action, st.Resource)
 		if err != nil {
 			t.Fatalf("étape %d conforme refusée : %v", i, err)
 		}
@@ -440,7 +444,7 @@ func TestConformantExecutionConsumesSteps(t *testing.T) {
 		}
 	}
 	// Le plan épuisé refuse toute étape supplémentaire (déviation).
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanDeviation) {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanDeviation) {
 		t.Fatalf("plan épuisé : étape supplémentaire acceptée : %v", err)
 	}
 	// Feuilles : 1 submit + 1 approve + 3 consume + 1 refuse.
@@ -471,7 +475,7 @@ func TestPlanDeviationRefused(t *testing.T) {
 			stepOf("read.list", "registry/docs/42", []byte(`{"limit":10}`)),
 			stepOf("http.send", "https://api.example.com/v1/messages", nil),
 		}
-		hash, err := s.Submit(context.Background(), steps)
+		hash, err := s.Submit(context.Background(), contractSubject, steps)
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
@@ -481,14 +485,14 @@ func TestPlanDeviationRefused(t *testing.T) {
 
 	t.Run("action différente", func(t *testing.T) {
 		s, _, hash := setup(t)
-		_, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"limit":10}`)), "storage.delete", "registry/docs/42")
+		_, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"limit":10}`)), "storage.delete", "registry/docs/42")
 		if !errors.Is(err, ErrPlanDeviation) {
 			t.Fatalf("action déviante acceptée : %v", err)
 		}
 	})
 	t.Run("ressource différente", func(t *testing.T) {
 		s, _, hash := setup(t)
-		_, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/1337")
+		_, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/1337")
 		if !errors.Is(err, ErrPlanDeviation) {
 			t.Fatalf("ressource déviante acceptée : %v", err)
 		}
@@ -497,24 +501,24 @@ func TestPlanDeviationRefused(t *testing.T) {
 		s, _, hash := setup(t)
 		// Même action, même ressource, params reformattés (espace en plus) :
 		// le sceau lie les OCTETS BRUTS — même une dérive cosmétique refuse.
-		_, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"limit": 10}`)), "read.list", "registry/docs/42")
+		_, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"limit": 10}`)), "read.list", "registry/docs/42")
 		if !errors.Is(err, ErrPlanDeviation) {
 			t.Fatalf("paramètres déviants acceptés : %v", err)
 		}
 	})
 	t.Run("ordre différent (étape 2 d'abord)", func(t *testing.T) {
 		s, _, hash := setup(t)
-		_, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "http.send", "https://api.example.com/v1/messages")
+		_, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "http.send", "https://api.example.com/v1/messages")
 		if !errors.Is(err, ErrPlanDeviation) {
 			t.Fatalf("exécution hors ordre acceptée : %v", err)
 		}
 	})
 	t.Run("rejeu d'étape consommée", func(t *testing.T) {
 		s, _, hash := setup(t)
-		if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/42"); err != nil {
+		if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/42"); err != nil {
 			t.Fatalf("étape 1 nominale : %v", err)
 		}
-		_, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/42")
+		_, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"limit":10}`)), "read.list", "registry/docs/42")
 		if !errors.Is(err, ErrPlanDeviation) {
 			t.Fatalf("rejeu d'étape accepté : %v", err)
 		}
@@ -522,7 +526,7 @@ func TestPlanDeviationRefused(t *testing.T) {
 	t.Run("chaque refus laisse sa feuille", func(t *testing.T) {
 		s, sink, hash := setup(t)
 		before := len(contractLeaves(sink)) // submit + approve
-		_, _ = s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "storage.delete", "registry/docs/42")
+		_, _ = s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "storage.delete", "registry/docs/42")
 		leaves := contractLeaves(sink)
 		if len(leaves) != before+1 {
 			t.Fatalf("refus sans feuille : %d → %d", before, len(leaves))
@@ -546,14 +550,14 @@ func TestLyingPlanP2(t *testing.T) {
 		stepOf("read.list", "registry/docs/42", nil),
 		stepOf("http.send", "https://api.example.com/v1/messages", []byte(`{"to":"ops@example.com"}`)),
 	}
-	hash, err := s.Submit(context.Background(), benign)
+	hash, err := s.Submit(context.Background(), contractSubject, benign)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	approveNominal(t, s, clock, hash)
 
 	// Première étape conforme : exécutée.
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
 		t.Fatalf("étape 1 conforme : %v", err)
 	}
 
@@ -561,18 +565,18 @@ func TestLyingPlanP2(t *testing.T) {
 	// jamais montrée à l'opérateur. REFUS, alors que l'action isolée aurait
 	// pu être autorisée par la politique (c'est le contrat qui refuse, pas
 	// OPA — le test croisé broker le démontre avec un OPA qui permet tout).
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "storage.delete", "storage/artifacts"); !errors.Is(err, ErrPlanDeviation) {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "storage.delete", "storage/artifacts"); !errors.Is(err, ErrPlanDeviation) {
 		t.Fatalf("P2 : action destructive hors plan acceptée : %v", err)
 	}
 
 	// Variante : l'agent soumet SON propre plan destructeur sans jamais
 	// obtenir la signature de l'opérateur — l'exécution refuse « pending ».
 	evil := []PlanStep{stepOf("storage.delete", "storage/artifacts", nil)}
-	evilHash, err := s.Submit(context.Background(), evil)
+	evilHash, err := s.Submit(context.Background(), contractSubject, evil)
 	if err != nil {
 		t.Fatalf("Submit plan adverse: %v", err)
 	}
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, evilHash, nil), "storage.delete", "storage/artifacts"); !errors.Is(err, ErrPlanPending) {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, evilHash, nil), "storage.delete", "storage/artifacts"); !errors.Is(err, ErrPlanPending) {
 		t.Fatalf("P2 : plan adverse non approuvé exécutable : %v", err)
 	}
 
@@ -586,7 +590,7 @@ func TestLyingPlanP2(t *testing.T) {
 
 	// Et le plan bénin approuvé, lui, continue son cours exact après la
 	// tentative de déviation (le curseur n'a pas bougé).
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, []byte(`{"to":"ops@example.com"}`)), "http.send", "https://api.example.com/v1/messages"); err != nil {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, []byte(`{"to":"ops@example.com"}`)), "http.send", "https://api.example.com/v1/messages"); err != nil {
 		t.Fatalf("plan bénin bloqué par la déviation adverse : %v", err)
 	}
 }
@@ -599,7 +603,7 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 	sink := &stubSink{}
 	clock := &contractClock{t: contractEpochT0}
 	s := newContractStore(t, sink, clock, &contractTrips{}, nil)
-	hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -610,7 +614,7 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 	// À l'instant d'expiry exact, le contrat tient encore (convention
 	// inclusive, comme exp des jetons) ; une seconde après, il est mort.
 	clock.advance(MinApprovalTTL)
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
 		t.Fatalf("à l'instant expiry, le plan devrait encore servir : %v", err)
 	}
 	// (L'étape a été consommée — plan d'une étape épuisé : on re-soumet
@@ -618,7 +622,7 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 	clock2 := &contractClock{t: contractEpochT0}
 	sink2 := &stubSink{}
 	s2 := newContractStore(t, sink2, clock2, &contractTrips{}, nil)
-	hash2, err := s2.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	hash2, err := s2.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 	if err != nil {
 		t.Fatalf("Submit 2: %v", err)
 	}
@@ -627,7 +631,7 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 		t.Fatalf("Approve 2: %v", err)
 	}
 	clock2.advance(MinApprovalTTL + time.Second)
-	if _, err := s2.VerifyStep(context.Background(), bindingOf(t, hash2, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanExpired) {
+	if _, err := s2.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash2, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanExpired) {
 		t.Fatalf("plan expiré accepté : %v", err)
 	}
 	// Feuille d'expiration écrite UNE fois, puis chaque tentative = refus tracé.
@@ -641,7 +645,7 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 	if expireCount != 1 {
 		t.Fatalf("feuilles d'expiration : %d, attendu 1", expireCount)
 	}
-	if _, err := s2.VerifyStep(context.Background(), bindingOf(t, hash2, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanExpired) {
+	if _, err := s2.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash2, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanExpired) {
 		t.Fatalf("seconde tentative sur plan expiré : %v", err)
 	}
 	leaves = contractLeaves(sink2)
@@ -660,7 +664,7 @@ func TestRevocationRefuses(t *testing.T) {
 	sink := &stubSink{}
 	clock := &contractClock{t: contractEpochT0}
 	s := newContractStore(t, sink, clock, &contractTrips{}, nil)
-	hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -668,7 +672,7 @@ func TestRevocationRefuses(t *testing.T) {
 	if err := s.Revoke(context.Background(), hash); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanRevoked) {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanRevoked) {
 		t.Fatalf("plan révoqué exécutable : %v", err)
 	}
 	// Révocation d'un inconnu et double révocation : refusées, tracées.
@@ -696,11 +700,11 @@ func TestContractStoreSaturation(t *testing.T) {
 		clock := &contractClock{t: contractEpochT0}
 		trips := &contractTrips{}
 		s := newContractStore(t, sink, clock, trips, func(o *ContractOptions) { o.MaxPending = 1 })
-		if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r1", nil)}); err != nil {
+		if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r1", nil)}); err != nil {
 			t.Fatalf("Submit 1: %v", err)
 		}
 		clock.advance(time.Second) // sceau distinct
-		if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r2", nil)}); !errors.Is(err, ErrPlanStoreSaturated) {
+		if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r2", nil)}); !errors.Is(err, ErrPlanStoreSaturated) {
 			t.Fatalf("saturation pending non refusée : %v", err)
 		}
 		if trips.count() != 1 {
@@ -712,12 +716,12 @@ func TestContractStoreSaturation(t *testing.T) {
 		clock := &contractClock{t: contractEpochT0}
 		trips := &contractTrips{}
 		s := newContractStore(t, sink, clock, trips, func(o *ContractOptions) { o.MaxApproved = 1 })
-		h1, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r1", nil)})
+		h1, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r1", nil)})
 		if err != nil {
 			t.Fatalf("Submit 1: %v", err)
 		}
 		clock.advance(time.Second)
-		h2, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r2", nil)})
+		h2, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r2", nil)})
 		if err != nil {
 			t.Fatalf("Submit 2: %v", err)
 		}
@@ -740,14 +744,14 @@ func TestConsumeWithoutLeafFailsClosed(t *testing.T) {
 	clock := &contractClock{t: contractEpochT0}
 	trips := &contractTrips{}
 	s := newContractStore(t, sink, clock, trips, nil)
-	hash, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	hash, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	approveNominal(t, s, clock, hash)
 
 	sink.err = errors.New("registre indisponible")
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanStoreFault) {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanStoreFault) {
 		t.Fatalf("consommation sans feuille acceptée : %v", err)
 	}
 	if trips.count() != 1 {
@@ -756,7 +760,7 @@ func TestConsumeWithoutLeafFailsClosed(t *testing.T) {
 	// Le curseur n'a PAS avancé : une fois le registre rétabli, la même
 	// étape est toujours l'exigible — aucune consommation clandestine.
 	sink.err = nil
-	if _, err := s.VerifyStep(context.Background(), bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
+	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
 		t.Fatalf("reprise après faute : %v (le curseur aurait avancé sans preuve)", err)
 	}
 }
@@ -766,7 +770,7 @@ func TestSubmitWithoutLeafFailsClosed(t *testing.T) {
 	clock := &contractClock{t: contractEpochT0}
 	trips := &contractTrips{}
 	s := newContractStore(t, sink, clock, trips, nil)
-	if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r", nil)}); !errors.Is(err, ErrPlanStoreFault) {
+	if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r", nil)}); !errors.Is(err, ErrPlanStoreFault) {
 		t.Fatalf("soumission sans feuille acceptée : %v", err)
 	}
 	if trips.count() != 1 {
@@ -774,7 +778,7 @@ func TestSubmitWithoutLeafFailsClosed(t *testing.T) {
 	}
 	// Rien n'a été stocké : la re-soumission après rétablissement fonctionne.
 	sink.err = nil
-	if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r", nil)}); err != nil {
+	if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r", nil)}); err != nil {
 		t.Fatalf("reprise après faute : %v", err)
 	}
 }
@@ -796,7 +800,7 @@ func TestBindingMalformed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := s.VerifyStep(context.Background(), c.b, "a", "r"); !errors.Is(err, ErrPlanBindingInvalid) {
+			if _, err := s.VerifyStep(context.Background(), contractSubject, c.b, "a", "r"); !errors.Is(err, ErrPlanBindingInvalid) {
 				t.Fatalf("binding mal formé accepté : %v", err)
 			}
 		})
@@ -826,14 +830,14 @@ func TestTombstonesAreBounded(t *testing.T) {
 	const rounds = 200 // très au-delà de maxTombstones
 	for i := 0; i < rounds; i++ {
 		steps := []PlanStep{stepOf("a", "r", []byte{byte(i), byte(i >> 8)})}
-		if _, err := s.Submit(context.Background(), steps); err != nil {
+		if _, err := s.Submit(context.Background(), contractSubject, steps); err != nil {
 			t.Fatalf("submit %d : %v (le quota VIVANT ne doit jamais saturer ici — chaque plan expire avant le suivant)", i, err)
 		}
 		clock.advance(MinApprovalTTL + time.Second)
 	}
 	// Un dernier toucher pour que le dernier lot expiré soit purgé au tour
 	// suivant (expireLocked tourne en tête de chaque appel public).
-	if _, err := s.Submit(context.Background(), []PlanStep{stepOf("a", "r", []byte("flush"))}); err != nil {
+	if _, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("a", "r", []byte("flush"))}); err != nil {
 		t.Fatalf("submit de purge : %v", err)
 	}
 
@@ -877,14 +881,14 @@ func TestContractStoreSnapshot(t *testing.T) {
 	}
 
 	steps1 := []PlanStep{stepOf("db.write", "users", []byte("p1")), stepOf("db.read", "audit", []byte("p2"))}
-	h1, err := s.Submit(context.Background(), steps1)
+	h1, err := s.Submit(context.Background(), contractSubject, steps1)
 	if err != nil {
 		t.Fatalf("submit 1 : %v", err)
 	}
 	submitted1 := clock.now()
 	clock.advance(time.Minute) // ordre d'arrivée distinct
 	steps2 := []PlanStep{stepOf("fs.delete", "/tmp/x", []byte("p3"))}
-	h2, err := s.Submit(context.Background(), steps2)
+	h2, err := s.Submit(context.Background(), contractSubject, steps2)
 	if err != nil {
 		t.Fatalf("submit 2 : %v", err)
 	}
@@ -947,11 +951,11 @@ func TestApprovalLeafAttributesTheApprover(t *testing.T) {
 	s := newContractStore(t, sink, clock, trips, func(o *ContractOptions) {
 		o.OperatorKeys = []ed25519.PublicKey{opKey1().Public().(ed25519.PublicKey), opKey2().Public().(ed25519.PublicKey)}
 	})
-	h1, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/1", nil)})
+	h1, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/1", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := s.Submit(context.Background(), []PlanStep{stepOf("read.list", "registry/docs/2", nil)})
+	h2, err := s.Submit(context.Background(), contractSubject, []PlanStep{stepOf("read.list", "registry/docs/2", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -971,5 +975,76 @@ func TestApprovalLeafAttributesTheApprover(t *testing.T) {
 	other := registry.HashPayload(contractSalt, approvalRecord(h1, opKey2(), expiry))
 	if leaves[2].PayloadHash == other {
 		t.Fatal("la feuille d'approbation ne dépend pas de l'opérateur : rien n'est attribué")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #235 — le plan est scellé pour UN agent
+// ---------------------------------------------------------------------------
+
+// TestPlanIsBoundToItsSubject : un plan approuvé pour l'agent A ne peut pas
+// être consommé par l'agent B, même avec le binding exact (hash + params).
+// Le refus est tracé, ne consomme pas l'étape, et laisse l'agent A intact.
+func TestPlanIsBoundToItsSubject(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	s := newContractStore(t, sink, clock, &contractTrips{}, nil)
+	ctx := context.Background()
+	params := []byte(`{"limit":10}`)
+	hash, err := s.Submit(ctx, "agent-a", []PlanStep{stepOf("read.list", "registry/docs/42", params)})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	approveNominal(t, s, clock, hash)
+	binding := bindingOf(t, hash, params)
+
+	// L'agent B présente le binding exact : refusé, raison dédiée.
+	for _, other := range []string{"agent-b", "agent-", "agent-a ", "AGENT-A", ""} {
+		_, err := s.VerifyStep(ctx, other, binding, "read.list", "registry/docs/42")
+		if !errors.Is(err, ErrPlanSubjectMismatch) {
+			t.Fatalf("sujet %q : plan d'un autre agent consommé ou mauvaise cause : %v", other, err)
+		}
+	}
+	// Le refus est une feuille (un événement de sécurité, pas du bruit).
+	want := registry.HashPayload(contractSalt, contractRecord(planEventRefuse, hash, planStepNA, 0, "plan-subject-mismatch"))
+	n := 0
+	for _, l := range contractLeaves(sink) {
+		if l.PayloadHash == want {
+			n++
+		}
+	}
+	if n != 5 {
+		t.Fatalf("%d feuilles plan-subject-mismatch, veut 5", n)
+	}
+	// Le curseur n'a pas bougé : le bon agent consomme l'étape 0, une fois.
+	if _, err := s.VerifyStep(ctx, "agent-a", binding, "read.list", "registry/docs/42"); err != nil {
+		t.Fatalf("le bon agent est refusé après les tentatives étrangères : %v", err)
+	}
+	if _, err := s.VerifyStep(ctx, "agent-a", binding, "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanDeviation) {
+		t.Fatalf("rejeu après consommation non refusé : %v", err)
+	}
+}
+
+// TestPlanSealCoversSubject : le sujet entre dans le sceau — l'opérateur
+// signe QUEL agent est autorisé ; deux sujets, deux contrats distincts.
+func TestPlanSealCoversSubject(t *testing.T) {
+	steps := []PlanStep{stepOf("read.list", "registry/docs/42", nil)}
+	a := HashPlan("cell-alpha-01", "agent-a", contractEpochT0, arr32(policyV1), steps)
+	b := HashPlan("cell-alpha-01", "agent-b", contractEpochT0, arr32(policyV1), steps)
+	if a == b {
+		t.Fatal("le sceau ne couvre pas le sujet")
+	}
+	// Pas d'ambiguïté de frontière cellID ‖ subject.
+	x := HashPlan("cell-a", "bagent", contractEpochT0, arr32(policyV1), steps)
+	y := HashPlan("cell-ab", "agent", contractEpochT0, arr32(policyV1), steps)
+	if x == y {
+		t.Fatal("frontière cellID/sujet ambiguë dans le sceau")
+	}
+	// Un sujet vide ou hors borne n'est pas soumettable.
+	s := newContractStore(t, &stubSink{}, &contractClock{t: contractEpochT0}, &contractTrips{}, nil)
+	for _, bad := range []string{"", strings.Repeat("x", maxPlanSubjectLen+1)} {
+		if _, err := s.Submit(context.Background(), bad, steps); !errors.Is(err, ErrPlanSubmissionInvalid) {
+			t.Fatalf("sujet de %d octets accepté : %v", len(bad), err)
+		}
 	}
 }

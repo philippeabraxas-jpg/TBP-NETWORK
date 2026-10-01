@@ -72,7 +72,8 @@ const (
 	ReasonPlanExpired           = "plan-expired"
 	ReasonPlanRevoked           = "plan-revoked"
 	ReasonPlanDeviation         = "plan-deviation"
-	ReasonPlanStoreFault        = "plan-store-fault" // FAUTE système (alarmée)
+	ReasonPlanSubjectMismatch   = "plan-subject-mismatch" // #235 : plan scellé pour un autre agent
+	ReasonPlanStoreFault        = "plan-store-fault"      // FAUTE système (alarmée)
 	ReasonEnvelopeUnverified    = "envelope-unverified"
 	ReasonEnvelopeSaturated     = "envelope-saturated"
 	ReasonIssuanceFailed        = "issuance-failed"
@@ -145,7 +146,7 @@ type QuorumGate interface {
 // le claim −8 du jeton émis (schéma v2) : le lien jeton ↔ plan vit dans
 // l'objet signé, opposable au broker lui-même après coup (§7.6).
 type ContractGate interface {
-	VerifyStep(ctx context.Context, binding []byte, action, resource string) (planSeal [32]byte, err error)
+	VerifyStep(ctx context.Context, subject string, binding []byte, action, resource string) (planSeal [32]byte, err error)
 }
 
 // StructuredTranslator est le traducteur du MODE STRUCTURÉ (§4.5 degraded
@@ -695,7 +696,7 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 			b.mu.Unlock()
 			return b.deny(ctx, jti, ReasonPlanUnverified, &dec)
 		}
-		seal, err := b.contract.VerifyStep(ctx, tr.PlanBinding, tr.Action, tr.Resource)
+		seal, err := b.contract.VerifyStep(ctx, subject, tr.PlanBinding, tr.Action, tr.Resource)
 		if err != nil {
 			if errors.Is(err, pep.ErrPlanStoreFault) {
 				// FAUTE système (feuille de contrat impossible) : refus +
@@ -835,6 +836,8 @@ func planDenyReason(err error) string {
 		return ReasonPlanRevoked
 	case errors.Is(err, pep.ErrPlanDeviation):
 		return ReasonPlanDeviation
+	case errors.Is(err, pep.ErrPlanSubjectMismatch):
+		return ReasonPlanSubjectMismatch
 	default:
 		// Erreur de verdict inconnue : on refuse quand même, sous la raison
 		// générique — jamais de passage silencieux (§1).
