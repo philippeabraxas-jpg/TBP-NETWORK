@@ -638,7 +638,10 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
 
 - **Ce qui est mesuré.** `brokerd` : clés d'opérateurs, registre d'agents, manifeste de
   genèse, registre de skills, CA cliente mTLS. `pepd` : trousseau des émetteurs, trousseau
-  du quorum. Les deux acceptent `TBP_PROVISIONING_EXTRA_FILES` (par exemple le fichier de
+  du quorum. Les deux attestent aussi les **réglages d'échelle** (`quorum-settings` : `TBP_QUORUM_MIN` et
+  la topologie, #224) : abaisser k en éditant l'environnement est une divergence, et le changement est
+  autorisé par le k qui était attesté. Adopter cela sur une cellule qui a déjà tourné demande une preuve de
+  transition (la nouvelle entrée change le condensé). Les deux acceptent `TBP_PROVISIONING_EXTRA_FILES` (par exemple le fichier de
   règles d'`anod`).
 - **Comment.** Un condensé sur la liste triée (nom, SHA-256) est engagé au premier démarrage
   dans un témoin signé par la clé de cellule, hors de `TBP_REGISTRY_DIR`. À chaque démarrage

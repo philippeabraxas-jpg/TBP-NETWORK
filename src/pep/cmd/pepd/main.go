@@ -290,7 +290,7 @@ func run() error {
 	if err := setupProvisioning(ctx, provisioningInputs{
 		cellID: cellID, regDir: regDir, salt: salt,
 		keyringFile: os.Getenv("TBP_KEYRING_FILE"), quorumKeyringFile: os.Getenv("TBP_QUORUM_KEYRING_FILE"),
-		quorumKeyring: quorumKeyring, quorumMin: quorumMin,
+		quorumKeyring: quorumKeyring, quorumMin: quorumMin, topology: topologyName(multiTopology),
 	}, signer, verifier, cellLog, os.Getenv); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
 	}
@@ -708,6 +708,14 @@ func durabilityFromEnv(getenv func(string) string) (async bool, window time.Dura
 		window = time.Duration(ms) * time.Millisecond
 	}
 	return async, window, nil
+}
+
+// topologyName est le nom que le témoin de provisionnement engage pour la topologie (#224).
+func topologyName(multi bool) string {
+	if multi {
+		return "multi"
+	}
+	return "mono"
 }
 
 // topologyFromEnv résout TBP_TOPOLOGY (revue de sécurité post-#86, issue

@@ -557,3 +557,37 @@ func TestBrokerdRemovingAControllerByShiftingRanksIsRefused(t *testing.T) {
 		t.Fatalf("manifeste aux rangs décalés accepté, ou autre cause : %v", err)
 	}
 }
+
+// Abaisser TBP_QUORUM_MIN dans l'environnement (2 → 1) affaiblissait tous les actes gouvernés
+// sans alarme (issue #224). k est engagé dans le témoin ; la transition n'est autorisée que par
+// le k ATTESTÉ, pas par celui que l'attaquant vient d'écrire.
+func TestBrokerdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil { // k = 2 (genèse 2-sur-3)
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+
+	fx.env["TBP_QUORUM_MIN"] = "1"
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("k abaissé par l'environnement accepté sans preuve")
+	}
+	signProof(t, fx, proof, conditionProvisioningTransition, 1) // une seule signature : suffit pour k = 1, pas pour l'attesté
+	err := boot(t, fx, sock)
+	if err == nil {
+		t.Fatal("k abaissé de 2 à 1 AUTORISÉ par une seule signature : la preuve a été vérifiée avec le k de l'environnement")
+	}
+
+	// cas voisin : l'abaissement légitime, signé par le quorum attesté (2 signatures)
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("abaissement signé par le quorum attesté refusé : %v", err)
+	}
+	delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("nouveau k non retenu : %v", err)
+	}
+}
