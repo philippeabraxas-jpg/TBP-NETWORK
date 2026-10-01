@@ -35,6 +35,9 @@ type provisioningInputs struct {
 	keyringFile, quorumKeyringFile string
 	quorumKeyring                  map[[16]byte]ed25519.PublicKey
 	quorumMin                      int
+	// topology : « mono » ou « multi » (TBP_TOPOLOGY) — avec quorumMin, les réglages qui font
+	// l'échelle, engagés dans le témoin (issue #224).
+	topology string
 }
 
 // setupProvisioning est appelé juste après l'ouverture du journal de pepd, AVANT le
@@ -59,6 +62,9 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 	files := append([]registry.ProvisioningFile{
 		{Name: "issuer-keyring", Path: in.keyringFile},
 		{Name: "quorum-keyring", Path: in.quorumKeyringFile, Authority: true},
+		// l'ÉCHELLE : k du quorum et topologie. Abaisser TBP_QUORUM_MIN par l'environnement
+		// divergerait du témoin ; la transition n'est autorisée que par k ATTESTÉ (#224).
+		{Name: "quorum-settings", Content: pep.QuorumSettings(in.quorumMin, in.topology)},
 	}, extra...)
 
 	// La preuve de transition est vérifiée contre le trousseau de contrôleurs ATTESTÉ
@@ -69,7 +75,7 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 	var authorize func(prev map[string][]byte) error
 	if proof := getenv("TBP_PROVISIONING_TRANSITION_PROOF_FILE"); proof != "" {
 		authorize = func(prev map[string][]byte) error {
-			keyring := in.quorumKeyring
+			keyring, k := in.quorumKeyring, in.quorumMin
 			if raw, ok := prev["quorum-keyring"]; ok {
 				attested, err := parseKeyring(raw)
 				if err != nil {
@@ -77,7 +83,16 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 				}
 				keyring = attested
 			}
-			return pep.VerifyQuorumProofFile(proof, conditionProvisioningTransition, in.cellID, keyring, in.quorumMin)
+			// k est LUI AUSSI celui qui était attesté : sinon l'attaquant qui abaisse
+			// TBP_QUORUM_MIN dans l'environnement autorise sa transition avec une seule clé (#224).
+			if raw, ok := prev["quorum-settings"]; ok {
+				attestedK, err := pep.ParseQuorumSettings(raw)
+				if err != nil {
+					return fmt.Errorf("réglages de quorum attestés illisibles: %w", err)
+				}
+				k = attestedK
+			}
+			return pep.VerifyQuorumProofFile(proof, conditionProvisioningTransition, in.cellID, keyring, k)
 		}
 	}
 	g, err := registry.NewProvisioningGuard(registry.ProvisioningGuardOptions{

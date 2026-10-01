@@ -543,8 +543,8 @@ func TestGuardOnARealCellLog(t *testing.T) {
 func TestParseProvisioningExtra(t *testing.T) {
 	got, err := ParseProvisioningExtra("/a/rules.json, r=/b/x.json ,,")
 	if err != nil || len(got) != 2 ||
-		got[0] != (ProvisioningFile{Name: "extra:/a/rules.json", Path: "/a/rules.json"}) ||
-		got[1] != (ProvisioningFile{Name: "extra:r", Path: "/b/x.json"}) {
+		got[0].Name != "extra:/a/rules.json" || got[0].Path != "/a/rules.json" ||
+		got[1].Name != "extra:r" || got[1].Path != "/b/x.json" {
 		t.Fatalf("extras = %+v (%v)", got, err)
 	}
 	if got, err := ParseProvisioningExtra(""); err != nil || got != nil {
@@ -700,5 +700,47 @@ func TestReEngagementPassesNilPrev(t *testing.T) {
 	e.opts.AuthorizeTransition = func(prev map[string][]byte) error { called = true; gotPrev = prev; return nil }
 	if err := e.guard().Check(context.Background()); err != nil || !called || gotPrev != nil {
 		t.Fatalf("ré-engagement : err=%v called=%v prev=%v", err, called, gotPrev)
+	}
+}
+
+// --- réglages en mémoire (issue #224) ----------------------------------------------
+
+func TestInlineSettingIsMeasuredAndRetained(t *testing.T) {
+	e := newProvEnv(t, nil)
+	e.opts.Files = append(append([]ProvisioningFile(nil), e.opts.Files...), ProvisioningFile{Name: "quorum-settings", Content: []byte("quorum-min=2\n")})
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 1
+	if got := string(e.readWitness().Authorities["quorum-settings"]); got != "quorum-min=2\n" {
+		t.Fatalf("réglage non retenu dans le témoin : %q", got)
+	}
+	// même réglage : le redémarrage passe (cas voisin)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatalf("redémarrage à réglage identique refusé : %v", err)
+	}
+	// réglage abaissé par l'environnement : divergence, nommée, et l'autorisation reçoit l'ATTESTÉ
+	e.opts.Files = append(append([]ProvisioningFile(nil), e.opts.Files[:2]...), ProvisioningFile{Name: "quorum-settings", Content: []byte("quorum-min=1\n")})
+	err := e.guard().Check(context.Background())
+	if !errors.Is(err, ErrProvisioningDivergence) || !strings.Contains(err.Error(), "quorum-settings") {
+		t.Fatalf("réglage modifié sans preuve : %v", err)
+	}
+	var seen string
+	e.opts.AuthorizeTransition = func(prev map[string][]byte) error { seen = string(prev["quorum-settings"]); return nil }
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatalf("transition autorisée refusée : %v", err)
+	}
+	if seen != "quorum-min=2\n" {
+		t.Fatalf("l'autorisation a vu %q au lieu du réglage attesté", seen)
+	}
+	if got := string(e.readWitness().Authorities["quorum-settings"]); got != "quorum-min=1\n" {
+		t.Fatalf("nouveau réglage non retenu : %q", got)
+	}
+}
+
+func TestInlineSettingTooLargeIsRefused(t *testing.T) {
+	_, _, err := MeasureProvisioning([]ProvisioningFile{{Name: "s", Content: make([]byte, maxAuthorityBytes+1)}})
+	if !errors.Is(err, ErrProvisioningConfig) {
+		t.Fatalf("réglage démesuré accepté : %v", err)
 	}
 }

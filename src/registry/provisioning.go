@@ -91,6 +91,12 @@ type ProvisioningFile struct {
 	// édite le trousseau y ajoute ses clés et signe lui-même sa « transition »
 	// (issue #218).
 	Authority bool
+	// Content non nul : réglage EN MÉMOIRE plutôt que fichier (Path ignoré). Il entre dans le
+	// condensé comme un fichier et son contenu est conservé dans le témoin comme celui d'une
+	// autorité : un réglage qui gouverne la sécurité — k du quorum, la topologie, c'est-à-dire
+	// l'ÉCHELLE — ne peut pas être changé par l'environnement entre deux démarrages sans
+	// que la mesure le voie, ni autoriser lui-même son propre changement (issue #224).
+	Content []byte
 }
 
 // ProvisioningFileHash est le hash mesuré d'un fichier.
@@ -136,6 +142,14 @@ func measureProvisioning(files []ProvisioningFile) ([32]byte, []ProvisioningFile
 			return digest, nil, nil, fmt.Errorf("%w : nom en double %q", ErrProvisioningConfig, f.Name)
 		}
 		seen[f.Name] = true
+		if f.Content != nil {
+			if len(f.Content) > maxAuthorityBytes {
+				return digest, nil, nil, fmt.Errorf("%w : %q : réglage de plus de %d octets", ErrProvisioningConfig, f.Name, maxAuthorityBytes)
+			}
+			authorities[f.Name] = append([]byte(nil), f.Content...)
+			per = append(per, ProvisioningFileHash{Name: f.Name, Hash: sha256.Sum256(f.Content)})
+			continue
+		}
 		if f.Authority {
 			raw, err := readBoundedBytes(f.Path, maxAuthorityBytes)
 			if err != nil {

@@ -20,6 +20,7 @@ type provFixture struct {
 	*measuredBootFixture
 	keyring, quorumKeyring string
 	witness                string
+	topology               string // « mono » par défaut
 }
 
 func newProvFixture(t *testing.T) *provFixture {
@@ -74,7 +75,7 @@ func (pf *provFixture) setup(t *testing.T) error {
 	return setupProvisioning(pf.ctx, provisioningInputs{
 		cellID: pf.cellID, regDir: pf.regDir, salt: pf.salt,
 		keyringFile: pf.keyring, quorumKeyringFile: pf.quorumKeyring,
-		quorumKeyring: pf.measuredBootFixture.quorumKeyring, quorumMin: pf.quorumMin,
+		quorumKeyring: pf.measuredBootFixture.quorumKeyring, quorumMin: pf.quorumMin, topology: pf.topology,
 	}, signer, verifier, pf.cellLog, pf.getenv)
 }
 
@@ -385,5 +386,64 @@ func TestPepdLostQuorumIsRecoveredByReEngagement(t *testing.T) {
 	pf.proofBy(t, conditionProvisioningTransition, fresh)
 	if err := pf.setup(t); err != nil {
 		t.Fatalf("la nouvelle clé n'autorise pas une transition : %v", err)
+	}
+}
+
+// --- k du quorum attesté (issue #224) -----------------------------------------------
+
+// Abaisser TBP_QUORUM_MIN dans l'environnement entre deux démarrages affaiblissait tous les
+// actes gouvernés sans alarme : une seule clé de contrôleur (compromise, ou la moins bien gardée)
+// suffisait, y compris pour la transition de provisionnement. k est maintenant engagé dans le
+// témoin, et la transition n'est autorisée que par le k ATTESTÉ.
+func TestPepdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
+	pf := newProvFixture(t)
+	pf.topology = "mono"
+	a, b := newKey(t), newKey(t)
+	pf.useQuorum(t, 2, a, b)
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("premier démarrage : %v", err)
+	}
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("redémarrage à k identique refusé : %v", err)
+	}
+
+	// l'attaquant édite l'environnement : k = 1, et une seule clé signe sa « transition »
+	pf.quorumMin = 1
+	if err := pf.setup(t); err == nil {
+		t.Fatal("k abaissé par l'environnement accepté sans preuve")
+	}
+	pf.proofBy(t, conditionProvisioningTransition, a)
+	if err := pf.setup(t); err == nil {
+		t.Fatal("k abaissé de 2 à 1 AUTORISÉ par une seule signature : la preuve a été vérifiée avec le k de l'environnement")
+	}
+
+	// cas voisin : l'abaissement légitime, signé par le quorum ATTESTÉ (k = 2)
+	pf.proofBy(t, conditionProvisioningTransition, a, b)
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("abaissement signé par le quorum attesté refusé : %v", err)
+	}
+	// et le nouveau k tient sans preuve
+	delete(pf.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("nouveau k non retenu : %v", err)
+	}
+}
+
+// La topologie fait partie de l'échelle : la changer est une transition, pas un réglage libre.
+func TestPepdTopologyChangeIsAGovernedTransition(t *testing.T) {
+	pf := newProvFixture(t)
+	a, b := newKey(t), newKey(t)
+	pf.useQuorum(t, 2, a, b)
+	pf.topology = "mono"
+	if err := pf.setup(t); err != nil {
+		t.Fatal(err)
+	}
+	pf.topology = "multi"
+	if err := pf.setup(t); err == nil {
+		t.Fatal("changement de topologie accepté sans preuve")
+	}
+	pf.proofBy(t, conditionProvisioningTransition, a, b)
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("changement de topologie signé par le quorum refusé : %v", err)
 	}
 }

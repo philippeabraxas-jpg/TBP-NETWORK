@@ -602,7 +602,11 @@ quorum), adding a key to an operator or controller keyring, or widening a skill'
 scope used to pass without any alarm.
 
 - **What is measured.** `brokerd`: operator keys, agent registry, genesis manifest,
-  skill registry, mTLS client CA. `pepd`: issuer keyring, quorum keyring. Both accept
+  skill registry, mTLS client CA. `pepd`: issuer keyring, quorum keyring. Both also attest the
+  **scale settings** (`quorum-settings`: `TBP_QUORUM_MIN` and the topology, #224): lowering k by
+  editing the environment is a divergence, and the change is authorised by the k that was attested.
+  Adopting this on a cell that already ran takes one transition proof (the new entry changes the
+  digest). Both accept
   `TBP_PROVISIONING_EXTRA_FILES` (for example the `anod` rules file).
 - **How.** A digest over the sorted (name, SHA-256) list is committed at the first start
   in a witness signed by the cell key, outside `TBP_REGISTRY_DIR`. At each later start the

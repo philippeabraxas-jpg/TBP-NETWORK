@@ -149,8 +149,10 @@ pepd: AVERTISSEMENT quorum k=1 (1 contrôleur(s) épinglé(s)) : une seule clé 
 
 Read it as a checklist: is there an off-machine copy of the key *today*? Is this still the scale
 you mean to be at? Above scale 1, k ≥ 2 and n ≥ k + 1 are the recommendation
-([scales.md](scales.md)). `TBP_QUORUM_MIN` is an environment setting that the provisioning
-witness does not (yet) attest: lowering it by editing the environment weakens every governed act, tracked in #224.
+([scales.md](scales.md)). `TBP_QUORUM_MIN` is read from the environment, but since #224 the provisioning witness
+attests it (the `quorum-settings` entry: k and topology): lowering it by editing the environment
+diverges from the witness, and the change is authorised only by the k that was **attested**, not
+by the one you just wrote.
 
 ## The drill
 
