@@ -1,0 +1,73 @@
+# deploy/integration-contract.fr.md — ce que l'intégrateur doit savoir (issue #210)
+
+_English version: [integration-contract.md](integration-contract.md)._
+
+Des limites et des obligations que le code ne peut pas faire respecter à votre place, trouvées par la
+revue red team suivie dans #210 et écrites ici pour que personne ne les découvre en production. Aucune
+n'est un défaut à corriger dans TBP : chacune est soit un contrat que l'intégration doit honorer, soit
+une borne contre laquelle dimensionner, soit un choix de conception qui a un coût.
+
+## 1. Le sceau objet ne vaut que ce que le service recalcule (R-4)
+
+Le sceau objet-capacité (claim −5, §4.4(2)) lie une autorisation à l'**objet métier exact** pour lequel
+elle a été émise : un jeton qui porte un sceau n'autorise que le corps ou l'état qui y correspond au
+hachage (`ReasonSealMismatch` sinon).
+
+Que cela tienne dépend de **qui calcule le sceau** :
+
+| Chemin | Qui calcule le sceau | Ça tient ? |
+|---|---|---|
+| Proxy transparent (`pepd` devant un backend HTTP) | `pepd` lui-même : SHA-256 du corps qu'il relaie (#108) | **Oui** — l'agent ne choisit rien |
+| `POST /v1/evaluate`, et mode structuré de `brokerd` (`object_seal` dans l'intention) | **Le présentant** (l'agent fournit `object_seal` ; l'émetteur le recopie dans le jeton ; le validateur compare le sceau du jeton à celui de la requête) | **Seulement si le service le recalcule** |
+
+Sur le second chemin, les deux valeurs sont choisies par le présentant, donc égales par construction :
+le contrôle ne prouve rien sur l'objet réel. La capacité n'est réelle que si le **service qui exécute
+l'action recalcule `ComputeObjectSeal` (`src/pep/object_capability.go`) sur l'état réel et le compare
+au claim −5 du jeton** (ou soumet à `evaluate` son propre sceau recalculé), comme le fait côté serveur
+l'intégration PostgreSQL. C'est donc un **contrat d'intégration obligatoire** :
+
+- Si votre service exécute une action sur un objet métier et s'appuie sur le sceau, il recalcule le
+  sceau à partir de l'objet réel au moment de l'exécution. Un sceau reçu de l'agent n'est jamais cru
+  tel quel.
+- S'il ne peut pas recalculer (un service HTTP générique sans adaptateur), ne pas compter le sceau
+  comme un contrôle : s'appuyer sur le chemin proxy, sur des règles OPA portant sur `resource`, et sur
+  le confinement propre de l'exécuteur ([execution-sandbox.fr.md](execution-sandbox.fr.md)).
+
+## 2. Les bornes se composent, elles ne s'additionnent pas (R-1, R-5)
+
+Chaque borne est raisonnable seule ; leur composition est plus petite que chacune :
+
+- **Intention : 4096 octets de JSON.** `quorum_proof` (≤ 4096 octets bruts) et `plan_binding`
+  (≤ 4135 octets bruts) voyagent **encodés en hexadécimal dans cette intention**, ce qui les double.
+  Une preuve ou un binding ne peut pas atteindre son propre maximum : au-delà d'environ 2 Kio bruts — de
+  l'ordre de quelques co-signataires d'un quorum de classe W — la requête est refusée
+  (`request-invalid`) et l'opérateur voit un refus opaque. Dimensionner le quorum (k et encodage des
+  signatures) contre cette borne, pas contre 4096.
+- **Jeton : 1024 octets sur le fil.** Le jeton porte sujet, action, identifiant de cellule, `resource`
+  (≤ 1024) et, avec un passeport, `quota.resource` (≤ 1024) aussi. Une composition légitime peut dépasser
+  le plafond du fil bien avant que l'un des champs n'atteigne son propre maximum (estimation de la revue :
+  `resource` ≳ 600 octets avec un passeport) ; l'émetteur refuse alors avec `ErrTokenTooLarge`. C'est
+  fail-closed, mais c'est un déni de service fonctionnel pour des requêtes légitimes : garder des
+  identifiants de ressource courts (des identifiants, pas des chemins ni des requêtes), et mettre ce qui
+  est long dans les paramètres de l'action, liés par `plan_binding`.
+
+## 3. Notes de friction (R-6, R-2)
+
+- **La classe d'action est par agent, pas par requête (R-6).** Le registre résout une classe pour un
+  agent (#125) ; un agent qui mêle lectures et écritures d'infrastructure subit le palier le plus strict,
+  liaison de plan comprise, sur **toutes** ses requêtes. C'est voulu (la classe n'est jamais prise de
+  l'agent). La sortie est opérationnelle : enregistrer des agents distincts par activité, ou affiner en
+  Rego avec `SkillInput` (voir le paquet `risk_tier`). Compté comme friction (§9.1).
+- **`quota.resource` n'est pas la `resource` de l'action (R-2).** La ressource du passeport (ce qui est
+  compté) et celle de l'action (ce qui est touché) sont distinctes exprès — le plan de données n'est pas
+  la route d'API. Ce qui les relie, c'est la règle d'enveloppe OPA et le plafond du registre. Les auteurs
+  de politique écrivent la règle qui les apparie s'ils les veulent égales.
+
+## 4. Ce que font et ne font pas les identifiants de pair (R-20)
+
+`SO_PEERCRED` sur la socket d'OPA vérifie l'**UID** du pair à chaque connexion. Un attaquant qui tourne
+déjà sous le même UID peut tuer OPA et re-lier la socket : la vérification **retarde** une imposture, elle
+ne l'empêche pas. Faire tourner OPA sous son propre compte, avec le mode de la socket et la propriété du
+répertoire réglés pour que seuls `pepd` et OPA la partagent (voir [cellule.fr.md](cellule.fr.md)), et
+compter sur le démarrage mesuré (#112) et le témoin de provisionnement (#192) pour ce qu'un attaquant
+disposant de ce compte pourrait changer.

@@ -420,3 +420,113 @@ func TestKernelClockProbe(t *testing.T) {
 	}
 	t.Logf("état noyau: unsync=%v esterror=%v", sample.Unsync, sample.EstError)
 }
+
+// gateSink est un puits de feuilles qui BLOQUE dans Append jusqu'à release — un checkpoint
+// POSIX lent (≈ 150–250 ms) rendu déterministe.
+type gateSink struct {
+	entered chan struct{}
+	release chan struct{}
+	n       atomic.Int32
+}
+
+func newGateSink() *gateSink {
+	return &gateSink{entered: make(chan struct{}, 8), release: make(chan struct{})}
+}
+
+func (g *gateSink) Append(ctx context.Context, _ registry.Leaf) (uint64, error) {
+	g.n.Add(1)
+	g.entered <- struct{}{}
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+	return uint64(g.n.Load()), nil
+}
+
+// R-17 (#210) : la feuille d'une transition ne doit pas figer le chemin chaud. Pendant que
+// l'écriture est en cours, Mode / IssuerAllowed / NaturalLanguageAllowed répondent tout de
+// suite — et dans le bon sens : ENTRER en dégradé est déjà effectif (plus strict), REVENIR à
+// la normale ne l'est pas encore (la feuille précède le relâchement).
+func TestClockLeafWriteDoesNotBlockTheHotPath(t *testing.T) {
+	p := &stubProbe{}
+	p.set(healthyClock(), nil)
+	sink := newGateSink()
+	w, err := NewClockWatchdog(ClockOptions{
+		Probe: p.probe, LocalIssuer: localTestIssuer, CellID: opaTestCellID, Salt: testSalt,
+		Leaves: sink, Now: func() time.Time { return time.Unix(testIAT+30, 0) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast := func(what string, f func()) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { f(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("%s bloqué pendant l'écriture d'une feuille (verrou tenu sous I/O)", what)
+		}
+	}
+
+	// entrée en dégradé : le puits bloque la feuille
+	p.set(ClockSample{Unsync: true}, nil)
+	checked := make(chan ClockMode, 1)
+	go func() { checked <- w.Check() }()
+	<-sink.entered
+	fast("Mode (entrée)", func() {
+		if w.Mode() != ClockModeDegraded {
+			t.Error("l'entrée en dégradé n'est pas effective avant sa feuille : fenêtre permissive")
+		}
+	})
+	fast("IssuerAllowed (entrée)", func() {
+		if w.IssuerAllowed("autre-emetteur") || !w.IssuerAllowed(localTestIssuer) {
+			t.Error("portillon dégradé incorrect pendant l'écriture")
+		}
+	})
+	fast("NaturalLanguageAllowed (entrée)", func() {
+		if w.NaturalLanguageAllowed() {
+			t.Error("langage naturel permis en dégradé")
+		}
+	})
+	close(sink.release)
+	if m := <-checked; m != ClockModeDegraded {
+		t.Fatalf("Check = %v", m)
+	}
+
+	// retour à la normale : la feuille de resync est bloquée ; le mode reste dégradé jusque-là
+	sink2 := newGateSink()
+	w.leaves = sink2
+	p.set(healthyClock(), nil)
+	go func() { checked <- w.Check() }()
+	<-sink2.entered
+	fast("Mode (sortie)", func() {
+		if w.Mode() != ClockModeDegraded {
+			t.Error("retour à la normale effectif AVANT sa feuille : le relâchement doit être prouvé d'abord")
+		}
+	})
+	close(sink2.release)
+	if m := <-checked; m != ClockModeNormal {
+		t.Fatalf("Check = %v", m)
+	}
+	if w.Mode() != ClockModeNormal {
+		t.Fatal("pas revenu à la normale après la feuille")
+	}
+}
+
+// Deux Check concurrents ne doublent pas la feuille d'une même transition (transMu).
+func TestClockConcurrentChecksWriteOneLeafPerTransition(t *testing.T) {
+	p := &stubProbe{}
+	p.set(ClockSample{Unsync: true}, nil)
+	sink := &stubSink{}
+	w := newTestWatchdog(t, p, sink, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.Check() }()
+	}
+	wg.Wait()
+	if got := len(sink.leaves); got != 1 {
+		t.Fatalf("%d feuilles pour une seule transition", got)
+	}
+}
