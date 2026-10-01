@@ -649,3 +649,45 @@ func TestKeepPathStillScrubbedByPatterns(t *testing.T) {
 	}
 	jsonEqual(t, back, in)
 }
+
+// Issue #238 : un motif s'applique aussi à la forme texte d'un nombre JSON — « l'IA ne peut que
+// renforcer ». Un classifieur qui répond « garder » ne laisse plus sortir 4111111111111111 en
+// nombre alors qu'il est masqué en chaîne ; un nombre sans motif reste inchangé.
+func TestNumberStillScrubbedByPatterns(t *testing.T) {
+	a := newAno(t, Options{Rules: mustRules(t, RulesConfig{
+		KeepPaths: []string{"kept"},
+		Patterns:  []PatternRule{{Name: "pan", Regex: `[0-9]{16}`}},
+	}), Classifier: answer(false)})
+	open(t, a, "ex")
+
+	in := `{"card":4111111111111111,"card_s":"4111111111111111","kept":4111111111111111,"n":42,"f":1.5}`
+	out, rep, err := a.MaskJSON(context.Background(), "ex", []byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if strings.Contains(s, "4111111111111111") {
+		t.Fatalf("un nombre correspondant à un motif sort en clair (#238) : %s", s)
+	}
+	// même valeur en nombre et en chaîne : masquée dans les deux cas ; trois feuilles touchées
+	if rep.Spans != 3 {
+		t.Fatalf("Spans=%d, veut 3 (nombre classifié, chaîne, nombre sous keep_paths) : %s", rep.Spans, s)
+	}
+	// les nombres sans motif sont inchangés
+	if !strings.Contains(s, `"n":42`) || !strings.Contains(s, `"f":1.5`) {
+		t.Fatalf("un nombre sans motif est altéré : %s", s)
+	}
+	// aller-retour : le nombre d'origine est restitué AVEC son type
+	back, _, err := a.Unmask("ex", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonEqual(t, back, in)
+	var dec map[string]any
+	if err := json.Unmarshal(back, &dec); err != nil {
+		t.Fatal(err)
+	}
+	if _, isNum := dec["card"].(float64); !isNum {
+		t.Fatalf("le nombre masqué n'est pas restitué comme nombre : %T", dec["card"])
+	}
+}
