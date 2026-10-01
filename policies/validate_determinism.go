@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,7 +126,21 @@ func validateBundle(opaBin, regoDir string) ([]finding, error) {
 // ---------------------------------------------------------------------------
 
 func parseDir(opaBin, dir string) ([]module, error) {
-	entries, err := filepath.Glob(filepath.Join(dir, "*.rego"))
+	// Parcours RÉCURSIF (#242) : « opa eval -d » et « opa build » chargent tous les .rego d'un
+	// répertoire, sous-répertoires compris. Un Glob sur la racine seule laissait passer une règle
+	// interdite placée dans « sub/late.rego » — le bundle réellement chargé n'était pas celui qu'on
+	// validait. Les fichiers cachés et les liens symboliques de fichier sont inclus (sur-validation
+	// inoffensive) ; un lien vers un RÉPERTOIRE n'est pas suivi, comme opa le fait.
+	var entries []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".rego") {
+			entries = append(entries, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -746,6 +761,8 @@ func runSelfTest(opaBin, invalidDir string, k int) int {
 		{"built-in interdit", filepath.Join(invalidDir, "forbidden"), "", "non déterministe"},
 		{"sans fixture", filepath.Join(invalidDir, "nofixture"),
 			filepath.Join(invalidDir, "nofixture", "stability"), "sans fixture"},
+		// #242 : la règle interdite est dans un SOUS-répertoire du bundle.
+		{"sous-répertoire", filepath.Join(invalidDir, "subdir"), "", "non déterministe"},
 	}
 
 	failures := 0
