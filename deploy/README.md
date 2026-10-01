@@ -23,6 +23,8 @@ custody and the common steps.
 
 Proving that no route out exists except through TBP: [network-isolation.md](network-isolation.md). Target architecture for bundle anchoring and canary promotion (design, #233): [design-promotion.md](design-promotion.md). Lost key, lost quorum, k = 1: [recovery.md](recovery.md). What an integrator must know (object seal, bounds, friction): [integration-contract.md](integration-contract.md). Confining what the integrator's harness executes: [execution-sandbox.md](execution-sandbox.md). Security bricks per scale: [scales.md](scales.md). One machine, the administrator alone: [scale-1.md](scale-1.md). A small site behind one `brokerd`, `k = 2` of 3: [scale-2.md](scale-2.md).
 
+Where the cleartext behind a hash-only leaf lives and how to verify it (record journal, `tbp-audit`, #271): [audit.md](audit.md).
+
 Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md).
 Per-machine acceptance checklists: [checklists/](checklists/).
 

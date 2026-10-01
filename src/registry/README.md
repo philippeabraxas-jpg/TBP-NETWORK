@@ -30,7 +30,10 @@ the cell key; the key is generated per-cell and never committed.
 
 Leaves are **hash-only** (§6.2): `Leaf{Kind, CellID, PayloadHash,
 Timestamp}` where `PayloadHash = HashPayload(salt, payload)` and the salt
-(≥ 16 bytes) never leaves the producer. Leaf kinds:
+(≥ 16 bytes) never leaves the producer. The cleartext behind a leaf lives in the
+producer's local encrypted record journal (`RecordStore`, `AppendSealed`) and is
+checked against the log with `tbp-audit verify` — see
+[`deploy/audit.md`](../../deploy/audit.md) (#271). Leaf kinds:
 
 | kind | meaning | payload record |
 |-----:|---------|----------------|
