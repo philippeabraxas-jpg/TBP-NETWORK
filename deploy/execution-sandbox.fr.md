@@ -86,7 +86,8 @@ def write_file(root_fd: int, path: str, content: bytes) -> dict:
 ```
 
 Le même appel, écrit naïvement, est ce que `tbp4.2.1/tbp-v4-hard-shield/integrations/README.md`
-montrait (`open(path, 'w')` sur le chemin reçu) ; il y est maintenant annoté.
+montrait (`open(path, 'w')` sur le chemin reçu). Ce fichier vit dans le dépôt cœur
+(`Responsible-Alliance-Protocol`, sous-module `tbp4.2.1`), où l'exemple est annoté « illustration seule, ne pas copier ».
 
 ## Quoi tester
 

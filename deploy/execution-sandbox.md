@@ -86,7 +86,8 @@ def write_file(root_fd: int, path: str, content: bytes) -> dict:
 ```
 
 The same call, written the naive way, is what `tbp4.2.1/tbp-v4-hard-shield/integrations/README.md`
-used to show (`open(path, 'w')` on the received path); it is now annotated there.
+used to show (`open(path, 'w')` on the received path). That file lives in the core repository
+(`Responsible-Alliance-Protocol`, the `tbp4.2.1` submodule), where the example is annotated "illustration only, do not copy".
 
 ## What to test
 
