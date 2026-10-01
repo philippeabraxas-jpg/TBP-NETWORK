@@ -173,10 +173,9 @@ func TestAsyncWriterConfigFailClosed(t *testing.T) {
 
 // fastAcceptBudget est le budget des 20 acceptations de TestAsyncWriterFastAccept (#245).
 // Le plancher SYNCHRONE est ≥ 150 ms × 20 = 3 s (chaque Append attendrait un checkpoint) ; le
-// chemin chaud, lui, coûte quelques ms à vide. Un budget d'1 s tenait seul mais cassait quand
-// toute la suite tourne en parallèle (1,18 s et 1,38 s relevés par la revue sur 24 cœurs saturés ; non reproduits en local, 50–130 ms) : 2 s garde
-// ≥ 1,5× de marge sous charge ET reste sous le plancher synchrone, donc la mutation visée
-// (attendre la publication dans Append) est toujours prise.
+// chemin chaud, lui, coûte quelques ms à vide ; 2 s reste sous le plancher synchrone, donc une
+// attente de publication dans Append reste prise. NB (#245, re-revue) : le budget n'était PAS la
+// cause des échecs sous charge — c'était la fenêtre d'opposabilité par défaut (voir le test).
 const fastAcceptBudget = 2 * time.Second
 
 // TestAsyncWriterFastAccept : le chemin chaud n'attend PAS la publication.
@@ -191,7 +190,12 @@ func TestAsyncWriterFastAccept(t *testing.T) {
 		defer cancel()
 		_ = log.Close(c)
 	}()
-	w, err := NewAsyncWriter(log, AsyncOptions{CellID: "cell-async", Salt: []byte("sel-async-16oct!")})
+	// Fenêtre d'opposabilité LARGE (#245, re-revue) : ce test mesure la rapidité de l'acceptation,
+	// pas la coupure. Avec la fenêtre par défaut (1 s), une publication lente (disque d'un conteneur
+	// chargé, fsync de checkpoint) fait dépasser la fenêtre au 16ᵉ Append et l'écrivain COUPE
+	// (« fenêtre d'opposabilité dépassée ») — c'est le fail-closed qui fonctionne, mais pas ce que
+	// ce test veut vérifier. Le comportement de coupure a ses propres tests, à fenêtre réglée.
+	w, err := NewAsyncWriter(log, AsyncOptions{CellID: "cell-async", Salt: []byte("sel-async-16oct!"), Window: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("NewAsyncWriter: %v", err)
 	}
