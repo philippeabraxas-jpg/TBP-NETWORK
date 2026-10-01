@@ -127,7 +127,6 @@ move to ✅ in the same pull request.
 |---|---|---|
 | [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181) | Behavioural profile by sequence (salami / decomposition, cost anomalies, per-run cost cap, downstream monitoring) | [143](143-owasp-llm-top10.md), [145](145-mitre-atlas.md) Impact, [153](153-nist-csf-800-53.md) DETECT |
 | [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | [143](143-owasp-llm-top10.md) LLM06 human confirmation |
-| [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) | Quorum for plan approval at larger scales (scale 1: the admin alone signs, by design) — a security-profile brick, defined with the full-scale handshake | same rows as #195 |
 
 ## Rule packs that close catalogue rows
 
