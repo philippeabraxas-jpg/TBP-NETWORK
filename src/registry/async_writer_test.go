@@ -173,10 +173,9 @@ func TestAsyncWriterConfigFailClosed(t *testing.T) {
 
 // fastAcceptBudget est le budget des 20 acceptations de TestAsyncWriterFastAccept (#245).
 // Le plancher SYNCHRONE est ≥ 150 ms × 20 = 3 s (chaque Append attendrait un checkpoint) ; le
-// chemin chaud, lui, coûte quelques ms à vide. Un budget d'1 s tenait seul mais cassait quand
-// toute la suite tourne en parallèle (1,18 s et 1,38 s relevés par la revue sur 24 cœurs saturés ; non reproduits en local, 50–130 ms) : 2 s garde
-// ≥ 1,5× de marge sous charge ET reste sous le plancher synchrone, donc la mutation visée
-// (attendre la publication dans Append) est toujours prise.
+// chemin chaud, lui, coûte quelques ms à vide ; 2 s reste sous le plancher synchrone, donc une
+// attente de publication dans Append reste prise. NB (#245, re-revue) : le budget n'était PAS la
+// cause des échecs sous charge — c'était la fenêtre d'opposabilité par défaut (voir le test).
 const fastAcceptBudget = 2 * time.Second
 
 // TestAsyncWriterFastAccept : le chemin chaud n'attend PAS la publication.
@@ -191,7 +190,12 @@ func TestAsyncWriterFastAccept(t *testing.T) {
 		defer cancel()
 		_ = log.Close(c)
 	}()
-	w, err := NewAsyncWriter(log, AsyncOptions{CellID: "cell-async", Salt: []byte("sel-async-16oct!")})
+	// Fenêtre d'opposabilité LARGE (#245, re-revue) : ce test mesure la rapidité de l'acceptation,
+	// pas la coupure. Avec la fenêtre par défaut (1 s), une publication lente (disque d'un conteneur
+	// chargé, fsync de checkpoint) fait dépasser la fenêtre au 16ᵉ Append et l'écrivain COUPE
+	// (« fenêtre d'opposabilité dépassée ») — c'est le fail-closed qui fonctionne, mais pas ce que
+	// ce test veut vérifier. Le comportement de coupure a ses propres tests, à fenêtre réglée.
+	w, err := NewAsyncWriter(log, AsyncOptions{CellID: "cell-async", Salt: []byte("sel-async-16oct!"), Window: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("NewAsyncWriter: %v", err)
 	}
@@ -251,15 +255,21 @@ func TestAsyncWriterNoSpuriousCut(t *testing.T) {
 	tripped := atomic.Int32{}
 	w, err := NewAsyncWriter(log, AsyncOptions{
 		CellID: "cell-async", Salt: []byte("sel-async-16oct!"),
-		Window: 500 * time.Millisecond, // plancher 400 ms — marge minimale honnête
+		// 3 s (#245, re-revue) : à 500 ms — « marge minimale honnête » — une publication ralentie par
+		// la charge d'un runner (CI : « Append 10 sur publication saine : fenêtre dépassée », 1,16 s)
+		// déclenchait une VRAIE coupure : le fail-closed fonctionnait, le test mesurait la machine.
+		// Marge de 20× sur la publication saine (cp 100 ms + poll 50 ms), toujours bien au-dessus
+		// du plancher (400 ms). Compromis assumé : un cutWatch qui coupe SANS faute (seuil nul) est
+		// toujours pris (vérifié) ; un seuil mutant proche de la latence de publication saine
+		// (≈ fenêtre/20) ne l'est plus — la robustesse sous charge prime ici sur cette finesse.
+		Window: 3 * time.Second,
 		OnTrip: func(string) { tripped.Add(1) },
 	})
 	if err != nil {
 		t.Fatalf("NewAsyncWriter: %v", err)
 	}
-	// Trafic continu pendant 4× la fenêtre : la publication suit (cp
-	// 100 ms + poll 50 ms ≪ 500 ms) — aucune coupure ne doit naître.
-	deadline := time.Now().Add(2 * time.Second)
+	// Trafic continu pendant UNE fenêtre entière : la publication suit — aucune coupure ne doit naître.
+	deadline := time.Now().Add(3 * time.Second)
 	i := 0
 	for time.Now().Before(deadline) {
 		if _, err := w.Append(ctx, asyncLeaf(i)); err != nil {
