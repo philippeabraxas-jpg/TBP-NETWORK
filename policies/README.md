@@ -79,9 +79,9 @@ validator) and run in CI: `opa test policies/rego policies/tests`.
 | Agent identity / memory files (`SOUL.md`, `MEMORY.md`, `AGENTS.md`) | `protected-agent-file` | any write/delete needs **class W** (approved plan + quorum) — reads stay free |
 | Credential stores (`.env*`, SSH/GPG/AWS/kube/docker dirs, private keys, wallets, browser data, `/etc/shadow`) | `credential-store` | denied for **every** action and class, reads included |
 | Network egress | `egress-not-allowlisted`, `malformed-authority`, `opaque-uri` | a URL resource must target an allowed host; default-deny |
-| Command execution (`exec`, `run`, `shell`, `execute`, `spawn`) | `command-not-allowlisted`, `shell-metacharacter` | first word must be allowlisted **exactly**; no shell metacharacters; default-deny |
+| Command execution (any action not known as non-executing, #268) | `command-not-allowlisted`, `command-args-not-allowlisted`, `shell-metacharacter` | the **whole command line** must be allowlisted (`allowed_command_lines`), `allowed_commands` allows a bare command only (#267); no shell metacharacters; default-deny |
 | Explicit paths, never broad globs | `glob-in-resource` | a `*` in a resource is refused |
-| Malformed input | `resource-invalid`, `action-invalid`, `malformed-resource` | absent, non-string, empty, invalid or double `%`-encoding is a violation — never a silently undefined rule |
+| Malformed input | `resource-invalid`, `action-invalid`, `malformed-resource`, `control-character` | absent, non-string, empty, invalid or double `%`-encoding is a violation — never a silently undefined rule |
 
 Bundle data (all optional; lists **extend** the defaults, they never replace them):
 
@@ -92,9 +92,11 @@ Bundle data (all optional; lists **extend** the defaults, they never replace the
       "extra_protected_files": ["CLAUDE.md"],
       "extra_credential_files": ["secrets.yaml"],
       "extra_credential_dirs": ["vault"],
-      "allowed_domains": ["api.example.org", "*.cdn.example.net"],
-      "allowed_commands": ["ls", "/usr/bin/git"],
-      "extra_command_actions": ["invoke"],
+      "allowed_domains": ["api.example.org", "*.cdn.example.net", "admin.example.org:8443"],
+      "allowed_commands": ["ls"],
+      "allowed_command_lines": ["git status", "ls -la /srv"],
+      "extra_non_command_actions": ["read.list"],
+      "extra_command_actions": [],
       "exempt_resources": ["public/server.pem"]
     }
   }
@@ -110,8 +112,24 @@ bundle as data, including in the deployment selftest.
 - **Egress is default-deny.** If your resources are URLs, list the hosts in
   `allowed_domains` first, or every URL action is refused. `*.example.net`
   covers subdomains only, not `example.net` itself.
-- **Commands are default-deny.** With no `allowed_commands`, no command action
-  passes. `ls` allows `ls …` and nothing else (not `/tmp/ls`, not `lsof`).
+- **Commands are default-deny, and judged whole (#267).** With no allowlist, no command
+  passes. `allowed_commands: ["ls"]` allows the **bare** `ls` and nothing else — not
+  `ls -la`, not `/tmp/ls`, not `lsof`. To allow arguments, list the **exact line** in
+  `allowed_command_lines` (whitespace collapsed, case ignored). Upgrading: a bundle that
+  listed `"git"` and relied on any arguments must now list the lines it really runs.
+- **Any action not known as non-executing is judged as a command (#268).** Known:
+  `read`, `write`, `delete`, `list`, `create`, `update`, `append`, `get`, `put`, `post`,
+  `patch`, `head`, `options`, `http.send`, `open_tunnel`. Any other action name (`invoke`,
+  `tool_use`, `terminal`, `read.list`…) needs the command allowlist to pass — add the
+  names your integration really uses to `extra_non_command_actions`.
+- **Control characters are refused (#269).** NUL, line feed, tab, other C0 characters and
+  DEL, raw or after `%`-decoding (`/etc/shadow%00.txt`), raise `control-character`; it is
+  never lifted by `exempt_resources`.
+- **Ports are judged (#270).** A host in `allowed_domains` is allowed on its scheme's
+  default port only (http 80, https 443, ws 80, wss 443, ftp 21, sftp/ssh 22…). Any other
+  port is declared (`"admin.example.org:8443"`, wildcard `"*.svc.example.org:9000"`).
+  A scheme-relative `//host/x` has no default port: only an entry with an explicit port
+  allows it.
 - **The pack judges the canonical form** of the resource (§4.5). It normalises
   case, `%`-encoding, `\`, `..`, trailing dots/spaces and `:stream` suffixes,
   but does not resolve symlinks, 8.3 short names or filesystem aliases, and a

@@ -117,7 +117,7 @@ test_egress_allowlist_exact_and_wildcard if {
 	cfg := {"allowed_domains": ["api.example.org", "*.cdn.example.net"]}
 	ok_with := object.union({"class": 0, "action": "read"}, {})
 	not "egress-not-allowlisted" in viol_cfg(object.union(ok_with, {"resource": "https://api.example.org/v1/x"}), cfg)
-	not "egress-not-allowlisted" in viol_cfg(object.union(ok_with, {"resource": "HTTPS://API.EXAMPLE.ORG:8443/x?y=1"}), cfg)
+	not "egress-not-allowlisted" in viol_cfg(object.union(ok_with, {"resource": "HTTPS://API.EXAMPLE.ORG:443/x?y=1"}), cfg)
 	not "egress-not-allowlisted" in viol_cfg(object.union(ok_with, {"resource": "https://api.example.org./x"}), cfg)
 	not "egress-not-allowlisted" in viol_cfg(object.union(ok_with, {"resource": "https://a.b.cdn.example.net/x"}), cfg)
 
@@ -232,17 +232,45 @@ test_command_default_deny_without_allowlist if {
 	"command-not-allowlisted" in viol({"action": "spawn", "class": 0, "resource": "python -c 1"})
 }
 
-test_command_allowlist_is_exact_first_word if {
+test_command_allowlist_is_exact_first_word_and_bare if {
 	cfg := {"allowed_commands": ["ls", "/usr/bin/git"]}
-	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls -la /srv"}, cfg)
-	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "  LS\t-la"}, cfg)
-	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "/usr/bin/git status"}, cfg)
+
+	# commande NUE : passe ; en majuscules, avec blancs de tête : passe (même forme)
+	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls"}, cfg)
+	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "  LS  "}, cfg)
+	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "/usr/bin/git"}, cfg)
 
 	# « ls » n'autorise PAS un binaire déposé par l'agent, ni un autre chemin
 	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "/tmp/ls"}, cfg)
 	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "git status"}, cfg)
 	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "lsof"}, cfg)
 	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "rm -rf /"}, cfg)
+}
+
+# #267 : l'allow-list ne jugeait que le premier mot — « git » autorisé laissait passer
+# n'importe quels arguments (« git -c core.sshCommand=… », « find -exec … »).
+test_command_arguments_are_judged if {
+	cfg := {"allowed_commands": ["ls", "find"], "allowed_command_lines": ["git status", "ls -la /srv"]}
+	every r in [
+		"ls -la", "ls /etc/shadow", "find . -exec rm -rf {} +", "find / -delete",
+		"git -c core.sshCommand=evil status", "git status --porcelain", "git log", "git",
+		"ls -la /srv/other",
+	] {
+		"command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
+	}
+
+	# un mot inconnu reste « command-not-allowlisted », pas « arguments »
+	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "rm -rf /"}, cfg)
+	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "rm -rf /"}, cfg)
+
+	# voisins autorisés : la ligne EXACTE (blancs et casse normalisés) et la commande nue
+	every r in ["git status", "  GIT   Status ", "ls -la /srv", "ls", "find"] {
+		not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
+		not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
+	}
+	ok_with_cfg := object.union({"allowed_command_lines": ["git status"]}, {})
+	h.ok with input as {"action": "exec", "class": 0, "resource": "git status"}
+		with data.tbp.hardening as ok_with_cfg
 }
 
 test_command_shell_metacharacters_denied_even_if_command_allowed if {
@@ -256,16 +284,44 @@ test_command_shell_metacharacters_denied_even_if_command_allowed if {
 	not "shell-metacharacter" in viol_cfg({"action": "exec", "class": 0, "resource": "ls -la /srv/data"}, cfg)
 }
 
+# #268 : les règles de commande ne dépendaient que du NOM de l'action (exec/run/shell/execute/
+# spawn). Une action qui n'est pas connue comme non-exécution est jugée comme une commande.
+test_unknown_action_names_are_judged_as_commands if {
+	every a in ["invoke", "tool_use", "terminal", "Call", "bash", "system", "popen", "cmd", "eval", "exec.shell"] {
+		"command-not-allowlisted" in viol({"action": a, "class": 0, "resource": "rm -rf /"})
+		"shell-metacharacter" in viol({"action": a, "class": 0, "resource": "ls; id"})
+	}
+
+	# voisins : les actions connues comme non-exécution ne sont pas jugées comme des commandes
+	every a in ["read", "READ", "write", "delete", "list", "create", "update", "append", "get", "put", "post", "patch", "head", "options", "http.send", "open_tunnel"] {
+		not "command-not-allowlisted" in viol({"action": a, "class": 0, "resource": "rm -rf /"})
+	}
+
+	# une action non chaîne n'est pas devinée : « action-invalid » seul
+	"action-invalid" in viol({"action": 7, "class": 0, "resource": "ls"})
+	not "command-not-allowlisted" in viol({"action": 7, "class": 0, "resource": "ls"})
+}
+
+test_extra_non_command_actions_from_bundle_data if {
+	"command-not-allowlisted" in viol({"action": "read.list", "class": 0, "resource": "registry/docs/42"})
+	cfg := {"extra_non_command_actions": ["Read.List"]}
+	not "command-not-allowlisted" in viol_cfg({"action": "read.list", "class": 0, "resource": "registry/docs/42"}, cfg)
+	ok_with_cfg := cfg
+	h.ok with input as {"action": "read.list", "class": 0, "resource": "registry/docs/42"}
+		with data.tbp.hardening as ok_with_cfg
+}
+
 test_command_rules_only_for_command_actions if {
 	# une ressource qui « ressemble » à une commande n'est pas une commande hors action d'exécution
 	ok_({"action": "read", "class": 0, "resource": "notes about ls and git.txt"})
 	not "command-not-allowlisted" in viol({"action": "read", "class": 0, "resource": "ls; rm"})
 }
 
-test_extra_command_actions_from_bundle_data if {
-	cfg := {"extra_command_actions": ["Invoke"]}
-	"command-not-allowlisted" in viol_cfg({"action": "invoke", "class": 0, "resource": "ls"}, cfg)
-	not "command-not-allowlisted" in viol({"action": "invoke", "class": 0, "resource": "ls"})
+test_extra_command_actions_force_command_judgement if {
+	# « write » est connue comme non-exécution… sauf si le bundle la force à être jugée comme commande
+	not "command-not-allowlisted" in viol({"action": "write", "class": 0, "resource": "ls"})
+	cfg := {"extra_command_actions": ["Write"]}
+	"command-not-allowlisted" in viol_cfg({"action": "write", "class": 0, "resource": "ls"}, cfg)
 }
 
 # --- chemins explicites (AST03.4) ----------------------------------------------
@@ -307,4 +363,57 @@ test_control_characters_inside_the_url_do_not_hide_it if {
 	# qui n'est pas une URL réseau reste intacte malgré une tabulation
 	not "egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": "ht\ttps://api.example.org/x"}, cfg)
 	not "malformed-authority" in viol({"action": "read", "class": 0, "resource": "doc\t1"})
+}
+
+# #269 : un caractère de contrôle (NUL, saut de ligne, tabulation, DEL) dans la ressource — brute
+# ou décodée — est refusé : un exécuteur en C tronque au NUL (« /etc/shadow%00.txt » ouvre
+# « /etc/shadow »), et le paquet jugerait alors une autre ressource que celle exécutée.
+test_control_characters_in_the_decoded_resource_are_refused if {
+	every r in [
+		"/etc/shadow%00.txt", "workspace/SOUL.md%00.png", "reports/2026.csv%00", "doc%0a1", "doc%0A1",
+		"doc%09x", "doc%7f", "doc\u0000x", "doc\nx", "a%0d%0ab", "%00",
+	] {
+		"control-character" in viol({"action": "read", "class": 0, "resource": r})
+		not ok_({"action": "read", "class": 0, "resource": r})
+	}
+
+	# l'exemption porte sur une ressource exacte : elle ne lève pas ce refus
+	"control-character" in viol_cfg({"action": "read", "class": 0, "resource": "doc%001"}, {"exempt_resources": ["doc%001"]})
+
+	# voisins : espace, « %20 », « %2F », unicode, caractère imprimable — pas de refus
+	every r in ["reports/2026.csv", "my doc.txt", "my%20doc.txt", "reports%2F2026.csv", "dossier/é.txt", "a-b_c.d"] {
+		not "control-character" in viol({"action": "read", "class": 0, "resource": r})
+		ok_({"action": "read", "class": 0, "resource": r})
+	}
+}
+
+# #270 : un hôte autorisé ne l'était que par son nom — sur TOUS les ports. Sans port déclaré, seul
+# le port par défaut du schéma passe ; un autre port se déclare.
+test_egress_port_is_judged if {
+	cfg := {"allowed_domains": ["api.example.org", "*.cdn.example.net", "admin.example.org:8443", "*.svc.example.org:9000"]}
+	every r in [
+		"https://api.example.org:22/x", "https://api.example.org:8443/x", "http://api.example.org:443/x",
+		"https://api.example.org:5432/", "https://a.cdn.example.net:8080/x", "https://admin.example.org/x",
+		"https://admin.example.org:443/x", "https://admin.example.org:9000/x", "https://x.svc.example.org/x",
+		"https://api.example.org:99999/x", "https://user:pw@api.example.org:2222/x", "//api.example.org/x",
+	] {
+		"egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": r}, cfg)
+	}
+
+	# voisins : port par défaut du schéma (implicite ou explicite, zéros de tête compris), port déclaré
+	every r in [
+		"https://api.example.org/x", "https://api.example.org:443/x", "https://api.example.org:0443/x",
+		"http://api.example.org/x", "http://api.example.org:80/x", "HTTPS://API.EXAMPLE.ORG./x",
+		"https://a.cdn.example.net/x", "https://admin.example.org:8443/x", "https://admin.example.org:08443/x",
+		"https://x.svc.example.org:9000/x", "wss://api.example.org/x",
+	] {
+		not "egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": r}, cfg)
+	}
+}
+
+# Un schéma sans port par défaut connu (« //hote », schéma inconnu de la liste) ne passe que
+# par une entrée à port explicite.
+test_egress_scheme_without_default_port_needs_explicit_entry if {
+	"egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": "//api.example.org/x"}, {"allowed_domains": ["api.example.org"]})
+	not "egress-not-allowlisted" in viol_cfg({"action": "read", "class": 0, "resource": "//api.example.org:443/x"}, {"allowed_domains": ["api.example.org:443"]})
 }
