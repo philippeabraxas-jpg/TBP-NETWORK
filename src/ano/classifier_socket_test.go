@@ -74,11 +74,14 @@ func TestSocketClassifierIntegratesWithAnoFailClosed(t *testing.T) {
 		var in struct{ Path, Value string }
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if in.Value == "lent" {
-			time.Sleep(80 * time.Millisecond)
+			time.Sleep(250 * time.Millisecond)
 		}
 		_, _ = w.Write([]byte(`{"mask":` + map[bool]string{true: "true", false: "false"}[strings.HasPrefix(in.Value, "secret")] + `}`))
 	})
-	a := newAno(t, Options{Classifier: NewSocketClassifier(sock)})
+	// Délai explicite (50 ms) : le défaut de 5 ms rend « oui » et « public » tributaires
+	// de l'ordonnancement d'un runner chargé (faute de délai inattendue, CI #223) ; le cas
+	// « lent » dort bien au-delà (250 ms) pour rester une vraie faute de délai.
+	a := newAno(t, Options{Classifier: NewSocketClassifier(sock), ClassifierTimeout: 50 * time.Millisecond})
 	open(t, a, "ex")
 	out, rep, err := a.MaskJSON(context.Background(), "ex", []byte(`{"a":"secret-1","b":"public","c":"lent"}`))
 	if err != nil {
