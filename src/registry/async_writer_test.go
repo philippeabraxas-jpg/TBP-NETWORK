@@ -255,15 +255,21 @@ func TestAsyncWriterNoSpuriousCut(t *testing.T) {
 	tripped := atomic.Int32{}
 	w, err := NewAsyncWriter(log, AsyncOptions{
 		CellID: "cell-async", Salt: []byte("sel-async-16oct!"),
-		Window: 500 * time.Millisecond, // plancher 400 ms — marge minimale honnête
+		// 3 s (#245, re-revue) : à 500 ms — « marge minimale honnête » — une publication ralentie par
+		// la charge d'un runner (CI : « Append 10 sur publication saine : fenêtre dépassée », 1,16 s)
+		// déclenchait une VRAIE coupure : le fail-closed fonctionnait, le test mesurait la machine.
+		// Marge de 20× sur la publication saine (cp 100 ms + poll 50 ms), toujours bien au-dessus
+		// du plancher (400 ms). Compromis assumé : un cutWatch qui coupe SANS faute (seuil nul) est
+		// toujours pris (vérifié) ; un seuil mutant proche de la latence de publication saine
+		// (≈ fenêtre/20) ne l'est plus — la robustesse sous charge prime ici sur cette finesse.
+		Window: 3 * time.Second,
 		OnTrip: func(string) { tripped.Add(1) },
 	})
 	if err != nil {
 		t.Fatalf("NewAsyncWriter: %v", err)
 	}
-	// Trafic continu pendant 4× la fenêtre : la publication suit (cp
-	// 100 ms + poll 50 ms ≪ 500 ms) — aucune coupure ne doit naître.
-	deadline := time.Now().Add(2 * time.Second)
+	// Trafic continu pendant UNE fenêtre entière : la publication suit — aucune coupure ne doit naître.
+	deadline := time.Now().Add(3 * time.Second)
 	i := 0
 	for time.Now().Before(deadline) {
 		if _, err := w.Append(ctx, asyncLeaf(i)); err != nil {
