@@ -142,8 +142,10 @@ chaîne cassée) est une ALARME, pas un incident à contourner.
 
 #### Étape 5 — Fenêtres saines et promotion (§7.4)
 
-**Prérequis vérifiable** : étapes 1-4 vertes ; le master chain ancre les
-bundles par époque.
+**Prérequis vérifiable** : étapes 1-4 vertes. *État honnête : la bibliothèque ci-dessous lit l'ancre
+d'époque et la fenêtre saine par une interface qui n'a pas encore d'implémentation de production — le master
+ne les publie pas aujourd'hui. L'architecture cible, fixée au premier déploiement multi-cellule, est dans
+[design-promotion.fr.md](design-promotion.fr.md) (#233).*
 
 **Commande** :
 
@@ -155,8 +157,7 @@ bundles par époque.
 grep -n "HealthyWindow\|BundleAnchor" src/cluster/promotion.go | head -5
 ```
 
-**Critère de succès observable** : les ancres et fenêtres sont publiées
-par époque dans le master ; le selftest fencing prouve admission (fenêtre
+**Critère de succès observable** : le selftest fencing, contre un master factice, prouve admission (fenêtre
 saine) et refus (partition) avec feuilles `KindPromotion` des deux côtés.
 
 **En cas d'échec : STOP** — sans ancre d'époque, aucune promotion n'est

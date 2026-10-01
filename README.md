@@ -274,7 +274,9 @@ measured user-experience regression = 0):
    2-cell P1 pilot below — a single cell can defer this, a pilot cannot.
    Implemented in [`src/cluster/`](src/cluster/) (single-authority epoch
    tracker, quorum, promotion by proof of receipt — no private key held
-   there) and wired into the broker ([`src/broker/`](src/broker/)).
+   there; promotion is a library exercised against a stub master, the
+   master-side anchoring is a design in
+   [`deploy/design-promotion.md`](deploy/design-promotion.md)) and wired into the broker ([`src/broker/`](src/broker/)).
 3. **OPA + registry** — install OPA, generate `policies/capabilities.json`
    following [`policies/README.md`](policies/README.md) (strip
    `http.send` and `time.now_ns` before any deployment, never after;
