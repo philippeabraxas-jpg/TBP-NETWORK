@@ -60,9 +60,8 @@ overwritten).
 
 **On failure: STOP** — a keyring with more than one entry is not scale 1, and
 an empty one blocks every switch. The key is software: it is the price of
-scale 1 (a lost or stolen key means re-pinning a new keyring, which is itself
-a governed act). Store the off-machine copy **now**; there is no recovery
-procedure without it (#199).
+scale 1 (a lost or stolen key: the old quorum can no longer authorise its
+own replacement — it is a re-engagement of the cell's trust, see [recovery.md](recovery.md) B). Store the off-machine copy **now**; `pepd` reminds you at every start.
 
 #### Step 3 — Start pepd with the scale-1 settings
 
