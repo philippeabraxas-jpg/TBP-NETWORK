@@ -118,6 +118,11 @@ bundle as data, including in the deployment selftest.
   scheme-less string that merely looks like a host (`evil.example/x`) is not
   recognised as a URL. Canonicalisation and containment of the executor are the
   translator's and the integrator's job (see #180).
+- **Network schemes without `//` are refused** (`https:/host/x`, `https:host/x`):
+  many HTTP clients normalise them to `https://host/x`, so they are reported as
+  `malformed-authority` (closed list: http, https, ftp, ftps, sftp, ws, wss, ssh,
+  git, smb, ldap, ldaps; an unknown scheme is not guessed). Leading control
+  characters and spaces are ignored before parsing, as clients do (#239).
 - **`exempt_resources` is an exception, not a fix.** It is exact-match, comes
   from the signed bundle, and should be reviewed like any other policy change.
 
