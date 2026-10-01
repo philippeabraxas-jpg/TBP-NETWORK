@@ -208,6 +208,13 @@ service.
 #   TBP_KEYRING_FILE=/etc/tbp/keyring.json
 #   TBP_POLICY_ID=<$POLICY_ID choisi à l'étape 4 — PAS le hash du bundle>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
+#   TBP_AUDIT_RECORDS=/var/lib/tbp/cell-a-audit/pepd-records.jsonl  # #275 : REQUIS —
+#   TBP_AUDIT_RECORDS_KEY_FILE=/etc/tbp/pepd-records.key  # clair chiffré de chaque
+#                                  # feuille de décision ; clé 0600 issue de
+#                                  # `tbp-audit keygen -out <fichier>` ; vérifier
+#                                  # avec `tbp-audit verify` (deploy/audit.fr.md).
+#                                  # Journal HORS du répertoire du registre, clé
+#                                  # hors du disque du journal si possible
 #   TBP_LISTEN_ADDR=127.0.0.1:8443  # plan de DONNÉES seulement (revue de
 #                                  # sécurité #95) : /v1/evaluate,
 #                                  # /v1/passport/consume

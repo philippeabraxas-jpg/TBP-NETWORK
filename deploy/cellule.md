@@ -201,6 +201,13 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #   TBP_KEYRING_FILE=/etc/tbp/keyring.json
 #   TBP_POLICY_ID=<$POLICY_ID chosen at step 4 — NOT the bundle's own hash>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/cell-a
+#   TBP_AUDIT_RECORDS=/var/lib/tbp/cell-a-audit/pepd-records.jsonl  # #275: REQUIRED —
+#   TBP_AUDIT_RECORDS_KEY_FILE=/etc/tbp/pepd-records.key  # encrypted cleartext of
+#                                  # every decision leaf; key 0600 from
+#                                  # `tbp-audit keygen -out <file>`; verify
+#                                  # with `tbp-audit verify` (deploy/audit.md).
+#                                  # Keep the journal OFF the registry dir and
+#                                  # the key off the journal's disk if you can
 #   TBP_LISTEN_ADDR=127.0.0.1:8443  # DATA plane only (security review #95):
 #                                  # /v1/evaluate, /v1/passport/consume
 #   TBP_ADMIN_SOCKET=/run/tbp/pepd-admin.sock  # ADMIN plane (security

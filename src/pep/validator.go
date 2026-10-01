@@ -209,6 +209,10 @@ type ValidatorOptions struct {
 	Salt []byte
 	// Leaves reçoit la feuille de chaque décision. Obligatoire.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd le renseigne toujours.
+	Journal *registry.RecordStore
 	// AntiReplay est le cache borné anti-rejeu (T10). Obligatoire.
 	AntiReplay AntiReplayCache
 	// Quota est le compteur de passeports (T12). Peut être nil : tout jeton
@@ -236,6 +240,7 @@ type Validator struct {
 	policyID   [32]byte
 	salt       []byte
 	leaves     LeafSink
+	journal    *registry.RecordStore
 	antiReplay AntiReplayCache
 	quota      QuotaChecker
 	gate       FailClosedGate
@@ -277,6 +282,7 @@ func NewValidator(opts ValidatorOptions) (*Validator, error) {
 		policyID:   opts.PolicyID,
 		salt:       salt,
 		leaves:     opts.Leaves,
+		journal:    opts.Journal,
 		antiReplay: opts.AntiReplay,
 		quota:      opts.Quota,
 		gate:       opts.Gate,
@@ -528,13 +534,7 @@ func (v *Validator) writeLeaf(ctx context.Context, d *Decision, now time.Time) {
 		record = append(record, d.Token.PlanSeal[:]...)
 	}
 
-	leaf := registry.Leaf{
-		Kind:        registry.KindDecision,
-		CellID:      v.cellID,
-		PayloadHash: registry.HashPayload(v.salt, record),
-		Timestamp:   now.UnixNano(),
-	}
-	if _, err := v.leaves.Append(ctx, leaf); err != nil {
+	if _, err := appendLeaf(ctx, v.leaves, v.journal, registry.KindDecision, v.cellID, v.salt, record, now.UnixNano()); err != nil {
 		d.LeafWritten = false
 		d.LeafErr = err
 		if d.Allow {

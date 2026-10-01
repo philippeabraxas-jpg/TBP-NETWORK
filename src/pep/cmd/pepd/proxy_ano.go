@@ -11,8 +11,7 @@ package main
 //
 //	TBP_PROXY_ANO_SOCKET      socket Unix d'anod
 //	TBP_PROXY_ANO_TIMEOUT_MS  délai par appel à ano, 100–30000 (défaut 3000)
-//	TBP_AUDIT_RECORDS         journal chiffré des enregistrements d'audit (#275)
-//	TBP_AUDIT_RECORDS_KEY_FILE clé du journal (0600 ; tbp-audit keygen)
+//	(le journal d'audit TBP_AUDIT_RECORDS est requis par pepd dans tous les cas, #275)
 //
 // Fail-closed : ano injoignable au démarrage ⇒ pepd refuse de démarrer (une
 // faute de configuration ne doit pas se découvrir au premier trafic) ; en
@@ -20,8 +19,7 @@ package main
 // masquage et chaque reconstitution laisse une feuille hash-only « TBAN1 » ET
 // son clair dans le journal d'enregistrements (écrit AVANT la feuille, #271) ;
 // si l'un ou l'autre ne peut pas être écrit, l'opération est refusée. Le
-// journal et sa clé sont REQUIS dès que TBP_PROXY_ANO_SOCKET est déclaré, et
-// refusés sans lui (configuration incohérente) : on ne démarre pas une
+// journal est celui de pepd (TBP_AUDIT_RECORDS, requis) : on ne démarre pas une
 // anonymisation dont l'audit ne serait pas vérifiable avec `tbp-audit verify`.
 
 import (
@@ -42,16 +40,13 @@ const defaultAnoTimeout = 3 * time.Second
 var anoProbeWindow = 5 * time.Second
 
 // openAuditStore ouvre le journal d'enregistrements d'audit déclaré par
-// TBP_AUDIT_RECORDS / TBP_AUDIT_RECORDS_KEY_FILE (#275). Les deux ensemble ou
-// aucun ; sans socket ano, aucun des deux n'a de sens. Retourne nil si rien
-// n'est déclaré.
+// TBP_AUDIT_RECORDS / TBP_AUDIT_RECORDS_KEY_FILE (#275) — REQUIS, les deux : le
+// clair des feuilles de décision et d'audit d'ano doit rester vérifiable
+// (tbp-audit verify). Un des deux manquant ⇒ refus de démarrer.
 func openAuditStore(getenv func(string) string) (*registry.RecordStore, error) {
 	path, keyFile := getenv("TBP_AUDIT_RECORDS"), getenv("TBP_AUDIT_RECORDS_KEY_FILE")
-	if path == "" && keyFile == "" {
-		return nil, nil
-	}
 	if path == "" || keyFile == "" {
-		return nil, fmt.Errorf("TBP_AUDIT_RECORDS et TBP_AUDIT_RECORDS_KEY_FILE vont ensemble — configuration incohérente")
+		return nil, fmt.Errorf("TBP_AUDIT_RECORDS et TBP_AUDIT_RECORDS_KEY_FILE sont requis ensemble (#275 : le clair des feuilles doit rester vérifiable, tbp-audit verify)")
 	}
 	key, err := registry.LoadRecordKey(keyFile)
 	if err != nil {
@@ -68,9 +63,6 @@ func applyAno(ctx context.Context, getenv func(string) string, opts *pep.ProxyOp
 	if sock == "" {
 		if getenv("TBP_PROXY_ANO_TIMEOUT_MS") != "" {
 			return fmt.Errorf("TBP_PROXY_ANO_TIMEOUT_MS sans TBP_PROXY_ANO_SOCKET — configuration incohérente")
-		}
-		if store != nil {
-			return fmt.Errorf("TBP_AUDIT_RECORDS sans TBP_PROXY_ANO_SOCKET — configuration incohérente")
 		}
 		return nil
 	}

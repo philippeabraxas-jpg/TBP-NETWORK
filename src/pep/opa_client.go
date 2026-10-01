@@ -148,6 +148,10 @@ type OPAOptions struct {
 	// Leaves est la couture registre (T7) : chaque décision laisse une
 	// feuille. Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd le renseigne toujours.
+	Journal *registry.RecordStore
 	// OnTrip est la couture d'alarme vers T14 (fail-closed unique). Appelé
 	// quand la faute OPA atteint le seuil TripAfter — T14 possède le latch.
 	// Nil ⇒ pas d'alarme (le deny reste fail-closed).
@@ -177,6 +181,7 @@ type OPAClient struct {
 	cellID   string
 	salt     []byte
 	leaves   LeafSink
+	journal  *registry.RecordStore
 	onTrip   func(reason string)
 	now      func() time.Time
 
@@ -230,6 +235,7 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
+		journal:  opts.Journal,
 		onTrip:   opts.OnTrip,
 		now:      now,
 
@@ -357,13 +363,7 @@ func (c *OPAClient) finish(ctx context.Context, in OPAInput, d OPADecision, star
 		c.faults.Store(0)
 	}
 
-	leaf := registry.Leaf{
-		Kind:        registry.KindDecision,
-		CellID:      c.cellID,
-		PayloadHash: registry.HashPayload(c.salt, decisionLeafRecord(in.JTI, d.Allow, d.Reason)),
-		Timestamp:   c.now().UnixNano(),
-	}
-	if _, err := c.leaves.Append(ctx, leaf); err != nil {
+	if _, err := appendLeaf(ctx, c.leaves, c.journal, registry.KindDecision, c.cellID, c.salt, decisionLeafRecord(in.JTI, d.Allow, d.Reason), c.now().UnixNano()); err != nil {
 		d.LeafErr = err
 		if d.Allow { // pas de preuve, pas d'accès (même doctrine que T9)
 			d.Allow = false

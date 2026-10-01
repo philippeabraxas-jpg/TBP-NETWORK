@@ -61,14 +61,14 @@ func testPolicyID(t *testing.T) [32]byte {
 // ---------------------------------------------------------------------------
 
 func TestSetupOPARequiredByDefault(t *testing.T) {
-	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil, envOf(nil))
+	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil, nil, envOf(nil))
 	if err == nil || !strings.Contains(err.Error(), "TBP_OPA_ENDPOINT requis") {
 		t.Fatalf("erreur=%v, veut mention de TBP_OPA_ENDPOINT requis (§92.A2)", err)
 	}
 }
 
 func TestSetupOPADisabledDevExplicit(t *testing.T) {
-	res, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil,
+	res, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil, nil,
 		envOf(map[string]string{"TBP_OPA_DISABLED_DEV_UNSAFE": "1"}))
 	if err != nil {
 		t.Fatalf("désactivation dev explicite refusée: %v", err)
@@ -79,7 +79,7 @@ func TestSetupOPADisabledDevExplicit(t *testing.T) {
 }
 
 func TestSetupOPAEndpointAndDisabledMutuallyExclusive(t *testing.T) {
-	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil,
+	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), testPolicyID(t), nil, nil, nil,
 		envOf(map[string]string{
 			"TBP_OPA_ENDPOINT":            "http://127.0.0.1:8181/v1/data/tbp/allow",
 			"TBP_OPA_DISABLED_DEV_UNSAFE": "1",
@@ -200,7 +200,7 @@ func TestSetupOPARevisionMismatchRefusesStartup(t *testing.T) {
 	srv := newOPAStub(t, "révision-imposteur")
 	cellLog := newOPASetupCellLog(t)
 
-	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, cellLog, nil,
+	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, cellLog, nil, nil,
 		envOf(map[string]string{
 			"TBP_OPA_ENDPOINT":         srv.URL + "/v1/data/tbp/allow",
 			"TBP_OPA_INSECURE_TCP_DEV": "1",
@@ -215,7 +215,7 @@ func TestSetupOPARevisionMatchStartsAndReturnsWatcher(t *testing.T) {
 	srv := newOPAStub(t, hex.EncodeToString(policy[:]))
 	cellLog := newOPASetupCellLog(t)
 
-	res, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, cellLog, nil,
+	res, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, cellLog, nil, nil,
 		envOf(map[string]string{
 			"TBP_OPA_ENDPOINT":         srv.URL + "/v1/data/tbp/allow",
 			"TBP_OPA_INSECURE_TCP_DEV": "1",

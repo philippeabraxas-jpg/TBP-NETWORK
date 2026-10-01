@@ -43,7 +43,7 @@ type opaSetup struct {
 // setupOPA assemble l'arbitrage OPA selon la configuration déclarée par
 // getenv — fail-closed à chaque étape (§1), voir l'en-tête du fichier
 // pour les trois portillons (A2/A3/A5).
-func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte, cellLog *registry.CellLog, onTrip func(string), getenv func(string) string) (*opaSetup, error) {
+func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte, cellLog *registry.CellLog, journal *registry.RecordStore, onTrip func(string), getenv func(string) string) (*opaSetup, error) {
 	endpoint := getenv("TBP_OPA_ENDPOINT")
 	disabledDev := getenv("TBP_OPA_DISABLED_DEV_UNSAFE") == "1"
 
@@ -72,6 +72,7 @@ func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte
 		CellID:     cellID,
 		Salt:       salt,
 		Leaves:     cellLog,
+		Journal:    journal,
 		OnTrip:     onTrip,
 		TripAfter:  tripAfter,
 	})
