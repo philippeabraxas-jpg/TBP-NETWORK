@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -362,19 +363,41 @@ func TestAuditLeafHashOnlyAndDeterministic(t *testing.T) {
 	}
 	s := &sink{}
 	salt := bytes.Repeat([]byte{3}, 32)
-	if _, err := AppendAuditLeaf(context.Background(), s, "cell-a", salt, ev, time.Unix(1, 0)); err != nil {
+	jkey := bytes.Repeat([]byte{7}, registry.RecordKeyLen)
+	jpath := filepath.Join(t.TempDir(), "records.jsonl")
+	store, err := registry.OpenRecordStore(jpath, jkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := AppendAuditLeaf(context.Background(), s, store, "cell-a", salt, ev, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.leaves) != 1 || s.leaves[0].Kind != registry.KindTelemetry || s.leaves[0].PayloadHash != registry.HashPayload(salt, r1) {
 		t.Fatalf("feuille inattendue: %+v", s.leaves)
 	}
-	if _, err := AppendAuditLeaf(context.Background(), s, "", salt, ev, time.Now()); err == nil {
+	// le clair de la feuille est dans le journal et redonne son hash (#271)
+	recs, err := registry.ReadRecords(jpath, jkey)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("journal: %d enregistrements, err=%v", len(recs), err)
+	}
+	if !bytes.Equal(recs[0].Record, r1) || recs[0].VerifyHash() != nil || recs[0].Leaf != s.leaves[0] {
+		t.Fatalf("enregistrement journalisé inattendu: %+v", recs[0])
+	}
+	// sans journal : refus (invérifiable)
+	if _, err := AppendAuditLeaf(context.Background(), s, nil, "cell-a", salt, ev, time.Unix(1, 0)); err == nil {
+		t.Fatal("feuille d'audit sans journal acceptée")
+	}
+	if len(s.leaves) != 1 {
+		t.Fatalf("une feuille a été inscrite sans journal: %d", len(s.leaves))
+	}
+	if _, err := AppendAuditLeaf(context.Background(), s, store, "", salt, ev, time.Now()); err == nil {
 		t.Fatal("cellID vide accepté")
 	}
-	if _, err := AppendAuditLeaf(context.Background(), s, "c", []byte("court"), ev, time.Now()); err == nil {
+	if _, err := AppendAuditLeaf(context.Background(), s, store, "c", []byte("court"), ev, time.Now()); err == nil {
 		t.Fatal("sel court accepté")
 	}
-	if _, err := AppendAuditLeaf(context.Background(), nil, "c", salt, ev, time.Now()); err == nil {
+	if _, err := AppendAuditLeaf(context.Background(), nil, store, "c", salt, ev, time.Now()); err == nil {
 		t.Fatal("sink absent accepté")
 	}
 	for err, want := range map[error]string{

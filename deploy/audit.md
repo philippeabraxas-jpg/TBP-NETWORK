@@ -74,7 +74,12 @@ for a complete one). The cleartext is printed only with `-reveal`.
 
 ## Producers
 
-This page and the tooling are the common base. Wiring each producer to
-`AppendSealed` (instead of appending a bare leaf) is tracked separately; until
-a producer is wired, its leaves have no journal entry and `tbp-audit` has
-nothing to say about them.
+Wired so far:
+
+| Producer | Leaves | Configuration |
+|---|---|---|
+| `pepd` — ano rewrite audit (`TBAN1`, #178) | `KindTelemetry` | `TBP_AUDIT_RECORDS` (journal path) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Required** when `TBP_PROXY_ANO_SOCKET` is set, refused without it: `pepd` does not start an anonymisation whose audit could not be verified. |
+
+Every other producer still appends a bare leaf: its leaves have no journal
+entry and `tbp-audit` has nothing to say about them. Wiring them is tracked in
+#275, one producer at a time.

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,20 @@ func (l *leafRecorder) Append(_ context.Context, leaf registry.Leaf) (uint64, er
 	}
 	l.leaves = append(l.leaves, leaf)
 	return uint64(len(l.leaves)), nil
+}
+
+// testAuditStore ouvre un journal d'enregistrements neuf (#271) ; renvoie aussi
+// son chemin et sa clé pour le relire.
+func testAuditStore(t *testing.T) (*registry.RecordStore, string, []byte) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "records.jsonl")
+	key := bytes.Repeat([]byte{5}, registry.RecordKeyLen)
+	st, err := registry.OpenRecordStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st, path, key
 }
 
 func anoEnv(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -70,7 +85,7 @@ func startAno(t *testing.T) string {
 
 func TestApplyAnoDisabledByDefault(t *testing.T) {
 	var opts pep.ProxyOptions
-	if err := applyAno(context.Background(), anoEnv(nil), &opts, &leafRecorder{}, "cell-a", bytes.Repeat([]byte{1}, 32)); err != nil {
+	if err := applyAno(context.Background(), anoEnv(nil), &opts, &leafRecorder{}, nil, "cell-a", bytes.Repeat([]byte{1}, 32)); err != nil {
 		t.Fatal(err)
 	}
 	if opts.Rewriter != nil || opts.OnRewrite != nil {
@@ -84,6 +99,7 @@ func TestApplyAnoConfigFailClosed(t *testing.T) {
 	defer func() { anoProbeWindow = old }()
 	salt := bytes.Repeat([]byte{1}, 32)
 	sock := startAno(t)
+	store, _, _ := testAuditStore(t)
 	for name, env := range map[string]map[string]string{
 		"délai sans socket": {"TBP_PROXY_ANO_TIMEOUT_MS": "500"},
 		"délai trop court":  {"TBP_PROXY_ANO_SOCKET": sock, "TBP_PROXY_ANO_TIMEOUT_MS": "10"},
@@ -91,7 +107,7 @@ func TestApplyAnoConfigFailClosed(t *testing.T) {
 		"ano injoignable":   {"TBP_PROXY_ANO_SOCKET": "/nonexistent/ano.sock"},
 	} {
 		var opts pep.ProxyOptions
-		if err := applyAno(context.Background(), anoEnv(env), &opts, &leafRecorder{}, "cell-a", salt); err == nil {
+		if err := applyAno(context.Background(), anoEnv(env), &opts, &leafRecorder{}, store, "cell-a", salt); err == nil {
 			t.Errorf("%s: doit refuser de démarrer", name)
 		}
 		if opts.Rewriter != nil {
@@ -104,8 +120,9 @@ func TestApplyAnoWiresRewriterAndAuditLeaf(t *testing.T) {
 	sock := startAno(t)
 	salt := bytes.Repeat([]byte{2}, 32)
 	rec := &leafRecorder{}
+	store, journal, jkey := testAuditStore(t)
 	var opts pep.ProxyOptions
-	if err := applyAno(context.Background(), anoEnv(map[string]string{"TBP_PROXY_ANO_SOCKET": sock}), &opts, rec, "cell-a", salt); err != nil {
+	if err := applyAno(context.Background(), anoEnv(map[string]string{"TBP_PROXY_ANO_SOCKET": sock}), &opts, rec, store, "cell-a", salt); err != nil {
 		t.Fatal(err)
 	}
 	if opts.Rewriter == nil || opts.OnRewrite == nil {
@@ -119,9 +136,87 @@ func TestApplyAnoWiresRewriterAndAuditLeaf(t *testing.T) {
 		rec.leaves[0].PayloadHash != registry.HashPayload(salt, svc.AuditRecord(ev)) {
 		t.Fatalf("feuille d'audit inattendue: %+v", rec.leaves)
 	}
+	// le clair de la feuille est dans le journal et redonne son hash (#271)
+	recs, err := registry.ReadRecords(journal, jkey)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("journal: %d enregistrements, err=%v", len(recs), err)
+	}
+	if recs[0].Leaf != rec.leaves[0] || recs[0].VerifyHash() != nil || !bytes.Equal(recs[0].Record, svc.AuditRecord(ev)) {
+		t.Fatalf("enregistrement journalisé inattendu: %+v", recs[0])
+	}
 	// le registre ne peut pas écrire ⇒ l'audit échoue (le proxy refusera)
 	rec.err = errors.New("registre indisponible")
 	if err := opts.OnRewrite(context.Background(), ev); err == nil {
 		t.Fatal("une feuille non écrite doit faire échouer l'audit (donc refuser la sortie)")
 	}
+	// le journal ne peut pas écrire ⇒ l'audit échoue ET aucune feuille n'est inscrite
+	rec.err = nil
+	before := len(rec.leaves)
+	_ = store.Close()
+	if err := opts.OnRewrite(context.Background(), ev); err == nil {
+		t.Fatal("un clair non journalisé doit faire échouer l'audit (donc refuser la sortie)")
+	}
+	if len(rec.leaves) != before {
+		t.Fatalf("une feuille a été inscrite sans clair journalisé (%d → %d)", before, len(rec.leaves))
+	}
+}
+
+func TestApplyAnoRequiresAuditStore(t *testing.T) {
+	sock := startAno(t)
+	var opts pep.ProxyOptions
+	err := applyAno(context.Background(), anoEnv(map[string]string{"TBP_PROXY_ANO_SOCKET": sock}), &opts, &leafRecorder{}, nil, "cell-a", bytes.Repeat([]byte{1}, 32))
+	if err == nil || !strings.Contains(err.Error(), "TBP_AUDIT_RECORDS") {
+		t.Fatalf("ano sans journal d'audit : %v, doit refuser de démarrer", err)
+	}
+	if opts.Rewriter != nil || opts.OnRewrite != nil {
+		t.Fatal("aucun hook ne doit être posé sans journal d'audit")
+	}
+	// journal sans ano : configuration incohérente
+	store, _, _ := testAuditStore(t)
+	if err := applyAno(context.Background(), anoEnv(nil), &opts, &leafRecorder{}, store, "cell-a", bytes.Repeat([]byte{1}, 32)); err == nil {
+		t.Fatal("journal d'audit sans ano accepté")
+	}
+}
+
+func TestOpenAuditStoreConfig(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "records.key")
+	if err := registry.GenerateRecordKey(keyFile); err != nil {
+		t.Fatal(err)
+	}
+	journal := filepath.Join(dir, "records.jsonl")
+	if st, err := openAuditStore(anoEnv(nil)); err != nil || st != nil {
+		t.Fatalf("rien de déclaré : (%v, %v), attendu (nil, nil)", st, err)
+	}
+	for name, env := range map[string]map[string]string{
+		"journal sans clé": {"TBP_AUDIT_RECORDS": journal},
+		"clé sans journal": {"TBP_AUDIT_RECORDS_KEY_FILE": keyFile},
+		"clé absente":      {"TBP_AUDIT_RECORDS": journal, "TBP_AUDIT_RECORDS_KEY_FILE": filepath.Join(dir, "absent")},
+	} {
+		if st, err := openAuditStore(anoEnv(env)); err == nil {
+			_ = st.Close()
+			t.Errorf("%s: doit être refusé", name)
+		}
+	}
+	// les deux ensemble ou aucun : message explicite, pas une erreur d'ouverture de hasard
+	for _, env := range []map[string]string{{"TBP_AUDIT_RECORDS": journal}, {"TBP_AUDIT_RECORDS_KEY_FILE": keyFile}} {
+		if _, err := openAuditStore(anoEnv(env)); err == nil || !strings.Contains(err.Error(), "vont ensemble") {
+			t.Errorf("déclaration à moitié : %v, attendu l'erreur « vont ensemble »", err)
+		}
+	}
+	if err := os.Chmod(keyFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := openAuditStore(anoEnv(map[string]string{"TBP_AUDIT_RECORDS": journal, "TBP_AUDIT_RECORDS_KEY_FILE": keyFile})); err == nil {
+		_ = st.Close()
+		t.Error("clé lisible par tous acceptée")
+	}
+	if err := os.Chmod(keyFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := openAuditStore(anoEnv(map[string]string{"TBP_AUDIT_RECORDS": journal, "TBP_AUDIT_RECORDS_KEY_FILE": keyFile}))
+	if err != nil || st == nil {
+		t.Fatalf("configuration valide refusée : %v", err)
+	}
+	_ = st.Close()
 }

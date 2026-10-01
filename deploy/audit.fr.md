@@ -76,7 +76,12 @@ pas pour complet). Le clair n'est affiché qu'avec `-reveal`.
 
 ## Producteurs
 
-Cette page et l'outil sont la base commune. Câbler chaque producteur sur
-`AppendSealed` (au lieu d'inscrire une feuille nue) est suivi à part ; tant
-qu'un producteur n'est pas câblé, ses feuilles n'ont pas d'entrée de journal et
-`tbp-audit` n'a rien à en dire.
+Câblés à ce jour :
+
+| Producteur | Feuilles | Configuration |
+|---|---|---|
+| `pepd` — audit de réécriture d'ano (`TBAN1`, #178) | `KindTelemetry` | `TBP_AUDIT_RECORDS` (chemin du journal) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Requis** dès que `TBP_PROXY_ANO_SOCKET` est déclaré, refusés sans lui : `pepd` ne démarre pas une anonymisation dont l'audit ne serait pas vérifiable. |
+
+Tous les autres producteurs inscrivent encore une feuille nue : leurs feuilles
+n'ont pas d'entrée de journal et `tbp-audit` n'a rien à en dire. Les câbler est
+suivi dans #275, un producteur à la fois.

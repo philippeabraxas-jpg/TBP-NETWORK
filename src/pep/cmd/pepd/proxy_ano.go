@@ -11,12 +11,18 @@ package main
 //
 //	TBP_PROXY_ANO_SOCKET      socket Unix d'anod
 //	TBP_PROXY_ANO_TIMEOUT_MS  délai par appel à ano, 100–30000 (défaut 3000)
+//	TBP_AUDIT_RECORDS         journal chiffré des enregistrements d'audit (#275)
+//	TBP_AUDIT_RECORDS_KEY_FILE clé du journal (0600 ; tbp-audit keygen)
 //
 // Fail-closed : ano injoignable au démarrage ⇒ pepd refuse de démarrer (une
 // faute de configuration ne doit pas se découvrir au premier trafic) ; en
 // service, toute faute d'ano refuse la requête (voir pep/rewriter.go). Chaque
-// masquage et chaque reconstitution laisse une feuille hash-only « TBAN1 » ;
-// si la feuille ne peut pas être écrite, l'opération est refusée.
+// masquage et chaque reconstitution laisse une feuille hash-only « TBAN1 » ET
+// son clair dans le journal d'enregistrements (écrit AVANT la feuille, #271) ;
+// si l'un ou l'autre ne peut pas être écrit, l'opération est refusée. Le
+// journal et sa clé sont REQUIS dès que TBP_PROXY_ANO_SOCKET est déclaré, et
+// refusés sans lui (configuration incohérente) : on ne démarre pas une
+// anonymisation dont l'audit ne serait pas vérifiable avec `tbp-audit verify`.
 
 import (
 	"context"
@@ -26,6 +32,7 @@ import (
 
 	svc "github.com/philippeabraxas-jpg/TBP-NETWORK/src/ano/svc"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 const defaultAnoTimeout = 3 * time.Second
@@ -34,15 +41,41 @@ const defaultAnoTimeout = 3 * time.Second
 // tests la raccourcissent).
 var anoProbeWindow = 5 * time.Second
 
+// openAuditStore ouvre le journal d'enregistrements d'audit déclaré par
+// TBP_AUDIT_RECORDS / TBP_AUDIT_RECORDS_KEY_FILE (#275). Les deux ensemble ou
+// aucun ; sans socket ano, aucun des deux n'a de sens. Retourne nil si rien
+// n'est déclaré.
+func openAuditStore(getenv func(string) string) (*registry.RecordStore, error) {
+	path, keyFile := getenv("TBP_AUDIT_RECORDS"), getenv("TBP_AUDIT_RECORDS_KEY_FILE")
+	if path == "" && keyFile == "" {
+		return nil, nil
+	}
+	if path == "" || keyFile == "" {
+		return nil, fmt.Errorf("TBP_AUDIT_RECORDS et TBP_AUDIT_RECORDS_KEY_FILE vont ensemble — configuration incohérente")
+	}
+	key, err := registry.LoadRecordKey(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("TBP_AUDIT_RECORDS_KEY_FILE: %w", err)
+	}
+	return registry.OpenRecordStore(path, key)
+}
+
 // applyAno configure opts.Rewriter / opts.OnRewrite si TBP_PROXY_ANO_SOCKET est
-// déclaré. leaves reçoit les feuilles d'audit (cellID/salt : §6.2).
-func applyAno(ctx context.Context, getenv func(string) string, opts *pep.ProxyOptions, leaves svc.LeafSink, cellID string, salt []byte) error {
+// déclaré. leaves reçoit les feuilles d'audit (cellID/salt : §6.2), store le
+// clair correspondant (#271) — requis quand ano est actif.
+func applyAno(ctx context.Context, getenv func(string) string, opts *pep.ProxyOptions, leaves svc.LeafSink, store *registry.RecordStore, cellID string, salt []byte) error {
 	sock := getenv("TBP_PROXY_ANO_SOCKET")
 	if sock == "" {
 		if getenv("TBP_PROXY_ANO_TIMEOUT_MS") != "" {
 			return fmt.Errorf("TBP_PROXY_ANO_TIMEOUT_MS sans TBP_PROXY_ANO_SOCKET — configuration incohérente")
 		}
+		if store != nil {
+			return fmt.Errorf("TBP_AUDIT_RECORDS sans TBP_PROXY_ANO_SOCKET — configuration incohérente")
+		}
 		return nil
+	}
+	if store == nil {
+		return fmt.Errorf("TBP_PROXY_ANO_SOCKET exige TBP_AUDIT_RECORDS et TBP_AUDIT_RECORDS_KEY_FILE (#271 : l'audit doit être vérifiable, tbp-audit verify)")
 	}
 	timeout := defaultAnoTimeout
 	if v := getenv("TBP_PROXY_ANO_TIMEOUT_MS"); v != "" {
@@ -73,7 +106,7 @@ func applyAno(ctx context.Context, getenv func(string) string, opts *pep.ProxyOp
 	}
 	opts.Rewriter = client
 	opts.OnRewrite = func(ctx context.Context, ev pep.RewriteEvent) error {
-		_, err := svc.AppendAuditLeaf(ctx, leaves, cellID, salt, ev, time.Now())
+		_, err := svc.AppendAuditLeaf(ctx, leaves, store, cellID, salt, ev, time.Now())
 		return err
 	}
 	return nil

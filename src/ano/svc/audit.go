@@ -64,10 +64,12 @@ func AuditRecord(ev pep.RewriteEvent) []byte {
 	return b
 }
 
-// AppendAuditLeaf inscrit la feuille d'audit d'une réécriture. cellID et sel
-// (≥ 16 octets) requis : une opération non attribuée ou non scellée n'entre
-// pas au registre.
-func AppendAuditLeaf(ctx context.Context, leaves LeafSink, cellID string, salt []byte, ev pep.RewriteEvent, at time.Time) (uint64, error) {
+// AppendAuditLeaf inscrit la feuille d'audit d'une réécriture ET journalise son
+// clair (#275, #271) : le record « TBAN1 » entre dans le journal chiffré du
+// démon AVANT la feuille (registry.AppendSealed) — pas de feuille dont le clair
+// n'existe pas. cellID, sel (≥ 16 octets) et journal requis : une opération non
+// attribuée, non scellée ou invérifiable n'entre pas au registre.
+func AppendAuditLeaf(ctx context.Context, leaves LeafSink, store *registry.RecordStore, cellID string, salt []byte, ev pep.RewriteEvent, at time.Time) (uint64, error) {
 	if cellID == "" {
 		return 0, errors.New("ano/svc: cellID requis (§6.2 : feuilles attribuées)")
 	}
@@ -77,10 +79,8 @@ func AppendAuditLeaf(ctx context.Context, leaves LeafSink, cellID string, salt [
 	if leaves == nil {
 		return 0, errors.New("ano/svc: couture feuilles requise (on audite tout)")
 	}
-	return leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      cellID,
-		PayloadHash: registry.HashPayload(salt, AuditRecord(ev)),
-		Timestamp:   at.UnixNano(),
-	})
+	if store == nil {
+		return 0, errors.New("ano/svc: journal d'enregistrements requis (#271 : le clair d'une feuille d'audit doit être vérifiable)")
+	}
+	return registry.AppendSealed(ctx, leaves, store, registry.KindTelemetry, cellID, salt, AuditRecord(ev), at.UnixNano())
 }

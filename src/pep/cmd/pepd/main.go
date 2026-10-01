@@ -145,6 +145,10 @@
 //	                   refuse la requête. Absent ⇒ trafic transmis tel quel
 //	                   (destination dans la cellule / liste blanche locale).
 //	                   TBP_PROXY_ANO_TIMEOUT_MS (100–30000, défaut 3000).
+//	TBP_AUDIT_RECORDS + TBP_AUDIT_RECORDS_KEY_FILE  (#275, #271) — journal
+//	                   chiffré du clair des feuilles d'audit d'ano et sa clé
+//	                   (0600, `tbp-audit keygen`). REQUIS avec
+//	                   TBP_PROXY_ANO_SOCKET, refusés sans lui.
 //
 // Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
 // (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
@@ -597,7 +601,14 @@ func run() error {
 		}
 		proxyOpts := pep.ProxyOptions{Listener: listener, Backend: backend}
 		// #178 : destination hors cellule ⇒ anonymisation par ano (optionnel)
-		if err := applyAno(ctx, os.Getenv, &proxyOpts, cellLog, cellID, salt); err != nil {
+		auditStore, err := openAuditStore(os.Getenv)
+		if err != nil {
+			return fmt.Errorf("pepd: journal d'audit d'ano (#275): %w", err)
+		}
+		if auditStore != nil {
+			defer auditStore.Close()
+		}
+		if err := applyAno(ctx, os.Getenv, &proxyOpts, cellLog, auditStore, cellID, salt); err != nil {
 			return fmt.Errorf("pepd: anonymisation du proxy (#178): %w", err)
 		}
 		proxy, err := pep.NewBlockingProxy(proxyOpts)
