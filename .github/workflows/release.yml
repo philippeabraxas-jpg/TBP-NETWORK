@@ -33,8 +33,8 @@ jobs:
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
@@ -51,7 +51,7 @@ jobs:
         run: |
           cd dist
           echo "hashes=$(sha256sum pepd brokerd supervisord | base64 -w0)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: tbp-binaries
           path: dist/
@@ -66,6 +66,10 @@ jobs:
       actions: read # détecte l'environnement GitHub Actions
       id-token: write # signe la provenance (OIDC), jamais une clé du dépôt
       contents: write # téléverse la provenance sur la release (si tag)
+    # EXCEPTION volontaire à l'épinglage par SHA (#193, .github/scripts/
+    # check_pinned_actions.py) : slsa-verifier exige que ce générateur soit
+    # référencé par un TAG de version — c'est le tag qui prouve l'identité du
+    # constructeur de confiance dans la provenance.
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.build.outputs.hashes }}"
@@ -78,11 +82,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: tbp-binaries
           path: dist/
       - name: "publier les binaires sur la release"
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           files: dist/*

@@ -64,7 +64,7 @@ There is no "partial" status: a partial control is split into its ✅ part and i
 | Standard | Status | File |
 |---|---|---|
 | SLSA v1.0 (build provenance) | Full | [156-slsa.md](156-slsa.md) |
-| OWASP SCVS (component verification) | Partial | [157-owasp-scvs.md](157-owasp-scvs.md) |
+| OWASP SCVS (component verification) | Full | [157-owasp-scvs.md](157-owasp-scvs.md) |
 | CIS Benchmarks | Full | [158-cis-benchmarks.md](158-cis-benchmarks.md) |
 
 ## Architecture-specific frameworks
@@ -128,7 +128,6 @@ move to ✅ in the same pull request.
 | [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181) | Behavioural profile by sequence (salami / decomposition, cost anomalies, per-run cost cap, downstream monitoring) | [143](143-owasp-llm-top10.md), [145](145-mitre-atlas.md) Impact, [153](153-nist-csf-800-53.md) DETECT |
 | [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | [143](143-owasp-llm-top10.md) LLM06 human confirmation |
 | [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) | Quorum for plan approval at larger scales (scale 1: the admin alone signs, by design) — a security-profile brick, defined with the full-scale handshake | same rows as #195 |
-| [#193](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/193) | GitHub Actions referenced by tag, not by commit SHA | [157](157-owasp-scvs.md) build environment |
 
 ## Rule packs that close catalogue rows
 

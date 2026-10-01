@@ -9,8 +9,8 @@ jobs:
   rego:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: open-policy-agent/setup-opa@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: open-policy-agent/setup-opa@34a30e8a924d1b03ce2cf7abe97250bbb1f332b5  # v2.2.0
         with:
           # Épinglé (revue de sécurité post-#86) : "latest" laissait passer
           # une régression de comportement OPA amont sans qu'aucun contrôle
@@ -40,14 +40,19 @@ jobs:
   compliance-catalog:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: cohérence du catalogue de conformité
         run: python3 tbp-compliance/check_catalog.py
+      # Issue #193 : toute action doit être épinglée par SHA de commit.
+      - name: actions épinglées par SHA (#193)
+        run: |
+          python3 .github/scripts/check_pinned_actions.py
+          python3 .github/scripts/test_check_pinned_actions.py
 
   nftables-syntax:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Check nftables syntax (dry parse, no load)
         run: |
           sudo apt-get update && sudo apt-get install -y nftables
@@ -61,7 +66,7 @@ jobs:
   # docker:
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
   #     - run: docker compose -f lab/docker-compose.yml config
 
   # Catalogue de conformité #157 (OWASP SCVS), famille « Analyse de
@@ -73,8 +78,8 @@ jobs:
   govulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
@@ -93,8 +98,8 @@ jobs:
   sbom:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
@@ -104,7 +109,7 @@ jobs:
         run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
       - name: générer le SBOM CycloneDX
         run: cyclonedx-gomod mod -json -output sbom.json .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: sbom
           path: sbom.json
