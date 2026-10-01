@@ -182,7 +182,7 @@ tant qu'un quorum n'a pas reconfirmé une posture : avec `k = 2`, deux contrôle
 **Commande** : installer `pepd` sur chaque serveur comme en [serveur.fr.md](serveur.fr.md) avec `TBP_QUORUM_MIN=2`
 et le **même** trousseau de quorum (`/etc/tbp/quorum-keyring.json`) ; pour les agents sur d'autres machines,
 activer l'écoute mTLS de `brokerd` avec une CA d'agents dédiée ([cellule.fr.md](cellule.fr.md), #124) et lier
-chaque agent à son certificat (`transport_identity` dans `agents.json`). Puis prouver que rien ne sort du réseau
+chaque agent à son certificat (`transport_identity` dans `agents.json`) — un tel agent est un agent **réseau** et est refusé sur le socket Unix (`agent-network-only`) ; un agent sans `transport_identity` est un agent du socket et est refusé sur le réseau. Donner deux entrées à un agent utilisé des deux façons. Puis prouver que rien ne sort du réseau
 des agents autrement que par TBP : [network-isolation.fr.md](network-isolation.fr.md).
 
 **Critère de succès observable** : un agent sans certificat de la CA d'agents est refusé à la poignée de main ;

@@ -176,7 +176,7 @@ reconfirms a posture: with `k = 2`, two controllers sign (`quorumproof sign -con
 **Command**: install `pepd` on each server as in [serveur.md](serveur.md) with `TBP_QUORUM_MIN=2` and the
 **same** quorum keyring (`/etc/tbp/quorum-keyring.json`); for agents on other machines, turn on the mTLS
 listener of `brokerd` with a dedicated agent CA ([cellule.md](cellule.md), #124) and bind each agent to its
-certificate (`transport_identity` in `agents.json`). Then prove that nothing leaves the agents' network except
+certificate (`transport_identity` in `agents.json`) — such an agent is a **network** agent and is refused on the Unix socket (`agent-network-only`); an agent without `transport_identity` is a socket agent and is refused on the network. Give an agent used both ways two entries. Then prove that nothing leaves the agents' network except
 through TBP: [network-isolation.md](network-isolation.md).
 
 **Observable success criterion**: an agent without a certificate in the agent CA is refused at the
