@@ -612,3 +612,40 @@ func TestNewValidation(t *testing.T) {
 		}
 	}
 }
+
+// Issue #237 : « garder » dispense du classifieur, pas des motifs. Un chemin gardé qui
+// porte un IBAN ne le laisse pas sortir en clair ; sans motif, la valeur est inchangée.
+func TestKeepPathStillScrubbedByPatterns(t *testing.T) {
+	a := newAno(t, Options{Rules: mustRules(t, RulesConfig{
+		KeepPaths: []string{"note", "meta"},
+		Patterns:  []PatternRule{{Name: "iban", Regex: `\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b`}},
+	}), Classifier: answer(false)})
+	open(t, a, "ex")
+
+	in := `{"note":"virement vers FR7630006000011234567890189 merci","meta":{"ref":"rien de sensible"},"autre":"x"}`
+	out, rep, err := a.MaskJSON(context.Background(), "ex", []byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if strings.Contains(s, "FR7630006000011234567890189") {
+		t.Fatalf("un IBAN sous keep_paths sort en clair (#237) : %s", s)
+	}
+	if rep.Spans != 1 {
+		t.Fatalf("Spans=%d, veut 1", rep.Spans)
+	}
+	// le reste de la chaîne gardée, et les chaînes gardées sans motif, sont inchangés
+	if !strings.Contains(s, `virement vers `) || !strings.Contains(s, ` merci`) || !strings.Contains(s, `"ref":"rien de sensible"`) {
+		t.Fatalf("la chaîne gardée est altérée au-delà de la plage masquée : %s", s)
+	}
+	// le classifieur n'est PAS appelé pour un chemin gardé (« garder » le dispense)
+	if c := a.classifier.(*fakeClassifier).calls.Load(); c != 1 { // « autre » seulement
+		t.Fatalf("ClassifierCalls=%d, veut 1 (le chemin gardé ne passe pas par le classifieur)", c)
+	}
+	// aller-retour : la plage est restituée
+	back, _, err := a.Unmask("ex", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonEqual(t, back, in)
+}

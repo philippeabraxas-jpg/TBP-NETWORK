@@ -333,14 +333,16 @@ func (a *Ano) maskLeaf(ctx context.Context, ex *exchange, path []string, raw []b
 	if isString && tokenRe.MatchString(text) {
 		return ErrReservedToken
 	}
-	switch a.rules.decide(path) {
-	case verdictKeep:
-		rep.Kept++
-		out.Write(raw)
-		return nil
-	case verdictMask:
+	verdict := a.rules.decide(path)
+	if verdict == verdictMask {
 		rep.MaskedPath++
 		return a.writeLeafToken(ex, raw, out)
+	}
+	if verdict == verdictKeep {
+		// « garder » dispense du CLASSIFIEUR, jamais des motifs (#237) : rules.go
+		// l'annonce — les motifs s'appliquent à toute chaîne non masquée en entier.
+		// Un chemin gardé (« note ») qui porte un IBAN ne le laisse pas sortir.
+		return a.emitKept(ex, raw, text, isString, out, rep)
 	}
 	if text == "" {
 		rep.Kept++
@@ -368,6 +370,14 @@ func (a *Ano) maskLeaf(ctx context.Context, ex *exchange, path []string, raw []b
 	if mask {
 		return a.writeLeafToken(ex, raw, out)
 	}
+	return a.emitKept(ex, raw, text, isString, out, rep)
+}
+
+// emitKept écrit une feuille NON masquée en entier : les motifs de détection
+// remplacent les plages qu'ils trouvent dans une chaîne (jetons de plage), le
+// reste passe tel quel. Commun aux feuilles gardées par chemin et à celles que le
+// classifieur laisse passer.
+func (a *Ano) emitKept(ex *exchange, raw []byte, text string, isString bool, out *bytes.Buffer, rep *Report) error {
 	if isString {
 		if spans := a.rules.findSpans(text); len(spans) > 0 {
 			var sb strings.Builder

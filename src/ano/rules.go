@@ -22,6 +22,12 @@ package ano
 // LONG l'emporte ; à longueur égale, le masquage l'emporte (la direction
 // sûre — une fuite est pire qu'un champ masqué en trop).
 //
+// « Garder » dispense la feuille du CLASSIFIEUR (et du masquage par défaut),
+// jamais des MOTIFS (#237) : une chaîne sous keep_paths qui contient un IBAN
+// voit la plage remplacée par un jeton, le reste de la chaîne passe tel quel.
+// Seul mask_paths masque une feuille en entier ; seule une chaîne SANS motif
+// sort inchangée d'un chemin gardé.
+//
 // Les motifs sont des regex RE2 (bibliothèque standard Go : temps linéaire,
 // pas de retour arrière catastrophique) appliquées aux CHAÎNES restantes
 // (celles qui ne sont pas masquées en entier). Ils ne sont jamais
