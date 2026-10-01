@@ -99,3 +99,51 @@ func TestLoadSkillRegistryRefusesUnknownFields(t *testing.T) {
 		t.Fatalf("enregistrement valide refusé : %v", err)
 	}
 }
+
+// Re-revue de 8873638 (#241) : une clé JSON dupliquée n'est pas « dernier gagne ».
+// {"a":{"class":2},"a":{"class":3}} chargeait « a » en classe 3 sans erreur.
+func TestLoadAgentRegistryRefusesDuplicateKeys(t *testing.T) {
+	for name, body := range map[string]string{
+		"sujet en double":                 `{"a":{"class":2},"a":{"class":3}}`,
+		"sujet en double, classes égales": `{"a":{"class":2},"a":{"class":2}}`,
+		"sujet en double après un autre":  `{"b":{"class":0},"a":{"class":2},"c":{"class":1},"a":{"class":3}}`,
+		"champ en double dans une entrée": `{"a":{"class":2,"class":3}}`,
+		"champ en double dans le quota":   `{"a":{"class":2,"quota":{"max_volume":1,"max_volume":2,"max_window_s":1}}}`,
+	} {
+		if _, err := loadAgentRegistry(writeAgentRegistryFile(t, body)); err == nil {
+			t.Fatalf("%s : chargé sans erreur", name)
+		} else if !strings.Contains(err.Error(), "en double") {
+			t.Fatalf("%s : l'erreur ne nomme pas le doublon : %v", name, err)
+		}
+	}
+	// voisins : la MÊME clé dans deux objets DIFFÉRENTS n'est pas un doublon (« class » de a et de b),
+	// ni dans un tableau d'objets du registre de skills
+	if _, err := loadAgentRegistry(writeAgentRegistryFile(t, `{"a":{"class":2,"quota":{"max_volume":1,"max_window_s":1}},"b":{"class":3,"quota":{"max_volume":2,"max_window_s":2}}}`)); err != nil {
+		t.Fatalf("clés identiques dans des objets distincts refusées à tort : %v", err)
+	}
+}
+
+func TestDuplicateJSONKeyDetector(t *testing.T) {
+	cases := []struct {
+		in   string
+		key  string
+		want bool
+	}{
+		{`{}`, "", false},
+		{`{"a":1,"b":2}`, "", false},
+		{`{"a":1,"a":2}`, "a", true},
+		{`{"a":{"x":1},"b":{"x":2}}`, "", false},
+		{`{"a":{"x":1,"x":2}}`, "x", true},
+		{`{"a":[{"x":1},{"x":2}],"b":[1,2,3]}`, "", false},
+		{`{"a":[{"x":1,"x":2}]}`, "x", true},
+		{`{"a":[1,2],"a":3}`, "a", true},
+		{`{"a":"b","b":"a"}`, "", false}, // une valeur chaîne n'est pas une clé
+		{`[{"a":1},{"a":1}]`, "", false},
+	}
+	for _, c := range cases {
+		k, got := duplicateJSONKey([]byte(c.in))
+		if got != c.want || k != c.key {
+			t.Fatalf("%s : (%q,%v), veut (%q,%v)", c.in, k, got, c.key, c.want)
+		}
+	}
+}

@@ -1430,6 +1430,9 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 // à la main : une faute de frappe (« clas », « scop ») ne doit jamais être ignorée en silence
 // et remplacée par la valeur zéro du champ — fail-closed au chargement (§1).
 func decodeStrictJSON(data []byte, v any) error {
+	if key, dup := duplicateJSONKey(data); dup {
+		return fmt.Errorf("clé JSON %q en double (re-revue #241 : « dernier gagne » ferait charger l'agent dans une classe que personne n'a relue)", key)
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
@@ -1439,6 +1442,54 @@ func decodeStrictJSON(data []byte, v any) error {
 		return errors.New("contenu après le document JSON")
 	}
 	return nil
+}
+
+// duplicateJSONKey rend la première clé d'objet présente deux fois dans un MÊME objet, à
+// n'importe quelle profondeur. encoding/json garde silencieusement la dernière : dans un
+// registre d'agents, {"a":{"class":2},"a":{"class":3}} chargeait « a » en classe 3 sans erreur.
+// Les erreurs de syntaxe sont laissées au décodeur qui suit.
+func duplicateJSONKey(data []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// pile d'ensembles de clés : un par objet ouvert ; nil pour un tableau
+	var keys []map[string]bool
+	var expectKey []bool // vrai quand le prochain token d'un objet est une clé
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				keys = append(keys, map[string]bool{})
+				expectKey = append(expectKey, true)
+			case '[':
+				keys = append(keys, nil)
+				expectKey = append(expectKey, false)
+			default: // '}' ou ']'
+				keys = keys[:len(keys)-1]
+				expectKey = expectKey[:len(expectKey)-1]
+				if n := len(expectKey); n > 0 && keys[n-1] != nil {
+					expectKey[n-1] = true // la valeur de l'objet parent est finie
+				}
+			}
+			continue
+		case string:
+			if n := len(keys); n > 0 && keys[n-1] != nil && expectKey[n-1] {
+				if keys[n-1][t] {
+					return t, true
+				}
+				keys[n-1][t] = true
+				expectKey[n-1] = false // la valeur suit
+				continue
+			}
+		}
+		// valeur scalaire : si on est dans un objet, la prochaine entrée est une clé
+		if n := len(keys); n > 0 && keys[n-1] != nil {
+			expectKey[n-1] = true
+		}
+	}
 }
 
 // skillRegistryEntry est la forme JSON d'un enregistrement du registre de
