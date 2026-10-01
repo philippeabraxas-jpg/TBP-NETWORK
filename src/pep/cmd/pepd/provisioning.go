@@ -72,9 +72,17 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 	// l'attaquant qui édite le fichier y ajoute ses clés et signe sa propre transition
 	// (issue #218). Sans témoin antérieur (premier démarrage, ré-engagement après perte
 	// du témoin) il n'y a pas d'attesté : repli TOFU sur le trousseau courant.
-	var authorize func(prev map[string][]byte) error
-	if proof := getenv("TBP_PROVISIONING_TRANSITION_PROOF_FILE"); proof != "" {
-		authorize = func(prev map[string][]byte) error {
+	//
+	// La preuve est liée à l'état de départ ET à l'état cible (issue #236) : toujours
+	// une fermeture, même sans fichier de preuve, pour que le refus dise QUELLE
+	// condition signer (« ce qu'on voit est ce qu'on signe »).
+	proof := getenv("TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+	authorize := func(prev map[string][]byte, from, to [32]byte) error {
+		cond := pep.TransitionCondition(conditionProvisioningTransition, from, to)
+		if proof == "" {
+			return fmt.Errorf("aucune preuve de transition (TBP_PROVISIONING_TRANSITION_PROOF_FILE) ; condition à signer : %s", cond)
+		}
+		verr := func() error {
 			keyring, k := in.quorumKeyring, in.quorumMin
 			if raw, ok := prev["quorum-keyring"]; ok {
 				attested, err := parseKeyring(raw)
@@ -92,8 +100,12 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 				}
 				k = attestedK
 			}
-			return pep.VerifyQuorumProofFile(proof, conditionProvisioningTransition, in.cellID, keyring, k)
+			return pep.VerifyQuorumProofFile(proof, cond, in.cellID, keyring, k)
+		}()
+		if verr != nil {
+			return fmt.Errorf("%w ; condition à signer : %s", verr, cond)
 		}
+		return nil
 	}
 	g, err := registry.NewProvisioningGuard(registry.ProvisioningGuardOptions{
 		CellID: in.cellID, Component: "pepd", Files: files,

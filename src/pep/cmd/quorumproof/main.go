@@ -25,6 +25,12 @@
 // Conditions : « provisioning-transition-brokerd », « provisioning-transition-pepd »,
 // « measured-boot-transition », « mode-closed », « mode-monitor ». La condition est
 // liée par la signature : une preuve ne vaut jamais pour une autre.
+//
+// Les transitions de provisionnement et de démarrage mesuré portent en plus l'état de
+// départ et l'état cible (issue #236) : « provisioning-transition-pepd|from=<hex>|to=<hex> ».
+// Le démon qui REFUSE un état divergent affiche cette condition complète (« condition à
+// signer : … ») ; c'est elle qu'on passe à -condition. Une preuve ne vaut que pour cette
+// paire : elle ne ré-engage aucun autre état, et ne ramène pas à l'état précédent.
 package main
 
 import (
@@ -129,7 +135,8 @@ func cmdMessage(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "expiry=%d\nmessage=%s\n", exp.Unix(), hex.EncodeToString(pep.QuorumMessage(*cond, *cell, exp)))
+	// condition= : ce que la signature lie, en clair — « ce qu'on voit est ce qu'on signe ».
+	fmt.Fprintf(out, "condition=%s\ncell=%s\nexpiry=%d\nmessage=%s\n", *cond, *cell, exp.Unix(), hex.EncodeToString(pep.QuorumMessage(*cond, *cell, exp)))
 	return nil
 }
 
@@ -199,7 +206,13 @@ func cmdSign(args []string) error {
 	if err != nil {
 		return err
 	}
-	return writeProof(*out, pf)
+	if err := writeProof(*out, pf); err != nil {
+		return err
+	}
+	// Ce qui vient d'être signé, en clair (issue #236) : une transition de provisionnement
+	// ou de démarrage mesuré porte l'état de départ et l'état cible (|from=…|to=…).
+	fmt.Fprintf(os.Stderr, "quorumproof: %d signature(s) sur condition=%s cellule=%s expire=%d\n", len(pf.Signatures), *cond, *cell, pf.Expiry)
+	return nil
 }
 
 func cmdAssemble(args []string) error {

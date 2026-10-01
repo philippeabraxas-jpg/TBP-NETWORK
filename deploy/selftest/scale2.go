@@ -293,9 +293,16 @@ func runScale2(s *suite, cfg config) {
 	low, lowLog := refused(brokerEnv("1"), filepath.Join(base, "brokerd-k1.log"))
 	s.add(ph, "#224 : TBP_QUORUM_MIN abaissé à 1 dans l'environnement ⇒ brokerd REFUSE de démarrer, en nommant le réglage",
 		low && strings.Contains(lowLog, "quorum-settings"), fmt.Sprintf("refusé=%v", low))
+	// Le refus annonce la condition à signer (état de départ attesté + état cible, #236) : c'est
+	// elle que les contrôleurs signent, pas une condition générique.
+	cond, haveCond := conditionToSign(lowLog)
+	s.add(ph, "#236 : le refus annonce la condition à signer (condition|from=attesté|to=cible)", haveCond, cond)
+	if !haveCond {
+		return
+	}
 	// une seule signature (suffisante pour k = 1) ne légitime pas l'abaissement : le quorum ATTESTÉ est 2
 	proofFile := filepath.Join(base, "provisioning-proof-1sig.json")
-	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", "provisioning-transition-brokerd", "-cell", scale2CellID, "-key", ctlKeys[0], "-out", proofFile); err != nil {
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", cond, "-cell", scale2CellID, "-key", ctlKeys[0], "-out", proofFile); err != nil {
 		s.fail(ph, "quorumproof sign (preuve de transition à 1 signature)", fmt.Errorf("%v — %s", err, errB))
 		return
 	}
@@ -314,7 +321,7 @@ func runScale2(s *suite, cfg config) {
 	// --- Cas voisin : l'abaissement légitime, signé par le quorum ATTESTÉ (2 contrôleurs) ----------
 	brokerd.stop()
 	proof2 := filepath.Join(base, "provisioning-proof-2sig.json")
-	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", "provisioning-transition-brokerd", "-cell", scale2CellID, "-key", ctlKeys[0], "-key", ctlKeys[1], "-out", proof2); err != nil {
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", cond, "-cell", scale2CellID, "-key", ctlKeys[0], "-key", ctlKeys[1], "-out", proof2); err != nil {
 		s.fail(ph, "quorumproof sign (preuve de transition à 2 signatures)", fmt.Errorf("%v — %s", err, errB))
 		return
 	}

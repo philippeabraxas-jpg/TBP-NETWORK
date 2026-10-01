@@ -45,6 +45,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -119,27 +120,58 @@ func setupMeasuredBoot(ctx context.Context, cellID string, salt []byte, signer n
 		return nil
 	}
 
-	if proofPath := getenv("TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE"); proofPath != "" {
-		if err := verifyMeasuredBootTransitionProof(proofPath, cellID, quorumKeyring, quorumMin); err != nil {
-			return fmt.Errorf("measured boot: transition refusée (§112) : %w", err)
+	// La preuve de transition est liée à l'état de départ (manifeste attendu) ET à
+	// l'état cible mesuré (issue #236) : elle ne vaut que pour CETTE paire. Un état
+	// inchangé n'a besoin d'aucune preuve (contrôle de démarrage ordinaire) ; une
+	// preuve laissée en place ne ré-engage donc rien d'autre que ce qu'elle a signé.
+	var hint string // condition à signer, ajoutée au refus pour que l'opérateur sache quoi signer
+	if cur, ok := m.State(); ok {
+		if target, merr := registry.MeasureComponents(paths); merr == nil && measuredStateDigest(cur) != measuredStateDigest(target) {
+			cond := pep.TransitionCondition(reasonMeasuredBootTransition, measuredStateDigest(cur), measuredStateDigest(target))
+			hint = " ; condition à signer : " + cond
+			if proofPath := getenv("TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE"); proofPath != "" {
+				verr := verifyMeasuredBootTransitionProof(proofPath, cond, cellID, quorumKeyring, quorumMin)
+				if verr == nil {
+					sm, err := transitionMeasuredBoot(ctx, cellLog, m, paths)
+					if err != nil {
+						return fmt.Errorf("measured boot: %w", err)
+					}
+					if err := persistManifest(manifestFile, sm); err != nil {
+						return fmt.Errorf("measured boot: %w", err)
+					}
+					log.Printf("pepd: measured boot — transition enregistrée (quorum de contrôleurs vérifié sur l'état cible, §112/#236 — plus un simple drapeau)")
+					return nil
+				}
+				// Preuve invalide pour CET état : refus. CheckBoot écrit la feuille de
+				// refus et l'alarme (la divergence est réelle) ; l'erreur rendue est
+				// toujours celle de la preuve, jamais un succès.
+				_ = registry.CheckBoot(ctx, m, registry.FileRootMeasurer{Path: rootFile}, expectedRoot, paths)
+				return fmt.Errorf("measured boot: transition refusée (§112) : %w%s", verr, hint)
+			}
 		}
-		sm, err := transitionMeasuredBoot(ctx, cellLog, m, paths)
-		if err != nil {
-			return fmt.Errorf("measured boot: %w", err)
-		}
-		if err := persistManifest(manifestFile, sm); err != nil {
-			return fmt.Errorf("measured boot: %w", err)
-		}
-		log.Printf("pepd: measured boot — transition enregistrée (quorum de contrôleurs vérifié, §112 — plus un simple drapeau)")
-		return nil
 	}
 
 	rm := registry.FileRootMeasurer{Path: rootFile}
 	if err := registry.CheckBoot(ctx, m, rm, expectedRoot, paths); err != nil {
-		return fmt.Errorf("measured boot: démarrage refusé (état divergent du manifeste attendu) : %w", err)
+		return fmt.Errorf("measured boot: démarrage refusé (état divergent du manifeste attendu) : %w%s", err, hint)
 	}
 	log.Printf("pepd: measured boot — état conforme au manifeste attendu")
 	return nil
+}
+
+// measuredStateDigest est le condensé des quatre composants mesurés (bundle de
+// règles, config OPA, binaire broker, conteneur IA) — SANS la tête de chaîne, qui
+// bouge à chaque feuille écrite et ne décrit pas ce que les contrôleurs approuvent.
+func measuredStateDigest(st registry.ManifestState) [32]byte {
+	h := sha256.New()
+	h.Write([]byte("TBPM1"))
+	h.Write(st.PolicyID[:])
+	h.Write(st.OPAConfigHash[:])
+	h.Write(st.BrokerHash[:])
+	h.Write(st.AIContainerHash[:])
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 func loadComponentPaths(getenv func(string) string) (registry.ComponentPaths, error) {
@@ -199,8 +231,8 @@ const reasonMeasuredBootTransition = "measured-boot-transition"
 // cette preuve VALIDE, aucune ré-engagement de référence n'a lieu — un
 // simple accès en écriture à l'environnement du process (l'ancien
 // TBP_MEASURED_BOOT_TRANSITION=1) ne suffit plus.
-func verifyMeasuredBootTransitionProof(path, cellID string, quorumKeyring map[[16]byte]ed25519.PublicKey, quorumMin int) error {
-	if err := pep.VerifyQuorumProofFile(path, reasonMeasuredBootTransition, cellID, quorumKeyring, quorumMin); err != nil {
+func verifyMeasuredBootTransitionProof(path, condition, cellID string, quorumKeyring map[[16]byte]ed25519.PublicKey, quorumMin int) error {
+	if err := pep.VerifyQuorumProofFile(path, condition, cellID, quorumKeyring, quorumMin); err != nil {
 		return fmt.Errorf("preuve de transition : %w", err)
 	}
 	return nil

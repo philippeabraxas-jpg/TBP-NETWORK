@@ -249,6 +249,7 @@ type runFixture struct {
 	opsFile         string
 	agentsFile      string
 	adminSock       string
+	sock            string // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
 }
 
@@ -399,6 +400,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	}
 	adminSock := filepath.Join(dir, "broker-admin.sock")
 	return &runFixture{
+		sock:            sock,
 		genDir:          genDir,
 		seedFile:        seedFile,
 		opsFile:         opsFile,

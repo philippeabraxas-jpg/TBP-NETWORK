@@ -154,7 +154,7 @@ TBP_QUORUM_MIN=1 /usr/local/bin/brokerd     # dans le même environnement par ai
 **Critère de succès observable** : `brokerd` **refuse de démarrer** et nomme `quorum-settings`. Même une preuve de
 transition signée par **un** contrôleur ne l'autorise pas : le changement n'est autorisé que par le quorum qui
 était **attesté** (2), pas par celui que vous venez d'écrire. Signée par deux contrôleurs
-(`quorumproof sign -condition provisioning-transition-brokerd -cell cell-a -key … -key …`, puis
+(`quorumproof sign -condition '<la condition qu'"'"'affiche le refus : provisioning-transition-brokerd|from=…|to=…>' -cell cell-a -key … -key …`, puis
 `TBP_PROVISIONING_TRANSITION_PROOF_FILE`), elle est acceptée — et `brokerd` avertit ensuite à chaque démarrage que
 `k = 1`. Monter d'échelle est le même acte gouverné dans l'autre sens.
 

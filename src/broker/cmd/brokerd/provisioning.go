@@ -90,11 +90,16 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 	}
 	// Preuve vérifiée contre les contrôleurs du manifeste ATTESTÉ (octets du témoin),
 	// jamais contre le manifeste courant (issue #218) ; repli TOFU sans témoin antérieur.
-	var authorize func(prev map[string][]byte) error
-	if cfg.provProofFile != "" {
-		path := cfg.provProofFile
-		manifest := filepath.Join(cfg.genesisDir, "manifest.json")
-		authorize = func(prev map[string][]byte) error {
+	// La preuve est liée à l'état de départ ET à l'état cible (issue #236) : toujours
+	// une fermeture, même sans fichier de preuve, pour que le refus dise QUELLE
+	// condition signer (« ce qu'on voit est ce qu'on signe »).
+	manifest := filepath.Join(cfg.genesisDir, "manifest.json")
+	authorize := func(prev map[string][]byte, from, to [32]byte) error {
+		cond := pep.TransitionCondition(conditionProvisioningTransition, from, to)
+		if cfg.provProofFile == "" {
+			return fmt.Errorf("aucune preuve de transition (TBP_PROVISIONING_TRANSITION_PROOF_FILE) ; condition à signer : %s", cond)
+		}
+		verr := func() error {
 			k := cfg.quorumMin
 			if raw, ok := prev["quorum-settings"]; ok {
 				attestedK, err := pep.ParseQuorumSettings(raw)
@@ -117,8 +122,12 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 			for _, pub := range controllers {
 				keyring[pep.KeyIDFromPublicKey(pub)] = pub
 			}
-			return pep.VerifyQuorumProofFile(path, conditionProvisioningTransition, cfg.cellID, keyring, k)
+			return pep.VerifyQuorumProofFile(cfg.provProofFile, cond, cfg.cellID, keyring, k)
+		}()
+		if verr != nil {
+			return fmt.Errorf("%w ; condition à signer : %s", verr, cond)
 		}
+		return nil
 	}
 	g, err := registry.NewProvisioningGuard(registry.ProvisioningGuardOptions{
 		CellID: cfg.cellID, Component: "brokerd",
