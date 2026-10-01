@@ -373,12 +373,63 @@ func (a *Ano) maskLeaf(ctx context.Context, ex *exchange, path []string, raw []b
 	return a.emitKept(ex, raw, text, isString, out, rep)
 }
 
+// numberMatchesPattern dit si un motif correspond à la forme texte d'un nombre JSON OU à sa forme
+// décimale PLEINE : « 4.111111111111111e15 » est le nombre 4111111111111111 ; un motif [0-9]{16}
+// ne le voyait pas (#238, re-revue de 8873638). L'expansion est bornée (exposant ≤ 2 chiffres).
+func (a *Ano) numberMatchesPattern(text string) bool {
+	if len(a.rules.findSpans(text)) > 0 {
+		return true
+	}
+	if plain, ok := expandExponent(text); ok && len(a.rules.findSpans(plain)) > 0 {
+		return true
+	}
+	return false
+}
+
+var exponentNumberRe = regexp.MustCompile(`^(-?)([0-9]+)(?:\.([0-9]+))?[eE]([+-]?[0-9]{1,2})$`)
+
+// expandExponent rend la notation décimale pleine d'un nombre à exposant (« 4.1e3 » → « 4100 »,
+// « 1.5e-3 » → « 0.0015 »), par arithmétique de chaînes — jamais de flottant, donc sans perte —
+// et ok=false pour toute autre forme. L'exposant est borné à deux chiffres : au plus ~100
+// caractères produits, aucune allocation pilotée par l'entrée.
+func expandExponent(text string) (string, bool) {
+	m := exponentNumberRe.FindStringSubmatch(text)
+	if m == nil {
+		return "", false
+	}
+	sign, intPart, frac := m[1], m[2], m[3]
+	exp, err := strconv.Atoi(m[4])
+	if err != nil {
+		return "", false
+	}
+	digits := intPart + frac
+	point := len(intPart) + exp // position de la virgule dans « digits »
+	var out string
+	switch {
+	case point >= len(digits):
+		out = digits + strings.Repeat("0", point-len(digits))
+	case point <= 0:
+		out = "0." + strings.Repeat("0", -point) + digits
+	default:
+		out = digits[:point] + "." + digits[point:]
+	}
+	if i := strings.IndexByte(out, '.'); i >= 0 {
+		out = strings.TrimRight(out, "0")
+		out = strings.TrimSuffix(out, ".")
+	}
+	out = strings.TrimLeft(out, "0")
+	if out == "" || out[0] == '.' {
+		out = "0" + out
+	}
+	return sign + out, true
+}
+
 // emitKept écrit une feuille NON masquée en entier : les motifs de détection
 // remplacent les plages qu'ils trouvent dans une chaîne (jetons de plage), le
 // reste passe tel quel. Commun aux feuilles gardées par chemin et à celles que le
 // classifieur laisse passer.
 func (a *Ano) emitKept(ex *exchange, raw []byte, text string, isString bool, out *bytes.Buffer, rep *Report) error {
-	if !isString && len(a.rules.findSpans(text)) > 0 {
+	if !isString && a.numberMatchesPattern(text) {
 		// Un nombre ne peut pas porter un jeton partiel : la correspondance d'un motif sur sa
 		// forme texte masque la feuille ENTIÈRE (#238). Sans cela « l'IA ne peut que renforcer »
 		// était faux — un classifieur répondant « garder » laissait sortir 4111111111111111.

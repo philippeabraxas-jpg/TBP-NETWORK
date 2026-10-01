@@ -691,3 +691,60 @@ func TestNumberStillScrubbedByPatterns(t *testing.T) {
 		t.Fatalf("le nombre masqué n'est pas restitué comme nombre : %T", dec["card"])
 	}
 }
+
+// #238, re-revue de 8873638 : « 4.111111111111111e15 » EST le nombre 4111111111111111 ; un motif sur la
+// forme pleine ne doit pas être contourné par la notation exponentielle.
+func TestExpandExponent(t *testing.T) {
+	for in, want := range map[string]string{
+		"4.111111111111111e15": "4111111111111111",
+		"4111111111111111E0":   "4111111111111111",
+		"4.1e3":                "4100",
+		"-4.1E+3":              "-4100",
+		"1.5e-3":               "0.0015",
+		"123e-2":               "1.23",
+		"0.5e1":                "5",
+		"1e0":                  "1",
+		"0e5":                  "0",
+	} {
+		got, ok := expandExponent(in)
+		if !ok || got != want {
+			t.Fatalf("expandExponent(%q) = (%q,%v), veut %q", in, got, ok, want)
+		}
+	}
+	// formes hors périmètre : pas d'expansion (et surtout pas d'allocation pilotée par l'entrée)
+	for _, in := range []string{"42", "1.5", "1e100", "1e999999999", "abc", "1e", "e5", "--1e2", "1.e2"} {
+		if got, ok := expandExponent(in); ok {
+			t.Fatalf("expandExponent(%q) = %q, veut pas d'expansion", in, got)
+		}
+	}
+}
+
+func TestExponentNumberStillScrubbedByPatterns(t *testing.T) {
+	a := newAno(t, Options{Rules: mustRules(t, RulesConfig{
+		Patterns: []PatternRule{{Name: "pan", Regex: `[0-9]{16}`}},
+	}), Classifier: answer(false)})
+	open(t, a, "ex")
+	in := `{"plain":4111111111111111,"exp":4.111111111111111e15,"exp2":4111111111111111E0,"neg":-4.111111111111111e15,"small":4.1e3,"f":1.5}`
+	out, rep, err := a.MaskJSON(context.Background(), "ex", []byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, leak := range []string{"4111111111111111", "4.111111111111111e15", "4111111111111111E0"} {
+		if strings.Contains(s, leak) {
+			t.Fatalf("%q sort en clair : %s", leak, s)
+		}
+	}
+	if rep.Spans != 4 {
+		t.Fatalf("Spans=%d, veut 4 (plain, exp, exp2, neg) : %s", rep.Spans, s)
+	}
+	// voisins : un nombre exponentiel sans motif, et un décimal, sont inchangés
+	if !strings.Contains(s, `"small":4.1e3`) || !strings.Contains(s, `"f":1.5`) {
+		t.Fatalf("un nombre sans motif est altéré : %s", s)
+	}
+	back, _, err := a.Unmask("ex", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonEqual(t, back, in)
+}
