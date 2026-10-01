@@ -660,6 +660,17 @@ func TestApprovedPlanExpiryRefuses(t *testing.T) {
 	}
 }
 
+// signRevocation produit la signature de révocation d'un opérateur (#244).
+func signRevocation(priv ed25519.PrivateKey, planHash [32]byte, expiry time.Time) []byte {
+	return ed25519.Sign(priv, RevocationMessage(planHash, expiry))
+}
+
+// revokeNominal révoque avec la clé 1 et une fenêtre de 5 min.
+func revokeNominal(s *ContractStore, clock *contractClock, planHash [32]byte) error {
+	expiry := clock.now().Add(5 * time.Minute)
+	return s.Revoke(context.Background(), planHash, expiry, signRevocation(opKey1(), planHash, expiry))
+}
+
 func TestRevocationRefuses(t *testing.T) {
 	sink := &stubSink{}
 	clock := &contractClock{t: contractEpochT0}
@@ -669,28 +680,136 @@ func TestRevocationRefuses(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 	approveNominal(t, s, clock, hash)
-	if err := s.Revoke(context.Background(), hash); err != nil {
+	if err := revokeNominal(s, clock, hash); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if _, err := s.VerifyStep(context.Background(), contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); !errors.Is(err, ErrPlanRevoked) {
 		t.Fatalf("plan révoqué exécutable : %v", err)
 	}
 	// Révocation d'un inconnu et double révocation : refusées, tracées.
-	if err := s.Revoke(context.Background(), arr32(bytesOf(0x77, 32))); !errors.Is(err, ErrPlanUnknown) {
+	unknown := arr32(bytesOf(0x77, 32))
+	exp := clock.now().Add(5 * time.Minute)
+	if err := s.Revoke(context.Background(), unknown, exp, signRevocation(opKey1(), unknown, exp)); !errors.Is(err, ErrPlanUnknown) {
 		t.Fatalf("révocation d'un inconnu : %v", err)
 	}
-	if err := s.Revoke(context.Background(), hash); !errors.Is(err, ErrPlanUnknown) {
+	if err := revokeNominal(s, clock, hash); !errors.Is(err, ErrPlanUnknown) {
 		t.Fatalf("double révocation : %v", err)
 	}
-	leaves := contractLeaves(sink)
+	// La révocation réussie laisse une feuille ATTRIBUÉE (kid, expiry, signature) : on retrouve
+	// QUEL opérateur a coupé QUEL plan.
+	want := registry.HashPayload(contractSalt, revocationRecord(hash, opKey1(), clock.now().Add(5*time.Minute)))
 	found := false
-	for _, l := range leaves {
-		if l.PayloadHash == registry.HashPayload(contractSalt, contractRecord(planEventRevoke, hash, planStepNA, 1, "ok")) {
+	for _, l := range contractLeaves(sink) {
+		if l.PayloadHash == want {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("révocation sans feuille")
+		t.Fatalf("révocation sans feuille attribuée")
+	}
+}
+
+// revocationRecord reconstitue le record « TBPL2 » d'une révocation réussie.
+func revocationRecord(planHash [32]byte, priv ed25519.PrivateKey, expiry time.Time) []byte {
+	kid := KeyIDFromPublicKey(priv.Public().(ed25519.PublicKey))
+	r := contractRecord(planEventRevoke, planHash, planStepNA, 1, "ok")
+	copy(r, "TBPL2")
+	r = append(r, kid[:]...)
+	r = binary.BigEndian.AppendUint64(r, uint64(expiry.Unix()))
+	return append(r, signRevocation(priv, planHash, expiry)...)
+}
+
+// #244 : révoquer est un acte d'opérateur SIGNÉ. Sans signature valide, un plan approuvé reste
+// exécutable ; chaque tentative invalide laisse une feuille de refus. Le plan est testé jusqu'au bout :
+// après toutes les tentatives refusées, il s'exécute encore.
+func TestRevocationRequiresAnOperatorSignature(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	s := newContractStore(t, sink, clock, &contractTrips{}, nil)
+	ctx := context.Background()
+	hash, err := s.Submit(ctx, contractSubject, []PlanStep{stepOf("read.list", "registry/docs/42", nil)})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	approveNominal(t, s, clock, hash)
+	exp := clock.now().Add(5 * time.Minute)
+	stranger := ed25519.NewKeyFromSeed(bytesOf(0x42, 32))
+
+	cases := []struct {
+		name   string
+		expiry time.Time
+		sig    []byte
+		want   error
+		reason string
+	}{
+		{"sans signature", exp, nil, ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		{"signature aléatoire", exp, bytesOf(0x11, 64), ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		{"clé hors du trousseau épinglé", exp, signRevocation(stranger, hash, exp), ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		// une signature d'APPROBATION de l'opérateur légitime ne vaut pas révocation (domaines distincts)
+		{"signature d'approbation réutilisée", exp, signApproval(opKey1(), hash, exp), ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		// signée pour un autre plan
+		{"signature d'un autre plan", exp, signRevocation(opKey1(), arr32(bytesOf(0x09, 32)), exp), ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		// signée pour une autre expiry que celle présentée
+		{"expiry présentée ≠ signée", exp.Add(time.Second), signRevocation(opKey1(), hash, exp), ErrPlanRevocationSignature, "plan-revocation-signature-invalid"},
+		{"expiry échue", clock.now().Add(-time.Second), signRevocation(opKey1(), hash, clock.now().Add(-time.Second)), ErrPlanRevocationExpiryInvalid, "plan-revocation-expiry-invalid"},
+		{"expiry au-delà du TTL", clock.now().Add(48 * time.Hour), signRevocation(opKey1(), hash, clock.now().Add(48*time.Hour)), ErrPlanRevocationExpiryInvalid, "plan-revocation-expiry-invalid"},
+	}
+	for _, c := range cases {
+		before := len(contractLeaves(sink))
+		if err := s.Revoke(ctx, hash, c.expiry, c.sig); !errors.Is(err, c.want) {
+			t.Fatalf("%s : %v, veut %v", c.name, err, c.want)
+		}
+		leaves := contractLeaves(sink)
+		if len(leaves) != before+1 {
+			t.Fatalf("%s : %d feuilles de plus, veut 1 (un refus de révocation est un événement de sécurité)", c.name, len(leaves)-before)
+		}
+		if leaves[len(leaves)-1].PayloadHash != registry.HashPayload(contractSalt, contractRecord(planEventRevoke, hash, planStepNA, 0, c.reason)) {
+			t.Fatalf("%s : feuille de refus inattendue", c.name)
+		}
+	}
+
+	// Voisin autorisé : le plan N'A PAS été coupé par les tentatives invalides — il s'exécute.
+	if _, err := s.VerifyStep(ctx, contractSubject, bindingOf(t, hash, nil), "read.list", "registry/docs/42"); err != nil {
+		t.Fatalf("le plan a été affecté par des révocations refusées : %v", err)
+	}
+}
+
+// Une révocation valide, signée par N'IMPORTE QUEL opérateur du trousseau, coupe un plan en attente
+// comme un plan approuvé, et ne se rejoue pas.
+func TestRevocationBySecondOperatorCutsPendingAndApprovedPlans(t *testing.T) {
+	sink := &stubSink{}
+	clock := &contractClock{t: contractEpochT0}
+	s := newContractStore(t, sink, clock, &contractTrips{}, func(o *ContractOptions) {
+		o.OperatorKeys = append(o.OperatorKeys, opKey2().Public().(ed25519.PublicKey))
+	})
+	ctx := context.Background()
+	exp := clock.now().Add(5 * time.Minute)
+
+	pending, err := s.Submit(ctx, contractSubject, []PlanStep{stepOf("read.list", "registry/docs/1", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Revoke(ctx, pending, exp, signRevocation(opKey2(), pending, exp)); err != nil {
+		t.Fatalf("plan en attente non révocable par l'opérateur 2 : %v", err)
+	}
+	approved, err := s.Submit(ctx, contractSubject, []PlanStep{stepOf("read.list", "registry/docs/2", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approveNominal(t, s, clock, approved)
+	if err := s.Revoke(ctx, approved, exp, signRevocation(opKey2(), approved, exp)); err != nil {
+		t.Fatalf("plan approuvé non révocable par l'opérateur 2 : %v", err)
+	}
+	if _, err := s.VerifyStep(ctx, contractSubject, bindingOf(t, approved, nil), "read.list", "registry/docs/2"); !errors.Is(err, ErrPlanRevoked) {
+		t.Fatalf("plan révoqué exécutable : %v", err)
+	}
+	// rejeu du même message signé : le plan est déjà révoqué ⇒ refus
+	if err := s.Revoke(ctx, approved, exp, signRevocation(opKey2(), approved, exp)); !errors.Is(err, ErrPlanUnknown) {
+		t.Fatalf("rejeu d'une révocation accepté : %v", err)
+	}
+	// et la révocation n'a pas besoin d'être approuvée pour une approbation tardive
+	if err := s.Approve(ctx, pending, clock.now().Add(30*time.Minute), signApproval(opKey1(), pending, clock.now().Add(30*time.Minute))); err == nil {
+		t.Fatal("un plan révoqué a pu être approuvé ensuite")
 	}
 }
 

@@ -95,18 +95,20 @@ const (
 // Erreurs du contrat de plan — codes stables, mappés par le broker en
 // raisons machine-readable (plan-binding-invalid, plan-unknown, …).
 var (
-	ErrPlanSubmissionInvalid     = errors.New("pep: plan invalide (étapes 1..64, action ≤ 255, resource ≤ 1024, params ≤ 4096)")
-	ErrPlanBindingInvalid        = errors.New("pep: binding de plan mal formé (« TBPB1 » ‖ hash ‖ params)")
-	ErrPlanUnknown               = errors.New("pep: plan inconnu de cette cellule")
-	ErrPlanPending               = errors.New("pep: plan soumis, pas encore approuvé par l'opérateur")
-	ErrPlanExpired               = errors.New("pep: plan expiré")
-	ErrPlanRevoked               = errors.New("pep: plan révoqué par l'opérateur")
-	ErrPlanDeviation             = errors.New("pep: déviation du plan approuvé (étape, paramètre, ordre, rejeu)")
-	ErrPlanSubjectMismatch       = errors.New("pep: plan destiné à un autre agent (#235)")
-	ErrPlanApprovalExpiryInvalid = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
-	ErrPlanApprovalSignature     = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
-	ErrPlanStoreSaturated        = errors.New("pep: store de plans saturé (§4.3 : refus + alarme, jamais d'éviction)")
-	ErrPlanStoreFault            = errors.New("pep: faute du store de plans (feuille impossible — pas de preuve, pas de contrat)")
+	ErrPlanSubmissionInvalid       = errors.New("pep: plan invalide (étapes 1..64, action ≤ 255, resource ≤ 1024, params ≤ 4096)")
+	ErrPlanBindingInvalid          = errors.New("pep: binding de plan mal formé (« TBPB1 » ‖ hash ‖ params)")
+	ErrPlanUnknown                 = errors.New("pep: plan inconnu de cette cellule")
+	ErrPlanPending                 = errors.New("pep: plan soumis, pas encore approuvé par l'opérateur")
+	ErrPlanExpired                 = errors.New("pep: plan expiré")
+	ErrPlanRevoked                 = errors.New("pep: plan révoqué par l'opérateur")
+	ErrPlanDeviation               = errors.New("pep: déviation du plan approuvé (étape, paramètre, ordre, rejeu)")
+	ErrPlanSubjectMismatch         = errors.New("pep: plan destiné à un autre agent (#235)")
+	ErrPlanRevocationSignature     = errors.New("pep: signature de révocation invalide (trousseau opérateur épinglé, #244)")
+	ErrPlanRevocationExpiryInvalid = errors.New("pep: expiry de révocation hors bornes ]maintenant, TTL configuré] (#244)")
+	ErrPlanApprovalExpiryInvalid   = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
+	ErrPlanApprovalSignature       = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
+	ErrPlanStoreSaturated          = errors.New("pep: store de plans saturé (§4.3 : refus + alarme, jamais d'éviction)")
+	ErrPlanStoreFault              = errors.New("pep: faute du store de plans (feuille impossible — pas de preuve, pas de contrat)")
 )
 
 // PlanStep est une étape du plan présenté à l'opérateur : l'action et la
@@ -179,6 +181,19 @@ func HashPlan(cellID, subject string, submittedAt time.Time, policyID [32]byte, 
 func ApprovalMessage(planHash [32]byte, expiry time.Time) []byte {
 	msg := make([]byte, 0, 5+32+8)
 	msg = append(msg, "TBPA1"...)
+	msg = append(msg, planHash[:]...)
+	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
+}
+
+// RevocationMessage est le message que l'opérateur SIGNE pour révoquer un plan
+// (#244) : "TBPR1" ‖ planHash(32) ‖ expiry(u64 BE, unix s). Domaine DISTINCT de
+// l'approbation ("TBPA1") : une signature d'approbation ne vaut jamais révocation,
+// ni l'inverse — l'opérateur qui signe « j'approuve » ne signe pas « je coupe », et un
+// message volé à l'un ne sert pas l'autre. Même trousseau d'opérateurs épinglé (§12),
+// même fraîcheur bornée que l'approbation.
+func RevocationMessage(planHash [32]byte, expiry time.Time) []byte {
+	msg := make([]byte, 0, 5+32+8)
+	msg = append(msg, "TBPR1"...)
 	msg = append(msg, planHash[:]...)
 	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
 }
@@ -475,21 +490,55 @@ func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry t
 // dans les deux sens. Quarantaine, pas meurtre (esprit §7.3) : l'entrée
 // reste inspectable jusqu'à expiration, les tentatives d'exécution seront
 // refusées « plan-revoked », et la révocation laisse sa feuille.
-func (s *ContractStore) Revoke(ctx context.Context, planHash [32]byte) error {
+//
+// Une révocation est un acte d'OPÉRATEUR, signé comme une approbation (#244) :
+// signature Ed25519 de RevocationMessage(planHash, expiry) par une clé du trousseau
+// épinglé, expiry dans ]now, now+ApprovalTTL]. Sans cela, quiconque atteint le socket
+// d'administration pourrait couper les plans d'autrui. Toute tentative invalide laisse
+// une feuille de refus (comme Approve) ; une révocation réussie laisse une feuille
+// ATTRIBUÉE (« TBPL2 » : kid de l'opérateur, expiry, signature). La fraîcheur n'a pas de
+// plancher de 60 s : couper vite est le but — l'expiry borne seulement le rejeu d'un
+// message signé, et une révocation rejouée sur un plan déjà révoqué est un refus.
+func (s *ContractStore) Revoke(ctx context.Context, planHash [32]byte, expiry time.Time, sig []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock()
 	s.expireLocked(ctx, now)
 	e, ok := s.plans[planHash]
 	if !ok || e.status == planStatusRevoked || e.expired {
-		return s.writeRefusalLocked(ctx, planHash, planStepNA, "plan-unknown", ErrPlanUnknown, now)
+		return s.refuseRevocationLocked(ctx, planHash, "plan-unknown", ErrPlanUnknown, now)
 	}
-	if err := s.writeLeafLocked(ctx, planEventRevoke, planHash, planStepNA, 1, "ok", now); err != nil {
+	if ttl := expiry.Sub(now); ttl <= 0 || ttl > s.approvalTTL {
+		return s.refuseRevocationLocked(ctx, planHash, "plan-revocation-expiry-invalid", ErrPlanRevocationExpiryInvalid, now)
+	}
+	msg := RevocationMessage(planHash, expiry)
+	var revoker [16]byte
+	signed := false
+	for _, pub := range s.operatorKeys {
+		if ed25519.Verify(pub, msg, sig) {
+			signed = true
+			revoker = KeyIDFromPublicKey(pub)
+			break
+		}
+	}
+	if !signed {
+		return s.refuseRevocationLocked(ctx, planHash, "plan-revocation-signature-invalid", ErrPlanRevocationSignature, now)
+	}
+	if err := s.writeSignedLeafLocked(ctx, planEventRevoke, planHash, revoker, expiry, sig, now); err != nil {
 		s.tripStoreFault()
 		return ErrPlanStoreFault
 	}
 	e.status = planStatusRevoked
 	return nil
+}
+
+// refuseRevocationLocked trace le refus d'une révocation (event=revoke, verdict 0).
+func (s *ContractStore) refuseRevocationLocked(ctx context.Context, planHash [32]byte, reason string, err error, now time.Time) error {
+	if werr := s.writeLeafLocked(ctx, planEventRevoke, planHash, planStepNA, 0, reason, now); werr != nil {
+		s.tripStoreFault()
+		return ErrPlanStoreFault
+	}
+	return err
 }
 
 // PendingPlan est la vue LECTURE SEULE d'un plan en attente d'arbitrage,
@@ -787,10 +836,17 @@ func (s *ContractStore) writeLeafLocked(ctx context.Context, event byte, planHas
 // ApprovalMessage(planHash, expiry). Un refus d'approbation (signature
 // invalide) reste en « TBPL1 » : il n'y a pas d'approbateur à attribuer.
 func (s *ContractStore) writeApprovalLeafLocked(ctx context.Context, planHash [32]byte, kid [16]byte, expiry time.Time, sig []byte, now time.Time) error {
+	return s.writeSignedLeafLocked(ctx, planEventApprove, planHash, kid, expiry, sig, now)
+}
+
+// writeSignedLeafLocked inscrit la feuille « TBPL2 » d'un acte d'opérateur SIGNÉ
+// (approbation ou révocation, #244) : même forme, l'événement dit lequel. Le message
+// signé se reconstitue par ApprovalMessage ou RevocationMessage selon l'événement.
+func (s *ContractStore) writeSignedLeafLocked(ctx context.Context, event byte, planHash [32]byte, kid [16]byte, expiry time.Time, sig []byte, now time.Time) error {
 	const reason = "ok"
 	record := make([]byte, 0, 5+1+32+2+1+1+len(reason)+16+8+len(sig))
 	record = append(record, "TBPL2"...)
-	record = append(record, planEventApprove)
+	record = append(record, event)
 	record = append(record, planHash[:]...)
 	record = binary.BigEndian.AppendUint16(record, planStepNA)
 	record = append(record, 1, byte(len(reason)))
