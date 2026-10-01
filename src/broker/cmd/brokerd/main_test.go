@@ -242,6 +242,9 @@ func TestLoadConfigPKCS11NoDevFlagsNoSentinelRequired(t *testing.T) {
 // — Fixture d'assemblage (fichiers réels : genèse signée, seed 0600,
 // clés d'opérateurs) —
 
+// classOf : la classe est un pointeur obligatoire dans le registre (#241).
+func classOf(c uint8) *uint8 { return &c }
+
 type runFixture struct {
 	env             map[string]string
 	genDir          string
@@ -249,7 +252,7 @@ type runFixture struct {
 	opsFile         string
 	agentsFile      string
 	adminSock       string
-	sock            string // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
+	sock            string               // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
 }
 
@@ -379,9 +382,9 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	// du socket, que le réseau refuse (agent-transport-unbound).
 	agentsFile := filepath.Join(dir, "agents.json")
 	agents, err := json.Marshal(map[string]agentRegistryEntry{
-		"agent-1":   {Class: 3},
-		"agent-2":   {Class: 3},
-		"agent-net": {Class: 3, TransportIdentity: "agent-test"},
+		"agent-1":   {Class: classOf(3)},
+		"agent-2":   {Class: classOf(3)},
+		"agent-net": {Class: classOf(3), TransportIdentity: "agent-test"},
 	})
 	if err != nil {
 		t.Fatalf("registre d'agents: %v", err)
@@ -845,7 +848,7 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		t.Fatalf("operateurs: %v", err)
 	}
 	agentsFile := filepath.Join(dir, "agents.json")
-	agents, _ := json.Marshal(map[string]agentRegistryEntry{"agent-1": {Class: 3}})
+	agents, _ := json.Marshal(map[string]agentRegistryEntry{"agent-1": {Class: classOf(3)}})
 	if err := os.WriteFile(agentsFile, agents, 0o600); err != nil {
 		t.Fatalf("registre d'agents: %v", err)
 	}

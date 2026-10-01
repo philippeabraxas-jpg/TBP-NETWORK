@@ -589,7 +589,7 @@ func TestBrokerdRemovingAControllerByShiftingRanksIsRefused(t *testing.T) {
 	}
 	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
 	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
-	writeManifest(t, fx, pubs(fx.controllerPrivs[1:])...) // supprime le rang 1 : les rangs glissent
+	writeManifest(t, fx, pubs(fx.controllerPrivs[1:])...)       // supprime le rang 1 : les rangs glissent
 	signProof(t, fx, proof, conditionProvisioningTransition, 2) // après l'édition : la preuve porte l'état cible (#236)
 	err := boot(t, fx, sock)
 	if err == nil || !strings.Contains(err.Error(), "epoch0") {

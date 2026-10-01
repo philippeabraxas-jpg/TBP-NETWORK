@@ -111,6 +111,8 @@
 //	TBP_AGENT_REGISTRY_FILE JSON {"<subject>": {"class": 0..3,
 //	                        "quota"?: {"max_volume", "max_window_s"},
 //	                        "transport_identity"?: "<CN mTLS>"}, …}
+//	                        « class » OBLIGATOIRE, tout champ inconnu
+//	                        refusé au chargement (#241)
 //	                        ≥ 1 — registre d'agents (revue de sécurité
 //	                        #125) : identité/classe/quota résolues D'ICI,
 //	                        jamais depuis la déclaration de l'agent dans
@@ -175,6 +177,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -1318,7 +1321,10 @@ func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
 // demander AUCUN passeport (agent-quota-forbidden) — seules les actions
 // simples lui sont ouvertes.
 type agentRegistryEntry struct {
-	Class uint8 `json:"class"`
+	// Class est un POINTEUR et obligatoire (#241) : un uint8 absent vaudrait 0, soit la
+	// classe F — une entrée « {} » ou une faute de frappe (« clas ») serait chargée sans erreur
+	// et dégraderait l'agent voulu W, sans alarme.
+	Class *uint8 `json:"class"`
 	Quota *struct {
 		MaxVolume  uint64 `json:"max_volume"`
 		MaxWindowS uint64 `json:"max_window_s"`
@@ -1332,7 +1338,7 @@ type agentRegistryEntry struct {
 
 // loadAgentRegistry charge le registre d'agents (revue de sécurité #125) :
 // JSON {"<subject>": {"class": 0..3, "quota"?: {"max_volume", "max_window_s"}}, …},
-// ≥ 1 agent — même doctrine hors-bande que loadOperatorKeys ci-dessus :
+// ≥ 1 agent ; « class » obligatoire et tout champ inconnu refusé (#241) — même doctrine hors-bande que loadOperatorKeys ci-dessus :
 // provisionné à la genèse, jamais résolu dynamiquement, jamais accepté
 // depuis la demande d'émission elle-même.
 func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
@@ -1341,7 +1347,7 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 		return nil, fmt.Errorf("registre d'agents: %w", err)
 	}
 	var raw map[string]agentRegistryEntry
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeStrictJSON(data, &raw); err != nil {
 		return nil, fmt.Errorf("registre d'agents JSON: %w", err)
 	}
 	if len(raw) == 0 {
@@ -1352,10 +1358,13 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 		if subject == "" {
 			return nil, errors.New("registre d'agents : subject vide refusé")
 		}
-		if entry.Class > uint8(pep.ClassOut) {
-			return nil, fmt.Errorf("registre d'agents : agent %q classe %d hors [0..3] (§5.3)", subject, entry.Class)
+		if entry.Class == nil {
+			return nil, fmt.Errorf("registre d'agents : agent %q sans « class » — obligatoire (#241 : l'absence serait lue comme la classe F, sans erreur) ; vérifier l'orthographe des champs", subject)
 		}
-		rec := broker.AgentRecord{Class: pep.Class(entry.Class), TransportIdentity: entry.TransportIdentity}
+		if *entry.Class > uint8(pep.ClassOut) {
+			return nil, fmt.Errorf("registre d'agents : agent %q classe %d hors [0..3] (§5.3)", subject, *entry.Class)
+		}
+		rec := broker.AgentRecord{Class: pep.Class(*entry.Class), TransportIdentity: entry.TransportIdentity}
 		if entry.Quota != nil {
 			rec.Quota = &broker.AgentQuotaPolicy{
 				MaxVolume:  entry.Quota.MaxVolume,
@@ -1365,6 +1374,22 @@ func loadAgentRegistry(path string) (broker.StaticAgentRegistry, error) {
 		reg[subject] = rec
 	}
 	return reg, nil
+}
+
+// decodeStrictJSON décode UN document JSON en refusant les champs inconnus et tout contenu
+// après lui (#241). Les registres de provisionnement sont des fichiers de confiance écrits
+// à la main : une faute de frappe (« clas », « scop ») ne doit jamais être ignorée en silence
+// et remplacée par la valeur zéro du champ — fail-closed au chargement (§1).
+func decodeStrictJSON(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("contenu après le document JSON")
+	}
+	return nil
 }
 
 // skillRegistryEntry est la forme JSON d'un enregistrement du registre de
@@ -1388,7 +1413,7 @@ func loadSkillRegistry(path string) (broker.StaticSkillRegistry, error) {
 		return nil, fmt.Errorf("registre de skills: %w", err)
 	}
 	var raw map[string]skillRegistryEntry
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := decodeStrictJSON(data, &raw); err != nil {
 		return nil, fmt.Errorf("registre de skills JSON: %w", err)
 	}
 	if len(raw) == 0 {

@@ -439,6 +439,10 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # "quota"?: {"max_volume",
 #                                      # "max_window_s"},
 #                                      # "transport_identity"?: "<CN mTLS>"}, …}
+#                                      # « class » est OBLIGATOIRE et tout
+#                                      # champ inconnu est refusé au chargement
+#                                      # (#241) : une faute de frappe (« clas »)
+#                                      # ne devient jamais la classe 0.
 #                                      # — identité/classe/quota résolues
 #                                      # d'ICI, jamais de la déclaration de
 #                                      # l'agent dans sa demande d'émission.
