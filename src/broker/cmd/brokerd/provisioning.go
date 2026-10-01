@@ -71,6 +71,13 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 		// l'autorité qui décide QUELS certificats valent identité d'agent
 		files = append(files, registry.ProvisioningFile{Name: "tls-client-ca", Path: cfg.netTLSClientCAFile})
 	}
+	// l'ÉCHELLE : k du quorum et topologie, engagés dans le témoin (issue #224) — abaisser
+	// TBP_QUORUM_MIN par l'environnement diverge désormais, et ne s'autorise que par k ATTESTÉ.
+	topology := "mono"
+	if cfg.topology {
+		topology = "multi"
+	}
+	files = append(files, registry.ProvisioningFile{Name: "quorum-settings", Content: pep.QuorumSettings(cfg.quorumMin, topology)})
 	return append(files, cfg.provExtra...)
 }
 
@@ -88,6 +95,14 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 		path := cfg.provProofFile
 		manifest := filepath.Join(cfg.genesisDir, "manifest.json")
 		authorize = func(prev map[string][]byte) error {
+			k := cfg.quorumMin
+			if raw, ok := prev["quorum-settings"]; ok {
+				attestedK, err := pep.ParseQuorumSettings(raw)
+				if err != nil {
+					return fmt.Errorf("réglages de quorum attestés illisibles: %w", err)
+				}
+				k = attestedK // k ATTESTÉ, pas celui de l'environnement (#224)
+			}
 			var controllers map[int]ed25519.PublicKey
 			var err error
 			if raw, ok := prev["genesis-manifest"]; ok {
@@ -102,7 +117,7 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 			for _, pub := range controllers {
 				keyring[pep.KeyIDFromPublicKey(pub)] = pub
 			}
-			return pep.VerifyQuorumProofFile(path, conditionProvisioningTransition, cfg.cellID, keyring, cfg.quorumMin)
+			return pep.VerifyQuorumProofFile(path, conditionProvisioningTransition, cfg.cellID, keyring, k)
 		}
 	}
 	g, err := registry.NewProvisioningGuard(registry.ProvisioningGuardOptions{

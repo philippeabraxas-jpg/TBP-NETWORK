@@ -155,8 +155,10 @@ pepd: AVERTISSEMENT quorum k=1 (1 contrôleur(s) épinglé(s)) : une seule clé 
 
 À lire comme une liste de contrôle : y a-t-il, *aujourd'hui*, une copie hors machine de la clé ?
 Est-ce encore l'échelle où vous voulez être ? Au-dessus de l'échelle 1, k ≥ 2 et n ≥ k + 1 sont la
-recommandation ([scales.fr.md](scales.fr.md)). `TBP_QUORUM_MIN` est un réglage d'environnement que le
-témoin de provisionnement n'atteste pas (encore) : l'abaisser en éditant l'environnement affaiblit tous les actes gouvernés, suivi dans #224.
+recommandation ([scales.fr.md](scales.fr.md)). `TBP_QUORUM_MIN` est lu dans l'environnement, mais depuis #224 le témoin de provisionnement
+l'atteste (l'entrée `quorum-settings` : k et topologie) : l'abaisser en éditant l'environnement
+diverge du témoin, et le changement n'est autorisé que par le k **attesté**, pas par celui que
+vous venez d'écrire.
 
 ## L'exercice
 
