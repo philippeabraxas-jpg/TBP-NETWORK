@@ -417,6 +417,9 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # "quota"?: {"max_volume",
 #                                      # "max_window_s"},
 #                                      # "transport_identity"?: "<mTLS CN>"}, …}
+#                                      # "class" is REQUIRED and any unknown
+#                                      # field is refused at load (#241): a
+#                                      # typo ("clas") never becomes class 0.
 #                                      # — identity/class/quota resolved from
 #                                      # HERE, never from the agent's own
 #                                      # declaration in its issuance
