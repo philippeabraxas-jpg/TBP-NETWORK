@@ -80,8 +80,11 @@ Câblés à ce jour :
 
 | Producteur | Feuilles | Configuration |
 |---|---|---|
-| `pepd` — audit de réécriture d'ano (`TBAN1`, #178) | `KindTelemetry` | `TBP_AUDIT_RECORDS` (chemin du journal) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Requis** dès que `TBP_PROXY_ANO_SOCKET` est déclaré, refusés sans lui : `pepd` ne démarre pas une anonymisation dont l'audit ne serait pas vérifiable. |
+| `pepd` — décisions : validateur (`TBPD1`/`TBPD2`), client OPA, coupures de quota, refus dry-run | `KindDecision` | `TBP_AUDIT_RECORDS` (chemin du journal) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Requis** par `pepd` (sans journal il ne démarre pas). Un journal qui refuse d'écrire ⇒ aucune feuille ⇒ un allow devient un deny (`leaf-write-failed`). |
+| `pepd` — audit de réécriture d'ano (`TBAN1`, #178) | `KindTelemetry` | même journal (partagé) |
 
-Tous les autres producteurs inscrivent encore une feuille nue : leurs feuilles
-n'ont pas d'entrée de journal et `tbp-audit` n'a rien à en dire. Les câbler est
-suivi dans #275, un producteur à la fois.
+Tous les autres producteurs (brokerd, supervisord, la feuille de télémétrie du
+dry-run, alarmes d'horloge, bascules de mode, déclenchements fail-closed,
+provisionnement, …) inscrivent encore une feuille nue : leurs feuilles n'ont pas
+d'entrée de journal et `tbp-audit` n'a rien à en dire. Les câbler est suivi dans
+#275, un producteur à la fois.

@@ -197,6 +197,10 @@ type QuotaLedgerOptions struct {
 	// Leaves est la couture registre (T7) : toute coupure laisse une
 	// feuille deny portant le jti. Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd le renseigne toujours.
+	Journal *registry.RecordStore
 	// OnCut est le point d'insertion du terminator : appelé à chaque
 	// coupure pour terminer la session proprement. Nil ⇒ pas de callback
 	// (le refus reste fail-closed).
@@ -216,8 +220,9 @@ type QuotaLedger struct {
 	counters map[[16]byte]*PassportCounter
 
 	cellID string
-	salt   []byte
-	leaves LeafSink
+	salt    []byte
+	leaves  LeafSink
+	journal *registry.RecordStore
 	onCut  func(jti [16]byte, reason string)
 	onTrip func(reason string)
 	now    func() time.Time
@@ -268,6 +273,7 @@ func NewQuotaLedger(opts QuotaLedgerOptions) (*QuotaLedger, error) {
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
+		journal:  opts.Journal,
 		onCut:    opts.OnCut,
 		onTrip:   opts.OnTrip,
 		now:      now,
@@ -432,15 +438,9 @@ func (l *QuotaLedger) tripLocked() {
 // hash-only, le sel reste chez le producteur). L'échec est alarmé (T14) —
 // la coupure, elle, a déjà fail-closed.
 func (l *QuotaLedger) writeCutLeaf(jti [16]byte, reason string) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindDecision,
-		CellID:      l.cellID,
-		PayloadHash: registry.HashPayload(l.salt, decisionLeafRecord(jti, false, reason)),
-		Timestamp:   l.now().UnixNano(),
-	}
 	// Consume ne porte pas de contexte (chemin data-plane) : l'append
 	// hérite du contexte d'arrière-plan, comme le fait le terminator.
-	if _, err := l.leaves.Append(context.Background(), leaf); err != nil && l.onTrip != nil {
+	if _, err := appendLeaf(context.Background(), l.leaves, l.journal, registry.KindDecision, l.cellID, l.salt, decisionLeafRecord(jti, false, reason), l.now().UnixNano()); err != nil && l.onTrip != nil {
 		l.onTrip(ReasonLeafWriteFailed)
 	}
 }

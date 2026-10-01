@@ -78,8 +78,10 @@ Wired so far:
 
 | Producer | Leaves | Configuration |
 |---|---|---|
-| `pepd` — ano rewrite audit (`TBAN1`, #178) | `KindTelemetry` | `TBP_AUDIT_RECORDS` (journal path) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Required** when `TBP_PROXY_ANO_SOCKET` is set, refused without it: `pepd` does not start an anonymisation whose audit could not be verified. |
+| `pepd` — decisions: validator (`TBPD1`/`TBPD2`), OPA client, quota cuts, dry-run refusals | `KindDecision` | `TBP_AUDIT_RECORDS` (journal path) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Required** by `pepd` (no journal ⇒ it does not start). A journal that refuses a write ⇒ no leaf ⇒ an allow becomes a deny (`leaf-write-failed`). |
+| `pepd` — ano rewrite audit (`TBAN1`, #178) | `KindTelemetry` | same journal (shared) |
 
-Every other producer still appends a bare leaf: its leaves have no journal
-entry and `tbp-audit` has nothing to say about them. Wiring them is tracked in
-#275, one producer at a time.
+Every other producer (brokerd, supervisord, the dry-run telemetry leaf, clock
+alarms, mode switches, fail-closed trips, provisioning, …) still appends a bare
+leaf: its leaves have no journal entry and `tbp-audit` has nothing to say about
+them. Wiring them is tracked in #275, one producer at a time.

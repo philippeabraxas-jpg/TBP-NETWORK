@@ -145,10 +145,10 @@
 //	                   refuse la requête. Absent ⇒ trafic transmis tel quel
 //	                   (destination dans la cellule / liste blanche locale).
 //	                   TBP_PROXY_ANO_TIMEOUT_MS (100–30000, défaut 3000).
-//	TBP_AUDIT_RECORDS + TBP_AUDIT_RECORDS_KEY_FILE  (#275, #271) — journal
-//	                   chiffré du clair des feuilles d'audit d'ano et sa clé
-//	                   (0600, `tbp-audit keygen`). REQUIS avec
-//	                   TBP_PROXY_ANO_SOCKET, refusés sans lui.
+//	TBP_AUDIT_RECORDS + TBP_AUDIT_RECORDS_KEY_FILE  (#275, #271) — REQUIS :
+//	                   journal chiffré du clair des feuilles de décision (et
+//	                   d'audit d'ano) et sa clé (0600, `tbp-audit keygen`),
+//	                   à vérifier avec `tbp-audit verify`.
 //
 // Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
 // (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
@@ -288,6 +288,15 @@ func run() error {
 		}
 	}()
 
+	// Journal des enregistrements d'audit (#275, #271) : le clair de chaque
+	// feuille de décision, chiffré, vérifiable avec `tbp-audit verify`. REQUIS —
+	// un pepd dont les décisions ne seraient pas vérifiables ne démarre pas.
+	auditStore, err := openAuditStore(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275): %w", err)
+	}
+	defer auditStore.Close()
+
 	// Mesure des trousseaux épinglés (issue #192) : AVANT le démarrage mesuré,
 	// dont la genèse écrit des feuilles (la taille du journal distingue ici un
 	// premier démarrage d'un témoin effacé).
@@ -419,6 +428,7 @@ func run() error {
 		CellID:       cellID,
 		Salt:         salt,
 		Leaves:       cellLog,
+		Journal:      auditStore,
 		OnTrip:       failClosed.OnTrip(),
 	})
 	if err != nil {
@@ -478,6 +488,7 @@ func run() error {
 		PolicyID:   policy,
 		Salt:       salt,
 		Leaves:     decisionLeaves,
+		Journal:    auditStore,
 		AntiReplay: antiReplay,
 		Quota:      ledger,
 		Gate:       failClosed,
@@ -489,7 +500,7 @@ func run() error {
 	// Arbitrage OPA (T11) durci — revue de sécurité #92 : obligatoire
 	// (A2), transport authentifié par SO_PEERCRED (A3), révision vérifiée
 	// au démarrage puis périodiquement (A5). Voir opa_setup.go.
-	opa, err := setupOPA(ctx, cellID, salt, policy, cellLog, failClosed.OnTrip(), os.Getenv)
+	opa, err := setupOPA(ctx, cellID, salt, policy, cellLog, auditStore, failClosed.OnTrip(), os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -601,13 +612,6 @@ func run() error {
 		}
 		proxyOpts := pep.ProxyOptions{Listener: listener, Backend: backend}
 		// #178 : destination hors cellule ⇒ anonymisation par ano (optionnel)
-		auditStore, err := openAuditStore(os.Getenv)
-		if err != nil {
-			return fmt.Errorf("pepd: journal d'audit d'ano (#275): %w", err)
-		}
-		if auditStore != nil {
-			defer auditStore.Close()
-		}
 		if err := applyAno(ctx, os.Getenv, &proxyOpts, cellLog, auditStore, cellID, salt); err != nil {
 			return fmt.Errorf("pepd: anonymisation du proxy (#178): %w", err)
 		}

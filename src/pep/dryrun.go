@@ -237,6 +237,7 @@ type DryRunGate struct {
 	cellID  string
 	salt    []byte
 	leaves  LeafSink
+	journal *registry.RecordStore
 	now     func() time.Time
 	onAlarm func(string)
 }
@@ -255,6 +256,10 @@ type DryRunGateOptions struct {
 	CellID string
 	Salt   []byte // ≥ 16 octets, reste chez le producteur (§6.2)
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd le renseigne toujours.
+	Journal *registry.RecordStore
 	// Now est l'horloge (tests : horloge manuelle). Défaut time.Now.
 	Now func() time.Time
 	// OnAlarm est la couture T14 (échec d'écriture de feuille).
@@ -289,7 +294,7 @@ func NewDryRunGate(opts DryRunGateOptions) (*DryRunGate, error) {
 	}
 	return &DryRunGate{
 		runner: opts.Runner, timeout: timeout, cellID: opts.CellID,
-		salt: opts.Salt, leaves: opts.Leaves, now: now, onAlarm: opts.OnAlarm,
+		salt: opts.Salt, leaves: opts.Leaves, journal: opts.Journal, now: now, onAlarm: opts.OnAlarm,
 	}, nil
 }
 
@@ -359,13 +364,7 @@ func (g *DryRunGate) Execute(ctx context.Context, jti [16]byte, action, resource
 // l'appelant doit avoir sa feuille ; le validateur a déjà tracé SON allow
 // avant que le dry-run n'échoue).
 func (g *DryRunGate) writeDenyLeaf(jti [16]byte, reason string) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindDecision,
-		CellID:      g.cellID,
-		PayloadHash: registry.HashPayload(g.salt, decisionLeafRecord(jti, false, reason)),
-		Timestamp:   g.now().UnixNano(),
-	}
-	if _, err := g.leaves.Append(context.Background(), leaf); err != nil && g.onAlarm != nil {
+	if _, err := appendLeaf(context.Background(), g.leaves, g.journal, registry.KindDecision, g.cellID, g.salt, decisionLeafRecord(jti, false, reason), g.now().UnixNano()); err != nil && g.onAlarm != nil {
 		g.onAlarm(ReasonLeafWriteFailed)
 	}
 }

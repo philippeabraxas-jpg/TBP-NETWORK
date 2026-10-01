@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +32,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/transparency-dev/tessera/client"
 
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -294,7 +297,20 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		return
 	}
 
+	// Journal des enregistrements d'audit de pepd (#275) : REQUIS. Clé et journal
+	// neufs à chaque exécution (GenerateRecordKey n'écrase jamais).
+	auditKeyPath := filepath.Join(cfg.out, "pepd-audit.key")
+	auditJournalPath := filepath.Join(cfg.out, "pepd-audit-records.jsonl")
+	_ = os.Remove(auditKeyPath)
+	_ = os.Remove(auditJournalPath)
+	if err := registry.GenerateRecordKey(auditKeyPath); err != nil {
+		s.fail(ph, "clé du journal d'audit de pepd", err)
+		return
+	}
+
 	pepdEnv := append(os.Environ(),
+		"TBP_AUDIT_RECORDS="+auditJournalPath,
+		"TBP_AUDIT_RECORDS_KEY_FILE="+auditKeyPath,
 		"TBP_CELL_ID="+monoCellID,
 		"TBP_SALT="+hex.EncodeToString(salt),
 		"TBP_KEYRING_FILE="+keyringPath,
@@ -438,6 +454,12 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	s.add(ph, "témoin: jeton signé par une clé inconnue → refus",
 		err == nil && !er.Allow,
 		fmt.Sprintf("allow=%v reason=%s", er.Allow, er.Reason))
+
+	// --- #275 : le clair des décisions est vérifiable (tbp-audit verify) ----
+	// Chaque décision rendue ci-dessus a laissé sa feuille ET son clair dans le
+	// journal : le clair redonne le hash de la feuille, et la feuille est dans
+	// le log sous un checkpoint signé (preuve d'inclusion RFC 6962).
+	verifyAuditJournal(s, ph, regDir, auditJournalPath, auditKeyPath)
 
 	// --- Étape : bascule gouvernée monitor→closed (§5.3) --------------------
 	// Preuve de quorum RÉELLE (revue de sécurité #89) : k signatures Ed25519
@@ -699,4 +721,54 @@ func postUnixRaw(hc *http.Client, url, body string) (int, []byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return resp.StatusCode, raw, err
+}
+
+// verifyAuditJournal relit le journal d'audit de pepd et vérifie chaque
+// enregistrement contre le log de la cellule — ce que fait `tbp-audit verify
+// -log … -vkey-file …` pour un auditeur externe (#275, #271).
+func verifyAuditJournal(s *suite, ph, regDir, journalPath, keyPath string) {
+	key, err := registry.LoadRecordKey(keyPath)
+	if err != nil {
+		s.add(ph, "#275 : clé du journal d'audit lisible", false, err.Error())
+		return
+	}
+	recs, err := registry.ReadRecords(journalPath, key)
+	if err != nil {
+		s.add(ph, "#275 : journal d'audit de pepd lisible et déchiffrable", false, err.Error())
+		return
+	}
+	vkeyRaw, err := os.ReadFile(filepath.Join(regDir, "cell_log.vkey"))
+	if err != nil {
+		s.add(ph, "#275 : clé publique du log", false, err.Error())
+		return
+	}
+	verifier, err := registry.NewVerifier(string(vkeyRaw))
+	if err != nil {
+		s.add(ph, "#275 : clé publique du log valide", false, err.Error())
+		return
+	}
+	fetch := client.FileFetcher{Root: regDir}
+	decisions, bad := 0, ""
+	for i, r := range recs {
+		// L'écriture de pepd est asynchrone bornée : le checkpoint signé peut
+		// ne pas couvrir encore la toute dernière feuille. On laisse quelques
+		// secondes au log avant de conclure à un orphelin.
+		var err error
+		for try := 0; try < 50; try++ {
+			if _, err = r.VerifyInLog(context.Background(), fetch, verifier); !errors.Is(err, registry.ErrRecordNotInLog) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			bad = fmt.Sprintf("enregistrement %d : %v", i+1, err)
+			break
+		}
+		if r.Leaf.Kind == registry.KindDecision {
+			decisions++
+		}
+	}
+	s.add(ph, "#275 : le clair de chaque décision est vérifiable (hash + inclusion dans le log signé)",
+		bad == "" && decisions >= 3,
+		fmt.Sprintf("%d enregistrements, %d décisions %s", len(recs), decisions, bad))
 }

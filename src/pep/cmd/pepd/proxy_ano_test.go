@@ -171,11 +171,6 @@ func TestApplyAnoRequiresAuditStore(t *testing.T) {
 	if opts.Rewriter != nil || opts.OnRewrite != nil {
 		t.Fatal("aucun hook ne doit être posé sans journal d'audit")
 	}
-	// journal sans ano : configuration incohérente
-	store, _, _ := testAuditStore(t)
-	if err := applyAno(context.Background(), anoEnv(nil), &opts, &leafRecorder{}, store, "cell-a", bytes.Repeat([]byte{1}, 32)); err == nil {
-		t.Fatal("journal d'audit sans ano accepté")
-	}
 }
 
 func TestOpenAuditStoreConfig(t *testing.T) {
@@ -185,8 +180,9 @@ func TestOpenAuditStoreConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal := filepath.Join(dir, "records.jsonl")
-	if st, err := openAuditStore(anoEnv(nil)); err != nil || st != nil {
-		t.Fatalf("rien de déclaré : (%v, %v), attendu (nil, nil)", st, err)
+	if st, err := openAuditStore(anoEnv(nil)); err == nil {
+		_ = st.Close()
+		t.Fatal("pepd sans journal d'audit accepté : il est requis (#275)")
 	}
 	for name, env := range map[string]map[string]string{
 		"journal sans clé": {"TBP_AUDIT_RECORDS": journal},
@@ -200,8 +196,8 @@ func TestOpenAuditStoreConfig(t *testing.T) {
 	}
 	// les deux ensemble ou aucun : message explicite, pas une erreur d'ouverture de hasard
 	for _, env := range []map[string]string{{"TBP_AUDIT_RECORDS": journal}, {"TBP_AUDIT_RECORDS_KEY_FILE": keyFile}} {
-		if _, err := openAuditStore(anoEnv(env)); err == nil || !strings.Contains(err.Error(), "vont ensemble") {
-			t.Errorf("déclaration à moitié : %v, attendu l'erreur « vont ensemble »", err)
+		if _, err := openAuditStore(anoEnv(env)); err == nil || !strings.Contains(err.Error(), "requis ensemble") {
+			t.Errorf("déclaration à moitié : %v, attendu l'erreur « requis ensemble »", err)
 		}
 	}
 	if err := os.Chmod(keyFile, 0o644); err != nil {
