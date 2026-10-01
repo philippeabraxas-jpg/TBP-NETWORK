@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 func keyFile(t *testing.T, dir, name string, seedByte byte) (ed25519.PrivateKey, string) {
@@ -187,5 +190,147 @@ func TestKeygenBuildsAKeyringTheVerifierAccepts(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(ringPath); string(got) != "pas du json" {
 		t.Fatal("trousseau corrompu modifié")
+	}
+}
+
+// --- preuves de classe W pour brokerd (wproof / wmessage / wassemble) ------------------
+
+type wLeafSink struct{ n int }
+
+func (w *wLeafSink) Append(_ context.Context, _ registry.Leaf) (uint64, error) {
+	w.n++
+	return uint64(w.n), nil
+}
+
+// wGate : le VRAI QuorumGate de brokerd, 2-sur-3, sur un manifeste dont l'ordre fait les key_id.
+func wGate(t *testing.T, dir string, pubs []ed25519.PublicKey, policy [32]byte) (*cluster.QuorumGate, string) {
+	t.Helper()
+	var hexPubs []string
+	ctrls := map[int]ed25519.PublicKey{}
+	for i, p := range pubs {
+		hexPubs = append(hexPubs, hex.EncodeToString(p))
+		ctrls[i+1] = p
+	}
+	data, _ := json.Marshal(map[string][]string{"pubkeys": hexPubs})
+	mf := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(mf, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := cluster.NewMemoryProofStore(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := cluster.NewQuorumGate(cluster.QuorumGateConfig{
+		CellID: "cell-a", Salt: make([]byte, 16), Leaves: &wLeafSink{}, Controllers: ctrls, K: 2,
+		PolicyID: policy, Consumed: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g, mf
+}
+
+// La preuve que l'outil fabrique est acceptée par le vrai QuorumGate de brokerd à k = 2, refusée
+// à 1 signature, et à usage unique (#206). Le key_id vient de la position dans le manifeste.
+func TestWProofIsAcceptedByTheRealQuorumGate(t *testing.T) {
+	dir := t.TempDir()
+	k1, f1 := keyFile(t, dir, "k1", 1)
+	k2, f2 := keyFile(t, dir, "k2", 2)
+	k3, _ := keyFile(t, dir, "k3", 3)
+	_, fOut := keyFile(t, dir, "intrus", 9)
+	var policy [32]byte
+	policy[0] = 7
+	policyHex := hex.EncodeToString(policy[:])
+	// l'ordre du manifeste : k3, k1, k2 → leurs key_id sont 1, 2, 3 et NE sont PAS l'ordre des fichiers
+	g, mf := wGate(t, dir, []ed25519.PublicKey{k3.Public().(ed25519.PublicKey), k1.Public().(ed25519.PublicKey), k2.Public().(ed25519.PublicKey)}, policy)
+	ctx := context.Background()
+	mk := func(out string, files ...string) error {
+		args := []string{"-manifest", mf, "-action", "read", "-resource", "doc-1", "-policy", policyHex, "-out", out}
+		for _, f := range files {
+			args = append(args, "-key", f)
+		}
+		return cmdWProof(args)
+	}
+	read := func(p string) []byte {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	one := filepath.Join(dir, "one.json")
+	if err := mk(one, f1); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.VerifyClassW(ctx, read(one), "read", "doc-1", 0); err == nil {
+		t.Fatal("une seule signature acceptée pour k = 2")
+	}
+	two := filepath.Join(dir, "two.json")
+	if err := mk(two, f1, f2); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.VerifyClassW(ctx, read(two), "read", "doc-1", 0); err != nil {
+		t.Fatalf("preuve à 2 signatures refusée par le vrai gate : %v", err)
+	}
+	if err := g.VerifyClassW(ctx, read(two), "read", "doc-1", 0); err == nil {
+		t.Fatal("la même preuve a servi deux fois (#206)")
+	}
+	// mauvaise ressource : la liaison la refuse
+	three := filepath.Join(dir, "three.json")
+	if err := mk(three, f1, f2); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.VerifyClassW(ctx, read(three), "read", "AUTRE", 0); err == nil {
+		t.Fatal("preuve acceptée pour une autre ressource")
+	}
+	// clé hors manifeste, clé en double : l'outil refuse de fabriquer
+	if err := mk(filepath.Join(dir, "x.json"), f1, fOut); err == nil {
+		t.Fatal("clé hors manifeste acceptée par l'outil")
+	}
+	if err := mk(filepath.Join(dir, "y.json"), f1, f1); err == nil {
+		t.Fatal("contrôleur en double accepté par l'outil")
+	}
+}
+
+// Le chemin HSM : wmessage écrit la déclaration, les signatures se font ailleurs, wassemble assemble —
+// et le résultat est accepté par le vrai gate.
+func TestWMessageAndAssembleMatchTheGate(t *testing.T) {
+	dir := t.TempDir()
+	k1, _ := keyFile(t, dir, "k1", 1)
+	k2, _ := keyFile(t, dir, "k2", 2)
+	k3, _ := keyFile(t, dir, "k3", 3)
+	var policy [32]byte
+	policy[1] = 5
+	g, _ := wGate(t, dir, []ed25519.PublicKey{k1.Public().(ed25519.PublicKey), k2.Public().(ed25519.PublicKey), k3.Public().(ed25519.PublicKey)}, policy)
+	stmt := filepath.Join(dir, "stmt.json")
+	if err := cmdWMessage([]string{"-action", "read", "-resource", "doc-1", "-policy", hex.EncodeToString(policy[:]), "-out", stmt}); err != nil {
+		t.Fatal(err)
+	}
+	var st cluster.QuorumStatement
+	raw, _ := os.ReadFile(stmt)
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := json.Marshal(st)
+	proof := filepath.Join(dir, "proof.json")
+	err := cmdWAssemble([]string{"-statement", stmt, "-quorum", "2-of-3", "-out", proof,
+		"-sig", "1=" + hex.EncodeToString(ed25519.Sign(k1, canonical)),
+		"-sig", "3=" + hex.EncodeToString(ed25519.Sign(k3, canonical))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, _ := os.ReadFile(proof)
+	if err := g.VerifyClassW(context.Background(), pb, "read", "doc-1", 0); err != nil {
+		t.Fatalf("preuve assemblée refusée par le vrai gate : %v", err)
+	}
+	if err := cmdWAssemble([]string{"-statement", stmt, "-out", proof, "-sig", "1=zz"}); err == nil {
+		t.Fatal("signature mal formée acceptée")
+	}
+	if err := cmdWMessage([]string{"-action", "read", "-resource", "doc-1", "-policy", "abc", "-out", stmt}); err == nil {
+		t.Fatal("bundle mal formé accepté")
+	}
+	if err := cmdWMessage([]string{"-action", "read", "-resource", "doc-1", "-policy", hex.EncodeToString(policy[:]), "-ttl", "9999", "-out", stmt}); err == nil {
+		t.Fatal("ttl hors bornes accepté")
 	}
 }
