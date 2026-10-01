@@ -60,6 +60,10 @@ refused in production:
 - a plan approval for classes F, I and W (class W adds the quorum);
 - the provisioning witness and measured boot at startup (#112, #192).
 
+A dev escape hatch is refused without the sentinel, and when it is accepted it
+leaves a telemetry leaf in the cell's registry (issue #208: the names of the
+hatches that were active, hash-only) — never only a log line.
+
 This list is the starting point for the "inalienable rules" the full-scale
 handshake will define; it is what exists in the code today, not a decision.
 Whether a brick may be relaxed at a given scale is a decision recorded here,

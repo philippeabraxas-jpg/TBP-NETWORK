@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
@@ -582,6 +583,15 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		after[registry.KindDecision] >= 6, fmt.Sprintf("KindDecision=%d", after[registry.KindDecision]))
 	s.add(ph, "registre: bascule de posture tracée (KindTelemetry ≥ 1)",
 		after[registry.KindTelemetry] >= 1, fmt.Sprintf("KindTelemetry=%d", after[registry.KindTelemetry]))
+
+	// --- Issue #208 (R-13) : les échappatoires dev actives laissent une feuille ---
+	// Ce pepd tourne avec TBP_OPA_INSECURE_TCP_DEV et
+	// TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE (déclarés par le sentinel du
+	// selftest) : l'alarme n'est plus qu'un log, le registre en porte la preuve.
+	devLeaf := registry.HashPayload(salt, devmode.ActiveRecord([]string{"TBP_OPA_INSECURE_TCP_DEV", "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE"}))
+	foundDev, derr := waitPayloadHash(ctx, monoCellID, regDir, devLeaf, 5*time.Second)
+	s.add(ph, "#208 : les échappatoires dev actives de pepd sont consignées en feuille KindTelemetry (recalculable par re-hash)",
+		derr == nil && foundDev, fmt.Sprintf("trouvée=%v err=%v", foundDev, derr))
 
 	// --- Issue #205 (R-18) : un redémarrage d'OPA ne doit PAS immobiliser la
 	// cellule. OPA est tué, pepd refuse (fail-closed, par requête puis par

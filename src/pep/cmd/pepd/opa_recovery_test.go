@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -59,5 +60,31 @@ func TestAutoClearCandidatesExcludeBadResponseAndMismatch(t *testing.T) {
 		if got[never] {
 			t.Errorf("%s ne doit JAMAIS être levé automatiquement", never)
 		}
+	}
+}
+
+// Issue #208 : la liste des échappatoires dev qui alimente la feuille d'audit
+// est EXACTEMENT celle que la garde du sentinel contrôle — pas une seconde
+// liste qui pourrait dériver.
+func TestDevEscapeHatchFlagsFeedBothTheGuardAndTheLeaf(t *testing.T) {
+	all := map[string]string{
+		"TBP_OPA_DISABLED_DEV_UNSAFE":           "1",
+		"TBP_OPA_INSECURE_TCP_DEV":              "1",
+		"TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE": "1",
+		"TBP_PROVISIONING_DISABLED_DEV_UNSAFE":  "1",
+	}
+	if got := devEscapeHatchFlags(envOf(all)); len(got) != 4 {
+		t.Fatalf("échappatoires listées = %v, veut les 4", got)
+	}
+	if got := devEscapeHatchFlags(envOf(nil)); len(got) != 0 {
+		t.Fatalf("sans échappatoire : %v", got)
+	}
+	if got := devEscapeHatchFlags(envOf(map[string]string{"TBP_OPA_INSECURE_TCP_DEV": "0"})); len(got) != 0 {
+		t.Fatalf("valeur « 0 » comptée comme active : %v", got)
+	}
+	// Sans sentinel, la garde refuse exactement quand la liste est non vide.
+	statAbsent := func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	if err := checkDevEscapeHatches(envOf(all), statAbsent); err == nil {
+		t.Fatal("quatre échappatoires sans sentinel acceptées")
 	}
 }

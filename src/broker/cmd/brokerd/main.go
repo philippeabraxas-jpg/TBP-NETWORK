@@ -247,6 +247,7 @@ func main() {
 type config struct {
 	cellID      string
 	salt        []byte
+	devFlags    []string // échappatoires dev actives — consignées en feuille (#208)
 	policyID    [32]byte
 	registryDir string
 	opaEndpoint string
@@ -376,7 +377,8 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		return nil, errors.New("TBP_ISSUER_PKCS11_MODULE, _TOKEN_LABEL, _KEY_LABEL et _PIN_FILE sont tous requis ensemble")
 	}
 	provDisabled := getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1"
-	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile, provDisabled)); err != nil {
+	devFlags := devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile, provDisabled)
+	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devFlags); err != nil {
 		return nil, err
 	}
 	provWitnessFile, provProofFile, provExtra, err := loadProvisioningConfig(getenv, provDisabled)
@@ -475,6 +477,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	return &config{
 		cellID:               cellID,
 		salt:                 salt,
+		devFlags:             devFlags,
 		policyID:             policy,
 		registryDir:          registryDir,
 		opaEndpoint:          opaEndpoint,
@@ -569,6 +572,13 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	// taille distingue un premier démarrage d'un témoin effacé).
 	if err := setupProvisioning(ctx, cfg, cellLog, signer, verifier, onTrip); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
+	}
+
+	// Échappatoires dev actives (issue #208, R-13) : une feuille opposable, pas
+	// seulement un log. APRÈS le provisionnement, dont la garde se sert de la
+	// taille du journal pour distinguer un premier démarrage d'un témoin effacé.
+	if err := devmode.RecordActive(ctx, cellLog, cfg.cellID, cfg.salt, cfg.devFlags, nil); err != nil {
+		return err
 	}
 
 	// Transport OPA durci (revue de sécurité #92, A3) : Unix + SO_PEERCRED

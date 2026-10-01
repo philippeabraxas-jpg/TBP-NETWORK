@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
@@ -86,4 +87,37 @@ func countKinds(ctx context.Context, cellID, regDir string) (map[byte]int, error
 		counts[l.Kind]++
 	}
 	return counts, nil
+}
+
+// waitPayloadHash attend (tessera intègre de façon asynchrone) qu'une feuille
+// de hash donné soit présente dans le registre — scan VÉRIFIÉ, motif countKinds.
+func waitPayloadHash(ctx context.Context, cellID, regDir string, want [32]byte, timeout time.Duration) (bool, error) {
+	vkeyB, err := os.ReadFile(filepath.Join(regDir, "cell_log.vkey"))
+	if err != nil {
+		return false, fmt.Errorf("clé de vérification: %w", err)
+	}
+	verifier, err := registry.NewVerifier(string(vkeyB))
+	if err != nil {
+		return false, fmt.Errorf("verifier: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		boot, w, err := supervision.NewChainWatcher(ctx, cellID, regDir, registryOrigin(cellID), verifier, 0)
+		if err != nil {
+			return false, fmt.Errorf("chain watcher: %w", err)
+		}
+		more, err := w.Tick(ctx)
+		if err != nil {
+			return false, fmt.Errorf("tick: %w", err)
+		}
+		for _, l := range append(boot, more...) {
+			if l.PayloadHash == want {
+				return true, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
