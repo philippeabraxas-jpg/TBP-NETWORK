@@ -179,6 +179,8 @@ allowlist kept in the bundle's data document (signed, §12) — never in the req
 | Action outside the agent's list | `action-not-in-agent-scope` | exact match, never a prefix; an empty list allows nothing; a missing key leaves that dimension unconstrained |
 | Resource outside the agent's list | `resource-not-in-agent-scope` | same |
 | Agent without an entry, `require_agent_scope` set | `agent-scope-missing` | default-deny per agent |
+| `require_agent_scope` set, entry empty (`{}`, `null`) or declaring neither `actions` nor `resources` | `agent-scope-incomplete` | an entry that constrains nothing would allow everything (#240) |
+| An `actions` / `resources` key that is not a list (`false`, a string, `null`) | `agent-scope-incomplete` | in every mode — a malformed declaration is refused, not read as "unconstrained" |
 
 **Before enabling:** without `require_agent_scope: true`, an agent with no entry
 is not constrained (the pack says nothing when it has no data). Set it in

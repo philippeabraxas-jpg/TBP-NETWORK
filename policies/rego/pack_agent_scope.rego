@@ -23,6 +23,9 @@
 # données, ce paquet ne dit rien). Avec require_agent_scope = true, un agent
 # sans entrée est refusé (« agent-scope-missing ») : c'est le mode de production
 # recommandé, default-deny par agent.
+# Dans ce mode, une entrée VIDE (« {} », « null ») ou sans aucune dimension déclarée
+# est refusée aussi (« agent-scope-incomplete », #240) : elle ne contraindrait rien.
+# Une dimension déclarée qui n'est pas une liste est refusée dans tous les modes.
 #
 # Ce paquet borne CE QUE L'AGENT PEUT DEMANDER, il ne remplace ni le registre de
 # skills (périmètre de chaque skill, hors-bande dans le broker) ni les règles
@@ -57,6 +60,44 @@ action_allowed if input.action in scope.actions
 default resource_allowed := false
 
 resource_allowed if input.resource in scope.resources
+
+# Entrée complète (#240). Une dimension (« actions », « resources ») DÉCLARÉE doit être
+# une liste : une valeur « false », une chaîne ou « null » ne contraint rien, ou
+# contraint à tort — jamais une règle silencieusement indéfinie. En mode strict
+# l'entrée doit en plus être un objet qui déclare AU MOINS une dimension : « {} » ou
+# « null » ne contraint rien et autoriserait toute action (default-deny par agent).
+# Une dimension absente reste « non contrainte » (documenté ci-dessus : « agent-2 »
+# peut viser toute ressource) ; une liste vide, elle, n'autorise rien.
+declared_dimensions := {d |
+	is_object(scope)
+	some d in ["actions", "resources"]
+	d in object.keys(scope)
+}
+
+dimensions_well_formed if {
+	every d in declared_dimensions {
+		is_array(scope[d])
+	}
+}
+
+default scope_complete := false
+
+scope_complete if {
+	is_object(scope)
+	count(declared_dimensions) > 0
+	dimensions_well_formed
+}
+
+violation contains "agent-scope-incomplete" if {
+	has_scope
+	not dimensions_well_formed
+}
+
+violation contains "agent-scope-incomplete" if {
+	require_scope
+	has_scope
+	not scope_complete
+}
 
 violation contains "agent-scope-missing" if {
 	require_scope

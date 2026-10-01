@@ -124,3 +124,68 @@ test_example_policy_gated_by_agent_scope if {
 	not data.tbp.example.action.allow with input as {"subject": "agent-2", "action": "read", "resource": "doc-1", "class": 3}
 		with data.tbp.agent_scope as {"require_agent_scope": true, "agents": {}}
 }
+
+# --- #240 : une entrée vide ne contraint rien — refusée en mode strict -----------------------
+
+cfg_strict_incomplete := {
+	"require_agent_scope": true,
+	"agents": {
+		"empty": {},
+		"null": null,
+		"no-dims": {"note": "pas de périmètre"},
+		"false-actions": {"actions": false},
+		"string-actions": {"actions": "read"},
+		"null-resources": {"actions": ["read"], "resources": null},
+		"actions-only": {"actions": ["read"]},
+		"resources-only": {"resources": ["doc-1"]},
+		"both": {"actions": ["read"], "resources": ["doc-1"]},
+		"nothing-allowed": {"actions": []},
+	},
+}
+
+viol_strict(subject) := v if {
+	v := s.violation with input as {"subject": subject, "action": "delete", "resource": "prod-db"}
+		with data.tbp.agent_scope as cfg_strict_incomplete
+}
+
+# L'attaque de la revue : avec require_agent_scope, « {} » et « null » autorisaient « delete prod-db ».
+test_strict_empty_or_null_entry_is_refused if {
+	every subject in ["empty", "null", "no-dims"] {
+		"agent-scope-incomplete" in viol_strict(subject)
+	}
+	not s.ok with input as {"subject": "empty", "action": "delete", "resource": "prod-db"}
+		with data.tbp.agent_scope as cfg_strict_incomplete
+	not s.ok with input as {"subject": "null", "action": "delete", "resource": "prod-db"}
+		with data.tbp.agent_scope as cfg_strict_incomplete
+}
+
+# Une dimension déclarée qui n'est pas une liste ne contraint pas (« false ») ou contraint
+# à tort (chaîne, null) : refusée, dans tous les modes.
+test_declared_dimension_must_be_a_list if {
+	every subject in ["false-actions", "string-actions", "null-resources"] {
+		"agent-scope-incomplete" in viol_strict(subject)
+	}
+	not s.ok with input as {"subject": "x", "action": "delete", "resource": "prod-db"}
+		with data.tbp.agent_scope as {"agents": {"x": {"actions": false}}}
+	"agent-scope-incomplete" in s.violation with input as {"subject": "x", "action": "read", "resource": "r"}
+		with data.tbp.agent_scope as {"agents": {"x": {"actions": "read"}}}
+}
+
+# Voisins autorisés : les entrées bien formées passent, y compris une dimension absente
+# (documentée « non contrainte ») et une liste vide (qui n'autorise rien, mais n'est pas
+# « incomplète »).
+test_strict_wellformed_entries_are_not_incomplete if {
+	every subject in ["actions-only", "resources-only", "both", "nothing-allowed"] {
+		not "agent-scope-incomplete" in viol_strict(subject)
+	}
+	s.ok with input as {"subject": "both", "action": "read", "resource": "doc-1"}
+		with data.tbp.agent_scope as cfg_strict_incomplete
+	s.ok with input as {"subject": "actions-only", "action": "read", "resource": "n-importe-quoi"}
+		with data.tbp.agent_scope as cfg_strict_incomplete
+}
+
+# Hors mode strict, une entrée vide reste « non contrainte » (compatibilité inchangée).
+test_non_strict_empty_entry_unchanged if {
+	s.ok with input as {"subject": "x", "action": "anything", "resource": "r"}
+		with data.tbp.agent_scope as {"agents": {"x": {}}}
+}
