@@ -414,3 +414,59 @@ func TestSetupMeasuredBootTransitionProofDoesNotAuthorizeAnotherState(t *testing
 		t.Fatal("la preuve de A a servi à revenir à l'état précédent (#236)")
 	}
 }
+
+// #236, re-revue de 8873638 : chacune des deux moitiés de la liaison, seule (démarrage mesuré).
+func TestMeasuredBootProofBoundToTargetRefusesASwappedState(t *testing.T) {
+	fx := newMeasuredBootFixture(t)
+	if err := fx.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état B signé"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.writeTransitionProof(t, 2, false, time.Now().Add(time.Minute)) // signée pour B
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état C échangé avant le redémarrage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.run(t); err == nil {
+		t.Fatal("une preuve signée pour B a ré-engagé C échangé avant le redémarrage (liaison à la cible absente)")
+	}
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état B signé"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.run(t); err != nil {
+		t.Fatalf("l'état effectivement signé est refusé : %v", err)
+	}
+}
+
+func TestMeasuredBootProofBoundToStartRefusesAnotherAttestedState(t *testing.T) {
+	fx := newMeasuredBootFixture(t)
+	if err := fx.run(t); err != nil { // A attesté
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état B"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p1 := fx.writeTransitionProof(t, 2, false, time.Now().Add(time.Minute)) // P1 : A → B
+	raw, err := os.ReadFile(p1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état C"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.writeTransitionProof(t, 2, false, time.Now().Add(time.Minute)) // A → C
+	if err := fx.run(t); err != nil {
+		t.Fatalf("A → C légitime refusée : %v", err)
+	}
+	// retour à B avec P1 (A → B) : la cible est B, mais l'attesté est C
+	if err := os.WriteFile(fx.componentPaths[0], []byte("état B"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fx.env["TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE"], raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.run(t); err == nil {
+		t.Fatal("la preuve A→B a servi alors que l'attesté est C (liaison au départ absente)")
+	}
+}

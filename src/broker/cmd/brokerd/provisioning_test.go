@@ -674,3 +674,73 @@ func TestBrokerdTransitionProofDoesNotAuthorizeAnotherState(t *testing.T) {
 		t.Fatal("la preuve de la transition aller a servi à revenir à l'état précédent (#236)")
 	}
 }
+
+// #236, re-revue de 8873638 : chacune des deux moitiés de la liaison, seule (brokerd).
+func agentsWith(original []byte, extra string) []byte {
+	return []byte(strings.Replace(string(original), "{", `{`+extra+`,`, 1))
+}
+
+func TestBrokerdProofBoundToTargetRefusesASwappedState(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	original, _ := os.ReadFile(fx.agentsFile)
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatal(err)
+	}
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	stateB := agentsWith(original, `"agent-9":{"class":3}`)
+	stateC := agentsWith(original, `"agent-9":{"class":3},"agent-evil":{"class":3}`)
+	if err := os.WriteFile(fx.agentsFile, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signProof(t, fx, proof, conditionProvisioningTransition, 2)        // signée pour B
+	if err := os.WriteFile(fx.agentsFile, stateC, 0o600); err != nil { // échangé avant le redémarrage
+		t.Fatal(err)
+	}
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("une preuve signée pour B a ré-engagé C échangé avant le redémarrage (liaison à la cible absente)")
+	}
+	if err := os.WriteFile(fx.agentsFile, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("l'état effectivement signé est refusé : %v", err)
+	}
+}
+
+func TestBrokerdProofBoundToStartRefusesAnotherAttestedState(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	original, _ := os.ReadFile(fx.agentsFile)
+	if err := boot(t, fx, sock); err != nil { // A attesté
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"])
+	p1, p2 := filepath.Join(dir, "proof-ab.json"), filepath.Join(dir, "proof-ac.json")
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = p1
+	stateB := agentsWith(original, `"agent-9":{"class":3}`)
+	stateC := agentsWith(original, `"agent-7":{"class":3}`)
+	if err := os.WriteFile(fx.agentsFile, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signProof(t, fx, p1, conditionProvisioningTransition, 2) // P1 : A → B
+	if err := os.WriteFile(fx.agentsFile, stateC, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = p2
+	signProof(t, fx, p2, conditionProvisioningTransition, 2) // A → C
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("A → C légitime refusée : %v", err)
+	}
+	// retour à B avec P1 (A → B) : la cible est B, mais l'attesté est C
+	if err := os.WriteFile(fx.agentsFile, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = p1
+	if err := boot(t, fx, sock); err == nil {
+		t.Fatal("la preuve A→B a servi alors que l'attesté est C (liaison au départ absente)")
+	}
+}

@@ -255,8 +255,15 @@ func TestPepdKeyringTransitionCannotBeSelfAuthorized(t *testing.T) {
 		forged[kid], attackerPrivs[kid] = pub, priv
 	}
 	pf.writeQuorumKeyring(t, forged)
+	// main chargerait le trousseau ÉDITÉ : c'est ce que reçoit setupProvisioning.
+	pf.measuredBootFixture.quorumKeyring = forged
+	// L'attaquant lit dans le refus la condition À SIGNER (état de départ + cible, #236) et signe
+	// CELLE-LÀ avec ses clés. Depuis #236, signer la condition nue serait refusé pour sa condition,
+	// quel que soit le trousseau : le test passerait même sans le correctif #218 (re-revue de 8873638,
+	// « test devenu vide »). Avec la condition liée, seul le trousseau ATTESTÉ peut le refuser.
+	cond := pf.boundCondition(t, conditionProvisioningTransition)
 	expiry := time.Now().Add(60 * time.Second)
-	msg := pep.QuorumMessage(conditionProvisioningTransition, pf.cellID, expiry)
+	msg := pep.QuorumMessage(cond, pf.cellID, expiry)
 	var sigs []measuredBootTransitionSigWire
 	for kid, priv := range attackerPrivs {
 		sigs = append(sigs, measuredBootTransitionSigWire{KeyID: hex.EncodeToString(kid[:]), Signature: hex.EncodeToString(ed25519.Sign(priv, msg))})
@@ -271,8 +278,6 @@ func TestPepdKeyringTransitionCannotBeSelfAuthorized(t *testing.T) {
 	}
 	pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proofPath
 
-	// main chargerait le trousseau ÉDITÉ : c'est ce que reçoit setupProvisioning.
-	pf.measuredBootFixture.quorumKeyring = forged
 	if err := pf.setup(t); err == nil {
 		t.Fatal("un trousseau de quorum édité par l'attaquant a été « autorisé » par une preuve qu'il a lui-même signée")
 	}
@@ -535,5 +540,75 @@ func TestPepdTransitionProofDoesNotAuthorizeAnotherState(t *testing.T) {
 	}
 	if err := pf.setup(t); err == nil {
 		t.Fatal("la preuve de la rotation a servi à revenir à l'état précédent (#236)")
+	}
+}
+
+// --- #236, re-revue de 8873638 : chacune des DEUX moitiés de la liaison est prouvée seule ------
+//
+// Les tests précédents tombaient dès que la condition perdait ses deux moitiés à la fois ; ils
+// passaient encore si on n'en retirait qu'une (« to » seul ou « from » seul).
+
+// Moitié « cible » : la preuve est signée pour l'état B ; AVANT le redémarrage, le fichier est échangé
+// contre un état C. Seule la liaison à la CIBLE le voit (le départ attesté est le même).
+func TestPepdProofBoundToTargetRefusesASwappedState(t *testing.T) {
+	pf := newProvFixture(t)
+	if err := pf.setup(t); err != nil {
+		t.Fatal(err)
+	}
+	stateB := []byte(`{"00":"aa","01":"bb"}`)
+	stateC := []byte(`{"00":"aa","01":"bb","ff":"attaquant"}`)
+	if err := os.WriteFile(pf.keyring, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf.proof(t, conditionProvisioningTransition, pf.quorumMin)      // signée pour B
+	if err := os.WriteFile(pf.keyring, stateC, 0o600); err != nil { // échangé avant le redémarrage
+		t.Fatal(err)
+	}
+	if err := pf.setup(t); err == nil {
+		t.Fatal("une preuve signée pour l'état B a ré-engagé l'état C échangé avant le redémarrage (liaison à la cible absente)")
+	}
+	// voisin autorisé : l'état B, celui qui a été signé, passe avec la même preuve
+	if err := os.WriteFile(pf.keyring, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("l'état effectivement signé est refusé : %v", err)
+	}
+}
+
+// Moitié « départ » : la preuve (A→B) est utilisée alors que l'attesté n'est plus A. L'état présent est
+// bien B (la cible signée) : seule la liaison au DÉPART le refuse.
+func TestPepdProofBoundToStartRefusesAnotherAttestedState(t *testing.T) {
+	pf := newProvFixture(t)
+	if err := pf.setup(t); err != nil { // A attesté
+		t.Fatal(err)
+	}
+	stateB := []byte(`{"00":"aa","01":"bb"}`)
+	stateC := []byte(`{"00":"aa","02":"cc"}`)
+	if err := os.WriteFile(pf.keyring, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf.proof(t, conditionProvisioningTransition, pf.quorumMin) // P1 : A → B
+	p1, err := os.ReadFile(pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A → C légitime, par sa propre preuve : l'attesté devient C
+	if err := os.WriteFile(pf.keyring, stateC, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf.proof(t, conditionProvisioningTransition, pf.quorumMin)
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("A → C légitime refusée : %v", err)
+	}
+	// retour à B avec la preuve P1 (A → B) : la cible est B, mais le départ attesté est C, pas A
+	if err := os.WriteFile(pf.keyring, stateB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pf.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"], p1, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pf.setup(t); err == nil {
+		t.Fatal("la preuve A→B a servi alors que l'attesté est C (liaison au départ absente)")
 	}
 }
