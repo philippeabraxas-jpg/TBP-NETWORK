@@ -443,6 +443,15 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # though the certificate itself is
 #                                      # valid. Absent ⇒ this agent may only
 #                                      # be reached over the Unix socket.
+#                                      # Present ⇒ the NETWORK only: the
+#                                      # Unix socket refuses it
+#                                      # (agent-network-only) because it
+#                                      # carries no identity — an agent is
+#                                      # either a network agent or a socket
+#                                      # agent, never both (a local
+#                                      # process that can write to the
+#                                      # socket must not be able to speak
+#                                      # as an agent bound to a certificate).
 #   # TBP_SKILL_REGISTRY_FILE=/etc/tbp/skills.json  # OPTIONAL — closes the
 #                                      # structural gap confirmed seven times
 #                                      # independently across the compliance

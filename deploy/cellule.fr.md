@@ -466,6 +466,16 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # certificat est valide. Absent ⇒ cet
 #                                      # agent n'est joignable que par le
 #                                      # socket Unix.
+#                                      # Présent ⇒ le RÉSEAU seulement : le
+#                                      # socket Unix le refuse
+#                                      # (agent-network-only) car il ne
+#                                      # porte aucune identité — un agent
+#                                      # est soit un agent réseau, soit un
+#                                      # agent du socket, jamais les deux
+#                                      # (un processus local qui peut écrire
+#                                      # sur le socket ne doit pas pouvoir
+#                                      # parler en tant qu'agent lié à un
+#                                      # certificat).
 #   # TBP_SKILL_REGISTRY_FILE=/etc/tbp/skills.json  # OPTIONNEL — ferme le
 #                                      # trou structurel confirmé sept fois de
 #                                      # façon indépendante par le catalogue de

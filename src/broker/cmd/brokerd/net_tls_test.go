@@ -329,7 +329,7 @@ func TestBrokerdNetworkMTLSEndToEnd(t *testing.T) {
 		},
 		Timeout: 10 * time.Second,
 	}
-	body, _ := json.Marshal(map[string]string{"subject": "agent-1", "intent": `{"action":"read","resource":"doc-1","class":0}`})
+	body, _ := json.Marshal(map[string]string{"subject": "agent-net", "intent": `{"action":"read","resource":"doc-1","class":0}`})
 	resp, err := legitClient.Post("https://127.0.0.1:18443/v1/actions", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("agent légitime refusé au transport TLS: %v", err)
@@ -450,9 +450,9 @@ func TestBrokerdNetworkSubjectBoundToTransportIdentity(t *testing.T) {
 	// 1. Certificat "agent-test" déclarant "agent-1" (registre : "agent-1"
 	// → transport_identity="agent-test") : identité de transport LIÉE au
 	// subject déclaré — jeton émis.
-	res := post(tlsFx.clientCert, "agent-1")
+	res := post(tlsFx.clientCert, "agent-net")
 	if !res.Allow || res.Token == "" {
-		t.Fatalf("agent-1/agent-test (lien correct) refusé : %+v", res)
+		t.Fatalf("agent-net/agent-test (lien correct) refusé : %+v", res)
 	}
 
 	// 2. MÊME certificat "agent-test", valide, déclarant "agent-2" —
@@ -470,9 +470,9 @@ func TestBrokerdNetworkSubjectBoundToTransportIdentity(t *testing.T) {
 	// identité de transport authentifiée avec succès mais qui n'est PAS
 	// celle enregistrée pour ce subject doit être refusée par le broker
 	// lui-même, pas seulement acceptée parce que le certificat est valide.
-	res = post(tlsFx.otherValidCert, "agent-1")
+	res = post(tlsFx.otherValidCert, "agent-net")
 	if res.Allow || res.Reason != "agent-transport-unbound" {
-		t.Fatalf("agent-1 réclamé par un certificat valide MAIS différent (agent-other) accepté : allow=%v reason=%q — BOLA/Broken Authentication (#162) non fermé", res.Allow, res.Reason)
+		t.Fatalf("agent-net réclamé par un certificat valide MAIS différent (agent-other) accepté : allow=%v reason=%q — BOLA/Broken Authentication (#162) non fermé", res.Allow, res.Reason)
 	}
 
 	cancel()

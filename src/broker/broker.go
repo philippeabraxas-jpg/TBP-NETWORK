@@ -57,6 +57,7 @@ const (
 	ReasonAgentQuotaForbidden   = "agent-quota-forbidden"   // passeport demandé, agent sans politique de quota (§125)
 	ReasonAgentQuotaExceeded    = "agent-quota-exceeded"    // volume/fenêtre demandés au-delà du plafond résolu (§125)
 	ReasonAgentTransportUnbound = "agent-transport-unbound" // subject réseau mTLS sans CN correspondant au registre (§162/§163)
+	ReasonAgentNetworkOnly      = "agent-network-only"      // agent lié à un certificat (transport_identity) présenté sur le socket Unix, qui n'a aucune identité de transport
 	ReasonSkillUnknown          = "skill-unknown"           // action sans skill correspondant au registre (catalogue #142-#161)
 	ReasonSkillScopeViolation   = "skill-scope-violation"   // action connue, ressource hors du périmètre déclaré du skill
 	ReasonEpochUnavailable      = "epoch-unavailable"
@@ -534,6 +535,17 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 		b.stats.AgentDenies++
 		b.mu.Unlock()
 		return b.deny(ctx, [16]byte{}, ReasonAgentTransportUnbound, nil)
+	}
+	// Réciproque : un agent provisionné AVEC une transport_identity est un agent RÉSEAU. Sur le
+	// socket Unix (txID vide) rien ne prouve que l'appelant détient ce certificat : un processus
+	// local qui peut écrire sur le socket se déclarerait sous son nom sans jamais le présenter.
+	// Le registre devient une partition exacte — identité ⇒ réseau seulement ; sans identité ⇒
+	// socket seulement (issue du suivi de la revue red team de aba394c).
+	if txID == "" && agent.TransportIdentity != "" {
+		b.mu.Lock()
+		b.stats.AgentDenies++
+		b.mu.Unlock()
+		return b.deny(ctx, [16]byte{}, ReasonAgentNetworkOnly, nil)
 	}
 
 	// Étape 2 — jti tiré AVANT l'évaluation OPA : la feuille de décision

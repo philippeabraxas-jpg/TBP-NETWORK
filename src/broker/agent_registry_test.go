@@ -246,3 +246,42 @@ func mustTestIssuer(t *testing.T) *Issuer {
 	}
 	return issuer
 }
+
+// ---------------------------------------------------------------------------
+// Le registre est une partition des portes : identité de transport ⇒ réseau seulement ;
+// sans identité ⇒ socket seulement.
+// ---------------------------------------------------------------------------
+
+// TestAgentBoundToACertificateIsRefusedOnTheUnixSocket : un agent provisionné avec une
+// transport_identity est un agent RÉSEAU. Sur le socket Unix aucune identité n'est
+// présentée : un processus local qui peut y écrire se déclarerait sous son nom sans jamais
+// présenter le certificat. Chaque refus a son cas voisin accepté.
+func TestAgentBoundToACertificateIsRefusedOnTheUnixSocket(t *testing.T) {
+	reg := StaticAgentRegistry{
+		"agent-net":   {Class: pep.ClassOut, TransportIdentity: "cn-agent-net"},
+		"agent-local": {Class: pep.ClassOut},
+	}
+	b, _ := newAgentTestBroker(t, reg, nil)
+	intent := `{"action":"read","resource":"doc-1","class":0}`
+	ctx := context.Background()
+
+	// socket (aucune identité de transport) : l'agent lié à un certificat est refusé
+	if res := b.HandleAction(ctx, "agent-net", intent); res.Allow || res.Reason != ReasonAgentNetworkOnly {
+		t.Fatalf("agent lié à un certificat accepté sur le socket : allow=%v reason=%q, veut deny/%q", res.Allow, res.Reason, ReasonAgentNetworkOnly)
+	}
+	// cas voisin : le même agent, avec SON certificat, passe
+	if res := b.HandleAction(ctx, "agent-net", intent, "cn-agent-net"); !res.Allow {
+		t.Fatalf("agent lié à son certificat refusé sur le réseau : %q", res.Reason)
+	}
+	// mauvais certificat : refusé (comportement existant)
+	if res := b.HandleAction(ctx, "agent-net", intent, "autre-cn"); res.Allow || res.Reason != ReasonAgentTransportUnbound {
+		t.Fatalf("mauvais certificat accepté : allow=%v reason=%q", res.Allow, res.Reason)
+	}
+	// cas voisin : un agent SANS identité passe sur le socket, et reste refusé sur le réseau
+	if res := b.HandleAction(ctx, "agent-local", intent); !res.Allow {
+		t.Fatalf("agent du socket refusé sur le socket : %q", res.Reason)
+	}
+	if res := b.HandleAction(ctx, "agent-local", intent, "cn-agent-net"); res.Allow || res.Reason != ReasonAgentTransportUnbound {
+		t.Fatalf("agent du socket accepté sur le réseau : allow=%v reason=%q", res.Allow, res.Reason)
+	}
+}

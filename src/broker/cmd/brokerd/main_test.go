@@ -370,14 +370,17 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	// ni quorum ni plan (F, I et W en exigent un, #177), ce qui isole ces tests du
 	// reste. Le registre porte la classe de façon AUTORITAIRE ; le "class":0
 	// que les requêtes déclarent encore est ignoré (#125).
-	// "agent-1" porte aussi transport_identity="agent-test" (revue #163) :
-	// le CN du certificat client de test (brokerTLSFixture.clientCert,
-	// net_tls_test.go) — TestBrokerdNetworkMTLSEndToEnd déclare "agent-1"
-	// sur le plan de données RÉSEAU avec ce certificat précis.
+	// "agent-net" porte transport_identity="agent-test" (revue #163) : le CN du
+	// certificat client de test (brokerTLSFixture.clientCert, net_tls_test.go) —
+	// les tests du plan de données RÉSEAU le déclarent avec ce certificat précis.
+	// Un agent lié à un certificat est un agent RÉSEAU : le socket Unix le refuse
+	// (agent-network-only) ; "agent-1" et "agent-2", sans identité, sont des agents
+	// du socket, que le réseau refuse (agent-transport-unbound).
 	agentsFile := filepath.Join(dir, "agents.json")
 	agents, err := json.Marshal(map[string]agentRegistryEntry{
-		"agent-1": {Class: 3, TransportIdentity: "agent-test"},
-		"agent-2": {Class: 3},
+		"agent-1":   {Class: 3},
+		"agent-2":   {Class: 3},
+		"agent-net": {Class: 3, TransportIdentity: "agent-test"},
 	})
 	if err != nil {
 		t.Fatalf("registre d'agents: %v", err)
