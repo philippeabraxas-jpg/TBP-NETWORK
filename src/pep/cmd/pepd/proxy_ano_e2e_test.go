@@ -37,6 +37,8 @@ type e2eStack struct {
 	proxy   *pep.BlockingProxy
 	issuer  *broker.Issuer
 	leaves  *leafRecorder
+	journal string
+	jkey    []byte
 	backend *httptest.Server
 }
 
@@ -116,15 +118,16 @@ func newE2E(t *testing.T, rules ano.RulesConfig, backendHandler http.HandlerFunc
 	t.Cleanup(backend.Close)
 	bu, _ := url.Parse(backend.URL)
 
+	store, journal, jkey := testAuditStore(t)
 	opts := pep.ProxyOptions{Listener: listener, Backend: bu}
-	if err := applyAno(context.Background(), anoEnv(map[string]string{"TBP_PROXY_ANO_SOCKET": sock}), &opts, leaves, "cell-a", salt); err != nil {
+	if err := applyAno(context.Background(), anoEnv(map[string]string{"TBP_PROXY_ANO_SOCKET": sock}), &opts, leaves, store, "cell-a", salt); err != nil {
 		t.Fatal(err)
 	}
 	proxy, err := pep.NewBlockingProxy(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &e2eStack{proxy: proxy, issuer: issuer, leaves: leaves, backend: backend}
+	return &e2eStack{proxy: proxy, issuer: issuer, leaves: leaves, journal: journal, jkey: jkey, backend: backend}
 }
 
 func (s *e2eStack) request(t *testing.T, n byte, method, path, body string, sealBody bool) *httptest.ResponseRecorder {
@@ -190,6 +193,19 @@ func TestE2EExternalMachineNeverSeesClearAndResponseIsRestored(t *testing.T) {
 	}
 	if telemetry != 2 {
 		t.Fatalf("feuilles d'audit d'ano: %d, veut 2 (masquage + reconstitution)", telemetry)
+	}
+	// chacune a son clair dans le journal (#271), conforme à son hash
+	recs, err := registry.ReadRecords(stack.journal, stack.jkey)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("journal d'audit: %d enregistrements, err=%v, veut 2", len(recs), err)
+	}
+	for i, r := range recs {
+		if err := r.VerifyHash(); err != nil {
+			t.Fatalf("enregistrement %d: %v", i, err)
+		}
+		if !bytes.HasPrefix(r.Record, []byte("TBAN1")) {
+			t.Fatalf("enregistrement %d: pas un record TBAN1", i)
+		}
 	}
 }
 
