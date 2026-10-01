@@ -9,8 +9,8 @@ names the knob that exists today, so a profile is something you can read in
 an env file, a signed bundle or a registry, never a second product.
 
 Guides by scale: [scale-1.md](scale-1.md) (one machine, the administrator
-alone). Scale 2 (small site) is tracked in #86; scales 3 and full follow the
-multi-cell guides ([cellule.md](cellule.md), [superviseur.md](superviseur.md))
+alone), [scale-2.md](scale-2.md) (a small site behind one `brokerd`, `k = 2` of 3);
+scales 3 and full follow the multi-cell guides ([cellule.md](cellule.md), [superviseur.md](superviseur.md))
 and the full-scale handshake (#33).
 
 ## Where a profile lives
@@ -20,9 +20,12 @@ where the code already reads them. Consequence: nothing new to trust, nothing
 new to measure — the provisioning witness (#192) already covers the keyrings
 and registries, and the signed bundle already carries the Rego settings.
 
-Not done yet: an audit leaf at startup that records the effective settings, so
-that "which profile was this cell running on that day" is answered from the
-log and not from an admin's memory. Tracked in #86.
+The settings that make the scale — `TBP_QUORUM_MIN` and the topology — are
+attested by the provisioning witness (`quorum-settings`, #224): changing one is
+a governed transition, and the start leaf's digest covers them, so "which
+profile was this cell running on that day" can be recomputed from the log.
+Not done yet: a human-readable record of the effective profile (every knob in
+the table, not only those two). Tracked in #86.
 
 ## The bricks
 

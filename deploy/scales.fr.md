@@ -10,8 +10,8 @@ existe aujourd'hui : un profil se lit dans un fichier d'environnement, un
 bundle signé ou un registre, jamais dans un second produit.
 
 Guides par échelle : [scale-1.fr.md](scale-1.fr.md) (une machine,
-l'administrateur seul). L'échelle 2 (petit site) est suivie dans #86 ; les
-échelles 3 et complète suivent les guides multi-cellules
+l'administrateur seul), [scale-2.fr.md](scale-2.fr.md) (un petit site derrière un
+`brokerd`, `k = 2` sur 3) ; les échelles 3 et complète suivent les guides multi-cellules
 ([cellule.fr.md](cellule.fr.md), [superviseur.fr.md](superviseur.fr.md)) et le
 handshake pleine échelle (#33).
 
@@ -23,9 +23,13 @@ nouveau à faire confiance, rien de nouveau à mesurer — le témoin de
 provisionnement (#192) couvre déjà les trousseaux et registres, et le bundle
 signé porte déjà les réglages Rego.
 
-Pas encore fait : une feuille d'audit au démarrage qui consigne les réglages
-effectifs, pour que « quel profil cette cellule appliquait-elle ce jour-là »
-se lise dans le journal et non dans la mémoire d'un admin. Suivi dans #86.
+Les réglages qui font l'échelle — `TBP_QUORUM_MIN` et la topologie — sont
+attestés par le témoin de provisionnement (`quorum-settings`, #224) : en changer
+un est une transition gouvernée, et le condensé de la feuille de démarrage les
+couvre, de sorte que « quel profil cette cellule appliquait-elle ce jour-là » se
+recalcule depuis le journal. Pas encore fait : un enregistrement lisible du
+profil effectif (tous les réglages du tableau, pas seulement ces deux). Suivi
+dans #86.
 
 ## Les briques
 

@@ -21,7 +21,7 @@ custody and the common steps.
 | Server | application host (PostgreSQL, …) | PEP (pepd), acceptance via ITS OWN cell's broker only | [serveur.md](serveur.md) |
 | Supervisor | independent VM | master registry (master chain), independent monitor, console | [superviseur.md](superviseur.md) |
 
-Proving that no route out exists except through TBP: [network-isolation.md](network-isolation.md). Lost key, lost quorum, k = 1: [recovery.md](recovery.md). What an integrator must know (object seal, bounds, friction): [integration-contract.md](integration-contract.md). Confining what the integrator's harness executes: [execution-sandbox.md](execution-sandbox.md). Security bricks per scale: [scales.md](scales.md). One machine, the administrator alone: [scale-1.md](scale-1.md).
+Proving that no route out exists except through TBP: [network-isolation.md](network-isolation.md). Lost key, lost quorum, k = 1: [recovery.md](recovery.md). What an integrator must know (object seal, bounds, friction): [integration-contract.md](integration-contract.md). Confining what the integrator's harness executes: [execution-sandbox.md](execution-sandbox.md). Security bricks per scale: [scales.md](scales.md). One machine, the administrator alone: [scale-1.md](scale-1.md). A small site behind one `brokerd`, `k = 2` of 3: [scale-2.md](scale-2.md).
 
 Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md).
 Per-machine acceptance checklists: [checklists/](checklists/).

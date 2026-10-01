@@ -13,7 +13,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -132,11 +131,21 @@ func runScale2(s *suite, cfg config) {
 	_, _ = rand.Read(cellSalt)
 	issuerSeed := sha256.Sum256([]byte("tbp-scale2-selftest-dev:issuer"))
 	issuerSeedPath := filepath.Join(base, "issuer.seed")
+	// la clé d'OPÉRATEUR (celle qui approuve les plans) est créée par la même commande que les contrôleurs
 	opKeyPath := filepath.Join(keysDir, "operator.key")
-	opKey := devKey("scale2-operator")
-	opPub := opKey.Public().(ed25519.PublicKey)
+	opOut, opErr, err := runCmd(cfg.repo, nil, qpBin, "keygen", "-key", opKeyPath, "-keyring", filepath.Join(keysDir, "operator-ring.json"))
+	opPub := ""
+	for _, f := range strings.Fields(opOut) {
+		if strings.HasPrefix(f, "public=") {
+			opPub = strings.TrimPrefix(f, "public=")
+		}
+	}
+	if err != nil || len(opPub) != 64 {
+		s.fail(ph, "quorumproof keygen (opérateur)", fmt.Errorf("err=%v pub=%q stderr=%s", err, opPub, opErr))
+		return
+	}
 	opKeysPath := filepath.Join(base, "operators.json")
-	opKeysJSON, _ := json.Marshal([]string{hex.EncodeToString(opPub)})
+	opKeysJSON, _ := json.Marshal([]string{opPub})
 	agentsPath := filepath.Join(base, "agents.json")
 	agentsJSON, _ := json.Marshal(map[string]map[string]any{"agent-w": {"class": 2}})
 	for _, f := range []struct {
@@ -144,7 +153,6 @@ func runScale2(s *suite, cfg config) {
 		data []byte
 	}{
 		{issuerSeedPath, []byte(hex.EncodeToString(issuerSeed[:]))},
-		{opKeyPath, []byte(hex.EncodeToString(opKey.Seed()))},
 		{opKeysPath, opKeysJSON},
 		{agentsPath, agentsJSON},
 	} {
@@ -168,7 +176,8 @@ func runScale2(s *suite, cfg config) {
 			"TBP_ISSUER_SEED_FILE="+issuerSeedPath,
 			"TBP_GENESIS_DIR="+genesisDir,
 			"TBP_QUORUM_MIN="+k,
-			"TBP_TOPOLOGY=mono", // une cellule : pas de bail d'époque (#97)
+			"TBP_TOPOLOGY=mono",                 // une cellule : pas de bail d'époque (#97)
+			"TBP_CLUSTER_MEMBERS="+scale2CellID, // mono : la cellule est son seul membre (#128)
 			"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
 			"TBP_AGENT_REGISTRY_FILE="+agentsPath,
 			"TBP_PROVISIONING_WITNESS_FILE="+witness,
@@ -301,4 +310,22 @@ func runScale2(s *suite, cfg config) {
 	}
 	restarted := waitUnix200(adminHC, "http://brokerd/v1/supervision/stats", 20*time.Second) == nil
 	s.add(ph, "redémarrage à l'identique ⇒ brokerd repart (témoin de provisionnement conforme, échelle inchangée)", restarted, "")
+
+	// --- Cas voisin : l'abaissement légitime, signé par le quorum ATTESTÉ (2 contrôleurs) ----------
+	brokerd.stop()
+	proof2 := filepath.Join(base, "provisioning-proof-2sig.json")
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", "provisioning-transition-brokerd", "-cell", scale2CellID, "-key", ctlKeys[0], "-key", ctlKeys[1], "-out", proof2); err != nil {
+		s.fail(ph, "quorumproof sign (preuve de transition à 2 signatures)", fmt.Errorf("%v — %s", err, errB))
+		return
+	}
+	k1Log := filepath.Join(base, "brokerd-k1-accepted.log")
+	brokerd, err = start(append(brokerEnv("1"), "TBP_PROVISIONING_TRANSITION_PROOF_FILE="+proof2), k1Log)
+	if err != nil {
+		s.fail(ph, "brokerd (abaissement signé par 2 contrôleurs)", err)
+		return
+	}
+	accepted := waitUnix200(adminHC, "http://brokerd/v1/supervision/stats", 20*time.Second) == nil
+	k1Bytes, _ := os.ReadFile(k1Log)
+	s.add(ph, "#224 : le même abaissement signé par les 2 contrôleurs ATTESTÉS est accepté — et brokerd avertit que k = 1",
+		accepted && strings.Contains(string(k1Bytes), "AVERTISSEMENT quorum k=1"), fmt.Sprintf("accepté=%v", accepted))
 }
