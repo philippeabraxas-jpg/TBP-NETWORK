@@ -9,7 +9,7 @@
 # tout test (fail-closed, pas de « skipped » silencieux).
 #
 # Effets :
-#   1. selftest Go (mono réel + scale1 + fencing 2-cellules in-process + daemons
+#   1. selftest Go (mono réel + scale1 + scale2 + fencing 2-cellules in-process + daemons
 #      brokerd/supervisord réels, T37) — rapport JSON dans
 #      deploy/selftest/out/selftest-report.json (gitignoré) ;
 #   2. vérification formelle des guides (D96/D99) par check_steps.py ;
@@ -27,7 +27,7 @@ command -v go  >/dev/null 2>&1 || { echo "erreur: binaire 'go' introuvable — S
 command -v opa >/dev/null 2>&1 || { echo "erreur: binaire 'opa' introuvable — STOP" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "erreur: binaire 'python3' introuvable — STOP" >&2; exit 1; }
 
-echo "== 1/4 selftest Go (mono + fencing + daemons) =="
+echo "== 1/4 selftest Go (mono + scale1 + scale2 + fencing + daemons) =="
 go run ./deploy/selftest -phase all "$@"
 
 echo "== 2/4 vérification formelle des guides (D96/D99) =="
@@ -35,6 +35,7 @@ python3 deploy/selftest/check_steps.py \
     deploy/README.md \
     deploy/router-debian.md \
     deploy/scale-1.md \
+    deploy/scale-2.md \
     deploy/cellule.md \
     deploy/serveur.md \
     deploy/superviseur.md \
