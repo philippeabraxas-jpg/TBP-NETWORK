@@ -128,5 +128,5 @@ du socket Unix local.
 `cmd/opawatchdog` — un **autre** processus que `supervisord` (celui-ci n'a ni capacité ni droit d'écriture, par
 construction ; lui doit pouvoir redémarrer UNE unité). Il lit `GET /v1/supervision/opa` (pepd, brokerd) et, si toutes les
 sources lisibles disent `stalled` pendant N relevés, lance `systemctl restart <unité OPA>` : repos après chaque tentative,
-budget par heure glissante (les échecs comptent), escalade journalisée à l'épuisement. Unité : `tbp-opa-watchdog.service` ;
+budget par heure glissante (les échecs comptent), escalade journalisée à l'épuisement, **chaque redémarrage feuillé AVANT son exécution** dans sa chaîne propre (TBPS1, événements 6 et 7 ; pas de feuille ⇒ pas de redémarrage). Unité : `tbp-opa-watchdog.service` ;
 droit : `tbp-opa-watchdog.rules` (polkit, une unité, un verbe). Guide : `deploy/cellule.md`, « OPA under attack ».

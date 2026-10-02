@@ -42,8 +42,6 @@ package supervision
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -420,27 +418,10 @@ func loadManifestChain(dir string) ([]registry.SignedManifest, error) {
 // Notice pour un acte pré-autorisé du moniteur (déclenchement de bascule
 // dans le budget — T34b).
 func (m *Monitor) raise(ctx context.Context, cellID string, event byte, verdict byte, reason string, detail []byte) (Alert, error) {
-	rec := AlertRecord{
-		Event:      event,
-		CellID:     cellID,
-		DetailHash: sha256.Sum256(detail),
-		Verdict:    verdict,
-		Reason:     reason,
-	}
-	raw, err := MarshalAlertRecord(rec)
+	a, err := WriteAlert(ctx, m.log, m.journal, m.cellID, m.now(), event, cellID, verdict, reason, detail)
 	if err != nil {
 		return Alert{}, err
 	}
-	salt := make([]byte, supervisionSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return Alert{}, fmt.Errorf("supervision: sel de feuille : %w", err)
-	}
-	leafHash := registry.HashPayload(salt, raw)
-	idx, err := registry.AppendLeaf(ctx, m.log, m.journal, registry.KindSupervision, m.cellID, salt, raw, m.now().UnixNano())
-	if err != nil {
-		return Alert{}, fmt.Errorf("supervision: feuille d'alerte impossible : %w", err)
-	}
-	a := Alert{Record: rec, Raw: raw, Salt: salt, Detail: detail, LeafIndex: idx, LeafHash: leafHash}
 	if m.sink != nil {
 		if err := m.sink.Raise(ctx, a); err != nil {
 			// La feuille EST écrite : la preuve existe. Un sink en faute

@@ -2,10 +2,17 @@
 // GET /v1/supervision/opa sur les sockets d'administration de pepd et de brokerd) ; il ne redémarre jamais OPA lui-même
 // (séparation des privilèges). Ce démon lit ces statuts et, si TOUTES les sources lisibles disent « stalled » pendant
 // TBP_OPAWD_CONFIRM relevés consécutifs, exécute `systemctl restart <unité OPA>` — sous un utilisateur dédié, sans
-// capacité, avec une règle polkit limitée à cette unité et ce verbe. Voir watchdog.go pour la doctrine et les bornes.
+// capacité, avec une règle polkit limitée à cette unité et ce verbe. Chaque redémarrage décidé est FEUILLÉ avant d'être
+// exécuté, dans la chaîne propre du chien de garde (comme le moniteur de supervision, §7.1) : pas de feuille, pas de
+// redémarrage. Voir watchdog.go pour la doctrine et les bornes.
 //
 // Configuration par variables d'environnement (doctrine §1 : une valeur illisible ou hors bornes est fatale au démarrage) :
 //
+//	TBP_OPAWD_CELL_ID          requis — la cellule dont OPA est redémarré (identité portée par les feuilles)
+//	TBP_OPAWD_LOG_ID           requis — identité de la chaîne PROPRE du chien de garde (ex. opawd-cell-a)
+//	TBP_OPAWD_REGISTRY_DIR     requis — répertoire du CellLog du chien de garde (sa chaîne, sa clé de checkpoint)
+//	TBP_OPAWD_AUDIT_RECORDS    requis — journal chiffré du clair des feuilles (#275 ; `tbp-audit verify`)
+//	TBP_OPAWD_AUDIT_RECORDS_KEY_FILE  requis — sa clé (0600 ; `tbp-audit keygen`)
 //	TBP_OPAWD_SOURCES          requis — sockets d'administration, « nom=/chemin.sock », séparés par des virgules
 //	                           (ex. pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock)
 //	TBP_OPAWD_UNIT             unité OPA à redémarrer — défaut tbp-opa.service
@@ -19,6 +26,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -28,6 +36,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/mod/sumdb/note"
+
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
 
 func main() {
@@ -42,6 +55,8 @@ type config struct {
 	set       Settings
 	poll      time.Duration
 	systemctl string
+
+	cellID, logID, registryDir, auditRecords, auditKeyFile string
 }
 
 func run(ctx context.Context, getenv func(string) string) error {
@@ -49,8 +64,39 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	// Chaîne PROPRE du chien de garde (§7.1) : il feuille comme toute cellule, sa clé de checkpoint reste chez lui.
+	if err := os.MkdirAll(cfg.registryDir, 0o700); err != nil {
+		return fmt.Errorf("registry dir: %w", err)
+	}
+	signer, vkey, err := loadOrGenerateCellKey(cfg.registryDir, cfg.logID)
+	if err != nil {
+		return err
+	}
+	verifier, err := registry.NewVerifier(vkey)
+	if err != nil {
+		return fmt.Errorf("note verifier: %w", err)
+	}
+	wdLog, err := registry.Open(ctx, registry.Options{Dir: cfg.registryDir, Signer: signer, Verifier: verifier})
+	if err != nil {
+		return fmt.Errorf("registre du chien de garde: %w", err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := wdLog.Close(closeCtx); err != nil {
+			log.Printf("opawatchdog: fermeture du registre: %v", err)
+		}
+	}()
+	// REQUIS : un chien de garde dont les redémarrages ne seraient pas vérifiables ne démarre pas.
+	auditStore, err := registry.OpenRecordStoreFiles(cfg.auditRecords, cfg.auditKeyFile)
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275): %w", err)
+	}
+	defer auditStore.Close()
+
 	w, err := NewWatchdog(cfg.set, SocketStatusFetcher(),
-		SystemctlRestarter{Path: cfg.systemctl, Timeout: 30 * time.Second}, nil, log.Printf)
+		SystemctlRestarter{Path: cfg.systemctl, Timeout: 30 * time.Second},
+		&leafRecorder{sink: wdLog, journal: auditStore, logID: cfg.logID, cellID: cfg.cellID, now: time.Now}, nil, log.Printf)
 	if err != nil {
 		return err
 	}
@@ -60,7 +106,80 @@ func run(ctx context.Context, getenv func(string) string) error {
 	return nil
 }
 
+// leafRecorder feuille les constats du chien de garde dans sa chaîne propre (supervision.WriteAlert : journal d'abord).
+type leafRecorder struct {
+	sink    registry.LeafAppender
+	journal *registry.RecordStore
+	logID   string
+	cellID  string
+	now     func() time.Time
+}
+
+func (r *leafRecorder) Record(ctx context.Context, event, verdict byte, reason string, detail []byte) error {
+	_, err := supervision.WriteAlert(ctx, r.sink, r.journal, r.logID, r.now(), event, r.cellID, verdict, reason, detail)
+	return err
+}
+
+// loadOrGenerateCellKey : même patron que supervisord/pepd/brokerd (dupliqué volontairement — chaque démon possède sa clé).
+func loadOrGenerateCellKey(dir, cellID string) (note.Signer, string, error) {
+	vkeyPath := filepath.Join(dir, "cell_log.vkey")
+	signer, err := registry.LoadSigner(dir)
+	if err == nil {
+		vkeyB, rerr := os.ReadFile(vkeyPath)
+		if rerr != nil {
+			return nil, "", fmt.Errorf("clef de vérification illisible: %w", rerr)
+		}
+		return signer, string(vkeyB), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
+	skey, vkey, gerr := registry.GenerateCellKey(cellID)
+	if gerr != nil {
+		return nil, "", gerr
+	}
+	if serr := registry.SaveSignerKey(dir, skey); serr != nil {
+		return nil, "", serr
+	}
+	if werr := os.WriteFile(vkeyPath, []byte(vkey), 0o644); werr != nil {
+		return nil, "", werr
+	}
+	ns, nerr := note.NewSigner(skey)
+	if nerr != nil {
+		return nil, "", nerr
+	}
+	return ns, vkey, nil
+}
+
+func envRequired(getenv func(string) string, name string) (string, error) {
+	v := getenv(name)
+	if v == "" {
+		return "", fmt.Errorf("%s requis", name)
+	}
+	return v, nil
+}
+
 func loadConfig(getenv func(string) string) (*config, error) {
+	cellID, err := envRequired(getenv, "TBP_OPAWD_CELL_ID")
+	if err != nil {
+		return nil, err
+	}
+	logID, err := envRequired(getenv, "TBP_OPAWD_LOG_ID")
+	if err != nil {
+		return nil, err
+	}
+	registryDir, err := envRequired(getenv, "TBP_OPAWD_REGISTRY_DIR")
+	if err != nil {
+		return nil, err
+	}
+	auditRecords, err := envRequired(getenv, "TBP_OPAWD_AUDIT_RECORDS")
+	if err != nil {
+		return nil, fmt.Errorf("%w (#275 : un redémarrage doit rester vérifiable, tbp-audit verify)", err)
+	}
+	auditKeyFile, err := envRequired(getenv, "TBP_OPAWD_AUDIT_RECORDS_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
 	srcs, err := parseSources(getenv("TBP_OPAWD_SOURCES"))
 	if err != nil {
 		return nil, err
@@ -104,6 +223,7 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		return nil, fmt.Errorf("TBP_OPAWD_DRY_RUN : « 1 » ou « 0 » attendu, reçu %q", v)
 	}
 	return &config{
+		cellID: cellID, logID: logID, registryDir: registryDir, auditRecords: auditRecords, auditKeyFile: auditKeyFile,
 		set: Settings{Sources: srcs, Unit: unit, Confirm: confirm, Cooldown: time.Duration(coolS) * time.Second,
 			MaxPerHour: maxH, DryRun: dry},
 		poll:      time.Duration(pollMS) * time.Millisecond,

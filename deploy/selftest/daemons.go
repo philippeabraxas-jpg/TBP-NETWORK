@@ -45,6 +45,7 @@ import (
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
 
 const (
@@ -1327,7 +1328,20 @@ func runOPAWatchdogStage(s *suite, cfg config, base, wdBin, brokerAdminSock stri
 		s.fail(phaseDaemons, "#275 : faux systemctl", err)
 		return
 	}
+	// chaîne PROPRE du chien de garde (§7.1) et son journal d'audit : chaque redémarrage y est feuillé AVANT d'être exécuté
+	wdRegDir := filepath.Join(base, "opawd-registry")
+	wdAuditKey := filepath.Join(base, "opawd-audit.key")
+	wdAuditJournal := filepath.Join(base, "opawd-audit-records.jsonl")
+	if err := registry.GenerateRecordKey(wdAuditKey); err != nil {
+		s.fail(phaseDaemons, "#275 : clé du journal d'audit du chien de garde", err)
+		return
+	}
 	wd, err := startDaemon(wdBin, append(os.Environ(),
+		"TBP_OPAWD_CELL_ID="+daemonsCellID,
+		"TBP_OPAWD_LOG_ID=opawd-"+daemonsCellID,
+		"TBP_OPAWD_REGISTRY_DIR="+wdRegDir,
+		"TBP_OPAWD_AUDIT_RECORDS="+wdAuditJournal,
+		"TBP_OPAWD_AUDIT_RECORDS_KEY_FILE="+wdAuditKey,
 		"TBP_OPAWD_SOURCES=brokerd="+brokerAdminSock,
 		"TBP_OPAWD_SYSTEMCTL="+fakeCtl,
 		"TBP_OPAWD_POLL_MS=250", "TBP_OPAWD_CONFIRM=2", "TBP_OPAWD_COOLDOWN_S=5",
@@ -1373,6 +1387,21 @@ func runOPAWatchdogStage(s *suite, cfg config, base, wdBin, brokerAdminSock stri
 	resumed = true
 	s.add(phaseDaemons, "#275 : OPA, relancé par le redémarreur, répond de nouveau",
 		waitHTTP200("http://"+daemonsOPAAddr+"/health", 10*time.Second) == nil, "")
+	// la décision est feuillée dans la chaîne du chien de garde, vérifiable comme `tbp-audit verify` (hash + inclusion
+	// dans le log signé) — et le plain du record dit bien « redémarrage demandé » pour la cellule.
+	verifyAuditJournal(s, phaseDaemons, "opawatchdog (redémarrage d'OPA)", wdRegDir, wdAuditJournal, wdAuditKey, 0)
+	if key, err := registry.LoadRecordKey(wdAuditKey); err == nil {
+		recs, err := registry.ReadRecords(wdAuditJournal, key)
+		ok := err == nil && len(recs) >= 1
+		detail := fmt.Sprintf("%d enregistrement(s)", len(recs))
+		if ok {
+			ar, perr := supervision.ParseAlertRecord(recs[0].Record)
+			ok = perr == nil && recs[0].Leaf.Kind == registry.KindSupervision && ar.Event == supervision.AlertEventOPARestart &&
+				ar.CellID == daemonsCellID && ar.Reason == "opa-restart-requested"
+			detail = fmt.Sprintf("%+v", ar)
+		}
+		s.add(phaseDaemons, "#275 : le redémarrage est feuillé dans la chaîne du chien de garde (record TBPS1 « opa-restart-requested », cellule cell-a)", ok, detail)
+	}
 }
 
 // conditionToSign extrait de la sortie d'un démon la condition annoncée par son refus

@@ -9,6 +9,12 @@ package main
 // client OPA), pendant `Confirm` relevés consécutifs. Une source muette ou illisible n'est jamais lue comme « bloqué » ;
 // « overloaded » n'est jamais un blocage (OPA répond : le tuer jetterait le travail en cours et repartirait à froid).
 //
+// Ce qui le TRACE (doctrine §5.3, « une alerte est d'abord une feuille ») : chaque redémarrage décidé est feuillé AVANT
+// d'être exécuté (KindSupervision, record « TBPS1 », clair dans le journal d'audit, vérifiable par `tbp-audit verify`).
+// Feuille impossible ⇒ PAS de redémarrage (OutcomeUntraced) : un acte privilégié sans trace n'a pas lieu. OPA bloqué refuse
+// déjà tout (fail-closed) : ne pas le redémarrer prolonge un refus, ne crée pas un trou. Un redémarrage échoué et
+// l'épuisement du budget sont feuillés aussi (Alarm).
+//
 // Ce qui borne un redémarrage : un délai de repos après chaque tentative (OPA a besoin de temps pour démarrer) et un
 // budget par heure glissante. Les tentatives ÉCHOUÉES comptent : un redémarrage qui échoue ne doit pas boucler. Une
 // source de statut compromise pourrait demander des redémarrages à volonté — le budget borne ce que cela coûte, et son
@@ -16,6 +22,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +36,7 @@ import (
 	"time"
 
 	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
+	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
 
 // statusPath : la route du plan d'administration de pepd et de brokerd (pep.OPAStatusHandler).
@@ -75,6 +85,12 @@ type Restarter interface {
 	Restart(ctx context.Context, unit string) error
 }
 
+// Recorder feuille un constat du chien de garde (production : leafRecorder, KindSupervision ; tests : un faux). Une erreur
+// signifie « la feuille n'existe pas » : l'appelant n'exécute alors rien sur la foi de ce constat.
+type Recorder interface {
+	Record(ctx context.Context, event, verdict byte, reason string, detail []byte) error
+}
+
 // StatusFetcher lit le statut d'une source.
 type StatusFetcher func(ctx context.Context, s Source) (opaStatus, error)
 
@@ -99,6 +115,7 @@ const (
 	OutcomeExhausted Outcome = "exhausted" // confirmé, mais budget horaire épuisé : escalade humaine
 	OutcomeRestarted Outcome = "restarted"
 	OutcomeRestartKO Outcome = "restart-failed"
+	OutcomeUntraced  Outcome = "untraced-refused" // redémarrage décidé mais feuille impossible : non exécuté
 	OutcomeDryRun    Outcome = "dry-run"
 )
 
@@ -107,6 +124,7 @@ type Watchdog struct {
 	set     Settings
 	fetch   StatusFetcher
 	restart Restarter
+	rec     Recorder
 	now     func() time.Time
 	logf    func(format string, args ...any)
 
@@ -114,13 +132,15 @@ type Watchdog struct {
 	stalledRuns  int         // relevés « stalled » consécutifs
 	attempts     []time.Time // tentatives de redémarrage dans l'heure glissante
 	cooldownTill time.Time
-	last         Outcome // pour ne journaliser que les changements d'état
+	last         Outcome           // pour ne journaliser que les changements d'état
+	escalated    bool              // la feuille d'escalade de l'épisode d'épuisement en cours est écrite
+	states       map[string]string // dernier état lu par source (« unreadable » si illisible) — le détail des feuilles
 }
 
 // NewWatchdog assemble le chien de garde. now et logf peuvent être nil (horloge réelle, log standard).
-func NewWatchdog(set Settings, fetch StatusFetcher, restart Restarter, now func() time.Time, logf func(string, ...any)) (*Watchdog, error) {
-	if len(set.Sources) == 0 || fetch == nil || restart == nil {
-		return nil, errors.New("opawatchdog : sources, lecteur de statut et redémarreur requis")
+func NewWatchdog(set Settings, fetch StatusFetcher, restart Restarter, rec Recorder, now func() time.Time, logf func(string, ...any)) (*Watchdog, error) {
+	if len(set.Sources) == 0 || fetch == nil || restart == nil || rec == nil {
+		return nil, errors.New("opawatchdog : sources, lecteur de statut, redémarreur et enregistreur de feuilles requis")
 	}
 	if set.Confirm < 1 || set.MaxPerHour < 1 || set.Cooldown <= 0 {
 		return nil, errors.New("opawatchdog : Confirm, MaxPerHour et Cooldown doivent être positifs")
@@ -134,7 +154,7 @@ func NewWatchdog(set Settings, fetch StatusFetcher, restart Restarter, now func(
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Watchdog{set: set, fetch: fetch, restart: restart, now: now, logf: logf}, nil
+	return &Watchdog{set: set, fetch: fetch, restart: restart, rec: rec, now: now, logf: logf, states: map[string]string{}}, nil
 }
 
 var unitRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]{0,127}\.service$`)
@@ -157,8 +177,10 @@ func (w *Watchdog) Tick(ctx context.Context) Outcome {
 		st, err := w.fetch(ctx, s)
 		if err != nil {
 			w.logf("opawatchdog: source=%s illisible : %v", s.Name, err)
+			w.states[s.Name] = "unreadable"
 			continue
 		}
+		w.states[s.Name] = st.State
 		readable++
 		if st.State == stateStalled {
 			stalled++
@@ -177,6 +199,9 @@ func (w *Watchdog) Tick(ctx context.Context) Outcome {
 	default:
 		w.stalledRuns++
 		out = w.decideLocked(ctx)
+	}
+	if out != OutcomeExhausted {
+		w.escalated = false
 	}
 	w.noteLocked(out, readable, stalled)
 	return out
@@ -200,6 +225,9 @@ func (w *Watchdog) decideLocked(ctx context.Context) Outcome {
 	}
 	w.attempts = kept
 	if len(w.attempts) >= w.set.MaxPerHour {
+		if !w.escalated { // une fois par épisode (réessayé tant que la feuille n'est pas écrite), pas à chaque relevé
+			w.escalated = w.recordLocked(ctx, supervision.AlertEventOPARestartRefused, supervision.AlertVerdictAlarm, "opa-restart-budget-exhausted") == nil
+		}
 		return OutcomeExhausted
 	}
 	if w.set.DryRun {
@@ -208,14 +236,37 @@ func (w *Watchdog) decideLocked(ctx context.Context) Outcome {
 		w.stalledRuns = 0
 		return OutcomeDryRun
 	}
+	// §5.3 : la feuille d'abord. Sans elle, pas de redémarrage — et pas de tentative dépensée (rien n'a eu lieu).
+	if err := w.recordLocked(ctx, supervision.AlertEventOPARestart, supervision.AlertVerdictNotice, "opa-restart-requested"); err != nil {
+		return OutcomeUntraced
+	}
 	w.attempts = append(w.attempts, now) // une tentative qui échoue compte aussi
 	w.cooldownTill = now.Add(w.set.Cooldown)
 	w.stalledRuns = 0
 	if err := w.restart.Restart(ctx, w.set.Unit); err != nil {
 		w.logf("opawatchdog: event=restart-failed unit=%s : %v", w.set.Unit, err)
+		w.recordLocked(ctx, supervision.AlertEventOPARestart, supervision.AlertVerdictAlarm, "opa-restart-failed")
 		return OutcomeRestartKO
 	}
 	return OutcomeRestarted
+}
+
+// recordLocked feuille un constat (détail : l'état de chaque source, haché dans la feuille et journalisé avec son
+// empreinte pour pouvoir être rapproché). L'erreur est journalisée ET rendue.
+func (w *Watchdog) recordLocked(ctx context.Context, event, verdict byte, reason string) error {
+	d, _ := json.Marshal(struct {
+		Unit             string            `json:"unit"`
+		Sources          map[string]string `json:"sources"`
+		StalledRuns      int               `json:"stalled_runs"`
+		RestartsLastHour int               `json:"restarts_last_hour"`
+	}{w.set.Unit, w.states, w.stalledRuns, len(w.attempts)})
+	sum := sha256.Sum256(d)
+	if err := w.rec.Record(ctx, event, verdict, reason, d); err != nil {
+		w.logf("opawatchdog: event=ESCALADE feuille impossible (%s) : %v — aucune action exécutée sur la foi de ce constat", reason, err)
+		return err
+	}
+	w.logf("opawatchdog: feuille %s detail_sha256=%s detail=%s", reason, hex.EncodeToString(sum[:8]), d)
+	return nil
 }
 
 // noteLocked journalise les changements d'état (et chaque redémarrage), pas chaque relevé.
@@ -228,6 +279,8 @@ func (w *Watchdog) noteLocked(out Outcome, readable, stalled int) {
 	switch out {
 	case OutcomeRestarted:
 		w.logf("opawatchdog: event=restarted unit=%s sources_stalled=%d/%d restarts_last_hour=%d", w.set.Unit, stalled, readable, len(w.attempts))
+	case OutcomeUntraced:
+		w.logf("opawatchdog: event=untraced-refused unit=%s : OPA bloqué mais la feuille est impossible — redémarrage NON exécuté", w.set.Unit)
 	case OutcomeDryRun:
 		w.logf("opawatchdog: event=dry-run unit=%s : redémarrage décidé, NON exécuté (TBP_OPAWD_DRY_RUN)", w.set.Unit)
 	case OutcomeExhausted:

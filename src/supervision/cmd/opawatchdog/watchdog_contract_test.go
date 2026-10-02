@@ -101,7 +101,7 @@ func TestEndToEndStalledOPAIsRestarted(t *testing.T) {
 
 	rs := &fakeRestarter{}
 	w, err := NewWatchdog(Settings{Sources: []Source{{"pepd", sock}}, Unit: "tbp-opa.service", Confirm: 2, Cooldown: time.Second, MaxPerHour: 3},
-		SocketStatusFetcher(), rs, nil, nil)
+		SocketStatusFetcher(), rs, &fakeRecorder{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

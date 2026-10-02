@@ -6,6 +6,10 @@
 # exécute `systemctl restart tbp-opa.service` — et RIEN d'autre : le droit de le faire vient de la règle polkit
 # tbp-opa-watchdog.rules, limitée à CETTE unité et à CE verbe pour CET utilisateur. Aucune capacité, aucun réseau.
 #
+# Traçabilité (§5.3) : chaque redémarrage décidé est FEUILLÉ avant d'être exécuté, dans la chaîne PROPRE du chien de garde
+# (comme le moniteur, §7.1) ; pas de feuille, pas de redémarrage. Le clair de chaque feuille est dans un journal d'audit
+# chiffré : `tbp-audit verify` le vérifie (hash + inclusion dans le log signé).
+#
 # Bornes (voir src/supervision/cmd/opawatchdog) : repos après chaque tentative, budget par heure glissante (les échecs
 # comptent), escalade humaine journalisée à l'épuisement. Calibrer d'abord avec TBP_OPAWD_DRY_RUN=1.
 #
@@ -14,7 +18,13 @@
 #   # accès aux sockets d'administration (lecture du statut) : groupe qui possède /run/tbp/*-admin.sock, ou ACL
 #   install -m 0644 tbp-opa-watchdog.service /etc/systemd/system/
 #   install -m 0644 tbp-opa-watchdog.rules /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules
-#   # /etc/tbp/opa-watchdog.env : TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
+#   # clé du journal d'audit (0600, lisible par l'utilisateur du service) : tbp-audit keygen -out /etc/tbp/opawd-audit.key
+#   # /etc/tbp/opa-watchdog.env :
+#   #   TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
+#   #   TBP_OPAWD_CELL_ID=cell-a  TBP_OPAWD_LOG_ID=opawd-cell-a
+#   #   TBP_OPAWD_REGISTRY_DIR=/var/lib/tbp/opa-watchdog/registry
+#   #   TBP_OPAWD_AUDIT_RECORDS=/var/lib/tbp/opa-watchdog/audit-records.jsonl
+#   #   TBP_OPAWD_AUDIT_RECORDS_KEY_FILE=/etc/tbp/opawd-audit.key
 #   systemctl daemon-reload && systemctl enable --now tbp-opa-watchdog
 #
 # Le nom de l'unité OPA (TBP_OPAWD_UNIT, défaut tbp-opa.service) doit être IDENTIQUE dans la règle polkit.
@@ -33,6 +43,9 @@ Group=tbp-opa-watchdog
 EnvironmentFile=/etc/tbp/opa-watchdog.env
 ExecStart=/usr/local/bin/opawatchdog
 UMask=0077
+# Chaîne propre du chien de garde + journal d'audit : SEUL endroit inscriptible.
+StateDirectory=tbp/opa-watchdog
+ReadWritePaths=/var/lib/tbp/opa-watchdog
 
 CapabilityBoundingSet=
 AmbientCapabilities=

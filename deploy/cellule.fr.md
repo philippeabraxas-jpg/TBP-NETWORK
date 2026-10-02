@@ -976,12 +976,30 @@ go build -o /usr/local/bin/opawatchdog ./src/supervision/cmd/opawatchdog
 useradd --system --no-create-home --shell /usr/sbin/nologin tbp-opa-watchdog
 install -m 0644 src/supervision/tbp-opa-watchdog.service /etc/systemd/system/
 install -m 0644 src/supervision/tbp-opa-watchdog.rules /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules
+tbp-audit keygen -out /etc/tbp/opawd-audit.key
 # /etc/tbp/opa-watchdog.env (0600) :
 #   TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
-#   TBP_OPAWD_DRY_RUN=1          # d'abord : journalise la décision, ne redémarre rien
+#   TBP_OPAWD_CELL_ID=cell-a  TBP_OPAWD_LOG_ID=opawd-cell-a
+#   TBP_OPAWD_REGISTRY_DIR=/var/lib/tbp/opa-watchdog/registry
+#   TBP_OPAWD_AUDIT_RECORDS=/var/lib/tbp/opa-watchdog/audit-records.jsonl
+#   TBP_OPAWD_AUDIT_RECORDS_KEY_FILE=/etc/tbp/opawd-audit.key
+#   TBP_OPAWD_DRY_RUN=1          # d'abord : journalise la décision, ne redémarre rien (pas de feuille non plus)
 systemctl daemon-reload && systemctl enable --now tbp-opa-watchdog
 journalctl -u tbp-opa-watchdog -f
 ```
+
+Chaque redémarrage est **feuillé avant d'être exécuté** (§5.3, « une alerte est d'abord une
+feuille ») : le chien de garde a sa propre chaîne signée et son journal d'audit chiffré, comme le
+moniteur (§7.1), et écrit une feuille `KindSupervision` (`TBPS1`, événement 6
+`opa-restart-requested`, détail = l'état de chaque source) *puis* exécute `systemctl`. **Pas de
+feuille, pas de redémarrage** : si son journal ou sa chaîne refuse, il journalise
+`untraced-refused` et ne fait rien — OPA bloqué refuse déjà tout (fail-closed), ne pas le
+redémarrer prolonge un refus, n'ouvre pas de trou. Un redémarrage échoué (`opa-restart-failed`) et
+un budget épuisé (`opa-restart-budget-exhausted`, une fois par épisode, réessayé jusqu'à écriture)
+sont feuillés comme alarmes. Vérifier avec `tbp-audit verify` sur sa chaîne et son journal. Pas
+encore fait : cette chaîne n'est ni ancrée dans la master chain ni surveillée par `supervisord` (la
+vérification de fraîcheur d'ancrage du moniteur la signalerait en permanence) — l'auditer
+directement.
 
 Bornes (toutes fatales au démarrage si illisibles ou hors plage) : `TBP_OPAWD_COOLDOWN_S`
 (défaut 30) de repos après chaque tentative, et `TBP_OPAWD_MAX_PER_HOUR` (défaut 3)
@@ -995,8 +1013,7 @@ utilisateur le verbe `restart` sur cette seule unité, et rien de plus ; le nom 
 Après un redémarrage, OPA est à froid (les premières requêtes peuvent être lentes, voir
 `tests/opa_latency`) et le watcher de révision re-vérifie le bundle épinglé avant que les
 conditions de la cellule se lèvent — un redémarrage ne contourne jamais la vérification de
-révision. Limites honnêtes : la décision de redémarrer est journalisée (journald), pas
-encore écrite en feuille de registre ; l'unité et la règle polkit sont vérifiées par des
+révision. Limites honnêtes : l'unité et la règle polkit sont vérifiées par des
 tests de cohérence mais pas exécutées sous un vrai systemd ici (le selftest exerce le vrai
 OPA, le vrai brokerd et le vrai chien de garde avec un `systemctl` de substitution).
 

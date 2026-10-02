@@ -341,7 +341,7 @@ func (fx *monitorFixture) supervisionLeaves(t *testing.T) []registry.Leaf {
 // ---------- record « TBPS1 » ----------
 
 func TestAlertRecordRoundTrip(t *testing.T) {
-	for _, ev := range []byte{AlertEventChainFault, AlertEventAnchorStale, AlertEventManifestFault, AlertEventFailoverTrigger, AlertEventFailoverRefused} {
+	for _, ev := range []byte{AlertEventChainFault, AlertEventAnchorStale, AlertEventManifestFault, AlertEventFailoverTrigger, AlertEventFailoverRefused, AlertEventOPARestart, AlertEventOPARestartRefused} {
 		for _, v := range []byte{AlertVerdictAlarm, AlertVerdictNotice} {
 			rec := AlertRecord{
 				Event:      ev,
@@ -897,5 +897,20 @@ func TestNoHotPathImport(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scan %s : %v", pkg, err)
 		}
+	}
+}
+
+// Les événements du chien de garde d'OPA (#275) sont dans le format ; les numéros voisins restent refusés.
+func TestAlertRecordOPAWatchdogEventsAndUnknownNeighbours(t *testing.T) {
+	for _, ev := range []byte{0, 8, 255} {
+		if _, err := MarshalAlertRecord(AlertRecord{Event: ev, CellID: "c", Verdict: AlertVerdictAlarm, Reason: "x"}); err == nil {
+			t.Errorf("event %d : refus attendu", ev)
+		}
+	}
+	good, _ := MarshalAlertRecord(AlertRecord{Event: AlertEventOPARestart, CellID: "c", Verdict: AlertVerdictNotice, Reason: "x"})
+	bad := append([]byte(nil), good...)
+	bad[len(alertMagic)+1] = 8
+	if _, err := ParseAlertRecord(bad); err == nil {
+		t.Error("Parse : event 8 doit être refusé")
 	}
 }
