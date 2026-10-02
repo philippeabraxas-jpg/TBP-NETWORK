@@ -116,10 +116,12 @@ Câblés à ce jour :
 | `pepd` / `brokerd` — drapeaux d'échappatoires dev (`TBDV1`) | `KindTelemetry` | même journal (partagé) ; un journal qui refuse ⇒ le démarrage est refusé |
 | `tmetrics` — mesure du traducteur (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis**), qui désignent le journal du service (pepd ou brokerd) propriétaire du registre où il inscrit |
 | `brokerd` — garde de dégradation du traducteur, **opt-in** `TBP_TRANSLATOR_GUARD=1` (#275) : épisodes down / reprise et chaque refus en mode dégradé (`TBTD1`) | `KindTelemetry` | même journal (partagé) ; un journal qui refuse ⇒ pas de feuille et alarme `translator-leaf-write-failed`, la direction d'échec reste le déni |
-| Producteurs de bibliothèque à option `Journal` : puits de feuilles de l'exporteur de télémétrie (`TBTM1`, un `fsync` par record — à brancher en connaissance de cause), agrégateur de fenêtres, purge de rétention, détecteur anti-dribble | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | option `Journal` (nil = feuille nue) |
+| `pepd` — pipeline de télémétrie de passeport, **opt-in** `TBP_TELEMETRY=1` (#275) : agrégateur à fenêtres (`TBAG1`, une feuille par fenêtre scellée, vides comprises), détecteur anti-dribble (`TBAD1`), purge de rétention (`TBRP1`) | `KindTelemetry`, `KindTelemetryAlert`, `KindRetentionPurge` | même journal (partagé) ; un journal qui refuse ⇒ pas de feuille et alarme `leaf-write-failed`, jamais un silence |
+| Producteurs de bibliothèque à option `Journal`, pas encore exécutés dans un démon : puits de feuilles de l'exporteur de télémétrie (`TBTM1`, un `fsync` par record — à brancher en connaissance de cause) | `KindTelemetry` | option `Journal` (nil = feuille nue) |
 
 Tout producteur de feuilles de ce dépôt a désormais une couture de journal, et
 tout démon qui écrit des feuilles exige son journal. Un producteur de
-bibliothèque n'est nu que tant que son hôte ne branche pas `Journal` : rien
-dans le dépôt ne fait encore tourner les producteurs de télémétrie dans un
-démon ; `brokerd` fait tourner le contrôleur de dégradation (opt-in).
+bibliothèque n'est nu que tant que son hôte ne branche pas `Journal` : `pepd`
+fait tourner le pipeline de télémétrie (opt-in) et `brokerd` le contrôleur de
+dégradation du traducteur (opt-in) ; rien dans le dépôt ne fait encore tourner
+le puits de feuilles de l'exporteur de télémétrie dans un démon.

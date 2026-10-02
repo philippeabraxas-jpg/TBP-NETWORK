@@ -41,6 +41,18 @@ content rather than metadata is off-doctrine, not just out of scope.
   fenêtre de mesure chaîne les intervalles, le post-traitement lit les
   trous. Borne `maxRecordsPerMsg` = 64 par datagramme (excédent compté).
 
+## Câblage dans un démon (#275)
+
+`pipeline.go` assemble exporteur → `FanOut{agrégateur, détecteur}` + rétention
+(`NewPipeline`, `Step`, `Run`, `Close`). `pepd` le fait tourner en **opt-in**
+(`TBP_TELEMETRY=1`, voir `deploy/cellule.md`) avec la source
+`LedgerSource(*pep.QuotaLedger)` : métadonnées seulement, jamais de contenu.
+Chaque feuille (`TBAG1`, `TBAD1`, `TBRP1`) laisse son clair dans le journal
+d'enregistrements AVANT d'être inscrite ; un journal qui refuse ⇒ pas de
+feuille et alarme `leaf-write-failed`. À l'arrêt, `Close` scelle la fenêtre
+en cours et vide le détecteur avant la fermeture du registre. Le selftest
+mono-cellule consomme un passeport et vérifie la feuille `TBAG1` et son clair.
+
 ## État : pipeline d'agrégation implémenté (T22)
 
 `aggregate.go` + `retention.go` — décisions D21–D26 (plan et preuves sur
