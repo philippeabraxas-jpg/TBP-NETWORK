@@ -316,7 +316,7 @@ func run() error {
 	// Échappatoires dev actives (issue #208, R-13) : une feuille opposable, pas
 	// seulement un log. APRÈS le provisionnement — dont la garde se sert de la
 	// taille du journal pour distinguer un premier démarrage d'un témoin effacé.
-	if err := devmode.RecordActive(ctx, cellLog, cellID, salt, devEscapeHatchFlags(os.Getenv), nil); err != nil {
+	if err := devmode.RecordActive(ctx, cellLog, auditStore, cellID, salt, devEscapeHatchFlags(os.Getenv), nil); err != nil {
 		return err
 	}
 

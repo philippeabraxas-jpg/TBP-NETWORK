@@ -4,6 +4,7 @@
 package translator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -650,5 +651,41 @@ func assertAlarms(t *testing.T, r *rig, want ...string) {
 		if got[i] != want[i] {
 			t.Fatalf("alarmes %v, attendu %v", got, want)
 		}
+	}
+}
+
+// #275 : les feuilles d'événements de dégradation laissent leur clair dans le journal ; journal refusé ⇒ pas de
+// feuille (alarme leaf-write-err, la direction d'échec reste le déni).
+func TestDegradationLeavesAreJournaled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.jsonl")
+	key := bytes.Repeat([]byte{2}, registry.RecordKeyLen)
+	j, err := registry.OpenRecordStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	leaves, alarm, probe := &fakeLeaves{}, &fakeAlarm{}, &fakeProbe{}
+	ctrl, err := NewController(Options{
+		CellID: rigCell, Salt: rigSalt, Leaves: leaves, Journal: j, Probe: probe,
+		OnAlarm: alarm.fire, Now: func() time.Time { return rigClock },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.set(errors.New("vllm: process mort"))
+	_ = ctrl.CheckHealth(context.Background())
+	recs, err := registry.ReadRecords(path, key)
+	if err != nil || len(recs) != 1 || len(leaves.leaves) != 1 {
+		t.Fatalf("journal %d enregistrements (err=%v), %d feuilles", len(recs), err, len(leaves.leaves))
+	}
+	if recs[0].Leaf != leaves.leaves[0] || recs[0].VerifyHash() != nil || !bytes.HasPrefix(recs[0].Record, []byte("TBTD1")) {
+		t.Fatalf("enregistrement inattendu : %+v", recs[0])
+	}
+
+	_ = j.Close()
+	probe.set(nil)
+	_ = ctrl.CheckHealth(context.Background()) // reprise : sa feuille ne peut pas être journalisée
+	if len(leaves.leaves) != 1 {
+		t.Fatalf("%d feuilles : une feuille a été inscrite sans clair journalisé", len(leaves.leaves))
 	}
 }

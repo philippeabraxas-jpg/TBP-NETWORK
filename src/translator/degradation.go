@@ -165,6 +165,10 @@ type Options struct {
 	// Leaves est la couture registre : bascules, rejets et reprises y sont
 	// tracés. Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275, #271).
+	// Optionnel ici (nil = feuille nue, historique). Journal refusé ⇒ pas de feuille
+	// (alarme ReasonLeafWriteErr, la direction d'échec reste le déni).
+	Journal *registry.RecordStore
 	// Probe est le healthcheck du traducteur (T24). Requis.
 	Probe Probe
 	// Mirror est la cellule miroir (§7.4). Nil ⇒ pas de failover possible.
@@ -186,6 +190,7 @@ type Controller struct {
 	cellID  string
 	salt    []byte
 	leaves  LeafSink
+	journal *registry.RecordStore
 	probe   Probe
 	mirror  MirrorCell
 	arb     Arbitration
@@ -224,6 +229,7 @@ func NewController(opts Options) (*Controller, error) {
 		cellID:    opts.CellID,
 		salt:      salt,
 		leaves:    opts.Leaves,
+		journal:   opts.Journal,
 		probe:     opts.Probe,
 		mirror:    opts.Mirror,
 		arb:       opts.Arbitration,
@@ -361,13 +367,7 @@ func (c *Controller) alarmLocked(reason string) {
 // L'échec d'écriture est alarmé (jamais silencieux) ; il ne DÉFAIT pas la
 // décision — la direction d'échec reste le déni (§9.1).
 func (c *Controller) writeLeafLocked(ctx context.Context, record []byte) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      c.cellID,
-		PayloadHash: registry.HashPayload(c.salt, record),
-		Timestamp:   c.now().UnixNano(),
-	}
-	if _, err := c.leaves.Append(ctx, leaf); err != nil {
+	if _, err := registry.AppendLeaf(ctx, c.leaves, c.journal, registry.KindTelemetry, c.cellID, c.salt, record, c.now().UnixNano()); err != nil {
 		c.alarmLocked(ReasonLeafWriteErr)
 	}
 }

@@ -72,9 +72,13 @@ type WindowAggregate struct {
 // (≥ 16 octets) et Leaves requis ; Window et TopK ont des défauts
 // documentés ; RetStore est optionnel (rétention des bruts, T22).
 type AggregatorOptions struct {
-	CellID   string
-	Salt     []byte
-	Leaves   pep.LeafSink
+	CellID string
+	Salt   []byte
+	Leaves pep.LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275, #271 :
+	// tbp-audit verify). Optionnel ici (nil = feuille nue, historique). Journal refusé ⇒
+	// pas de feuille (même chemin d'erreur qu'un registre en panne).
+	Journal  *registry.RecordStore
 	Window   time.Duration   // 0 ⇒ 60 s (pseudo-code de l'issue)
 	TopK     int             // 0 ⇒ 10 ; borné à 255
 	RetStore *RetentionStore // optionnel — rétention locale des bruts (§6.2)
@@ -97,14 +101,15 @@ type AggregatorStats struct {
 // un usage concurrent ; aucune goroutine : Tick est piloté par l'appelant
 // (et appelé en interne par Feed).
 type Aggregator struct {
-	cellID string
-	salt   []byte
-	leaves pep.LeafSink
-	window time.Duration
-	topK   int
-	store  *RetentionStore
-	now    func() time.Time
-	onTrip func(string)
+	cellID  string
+	salt    []byte
+	leaves  pep.LeafSink
+	journal *registry.RecordStore
+	window  time.Duration
+	topK    int
+	store   *RetentionStore
+	now     func() time.Time
+	onTrip  func(string)
 
 	mu     sync.Mutex
 	curID  int64    // fenêtre courante (−1 : pas encore ouverte)
@@ -151,7 +156,7 @@ func NewAggregator(opts AggregatorOptions) (*Aggregator, error) {
 	s := make([]byte, len(opts.Salt))
 	copy(s, opts.Salt)
 	return &Aggregator{
-		cellID: opts.CellID, salt: s, leaves: opts.Leaves,
+		cellID: opts.CellID, salt: s, leaves: opts.Leaves, journal: opts.Journal,
 		window: w, topK: k, store: opts.RetStore,
 		now: now, onTrip: opts.OnTrip,
 		curID: -1,
@@ -236,13 +241,7 @@ func (a *Aggregator) sealLocked(id int64) error {
 	agg := buildAggregate(a.cellID, id, id*wms, (id+1)*wms, a.curRec, a.salt, a.topK)
 	atomic.AddUint64(&a.stats.WindowsSealed, 1)
 
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      a.cellID,
-		PayloadHash: registry.HashPayload(a.salt, aggregateBytes(agg)),
-		Timestamp:   a.now().UnixNano(),
-	}
-	if _, err := a.leaves.Append(context.Background(), leaf); err != nil {
+	if _, err := registry.AppendLeaf(context.Background(), a.leaves, a.journal, registry.KindTelemetry, a.cellID, a.salt, aggregateBytes(agg), a.now().UnixNano()); err != nil {
 		atomic.AddUint64(&a.stats.LeafFailures, 1)
 		return err
 	}
@@ -258,7 +257,7 @@ func (a *Aggregator) sealLocked(id int64) error {
 			SealedAt:  a.now().UnixMilli(),
 			Aggregate: agg,
 			Records:   append([]Record(nil), a.curRec...),
-			LeafHash:  leaf.PayloadHash,
+			LeafHash:  registry.HashPayload(a.salt, aggregateBytes(agg)),
 		}
 		if err := a.store.Put(batch); err != nil {
 			atomic.AddUint64(&a.stats.StoreFailures, 1)

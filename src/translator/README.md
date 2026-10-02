@@ -113,7 +113,10 @@ metrics, blocking in CI, plus stratified human sampling:
 - **`metrics.go` + `cmd/tmetrics/`** — the registry-side leaf format
   ("TBTM1", KindTelemetry, hash-only §6.2): `tmetrics --report report.json`
   inscribes the measurement into the cell registry (registry keys required,
-  never generated there).
+  never generated there). `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE`
+  are required too (#275): the measurement's cleartext goes into the journal
+  of the service that owns that registry (pepd or brokerd) before the leaf is
+  written — no journal, no leaf.
 
 CI wiring (workflows are read-only for the agent — copy this step):
 

@@ -68,9 +68,13 @@ type RawBatch struct {
 // (≥ 16 octets) et Leaves requis ; TTL et MaxBatches ont des défauts
 // documentés.
 type RetentionOptions struct {
-	CellID     string
-	Salt       []byte
-	Leaves     pep.LeafSink
+	CellID string
+	Salt   []byte
+	Leaves pep.LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275, #271 :
+	// tbp-audit verify). Optionnel ici (nil = feuille nue, historique). Journal refusé ⇒
+	// pas de feuille (même chemin d'erreur qu'un registre en panne).
+	Journal    *registry.RecordStore
 	TTL        time.Duration // 0 ⇒ 24 h
 	MaxBatches int           // 0 ⇒ 1440
 	Now        func() time.Time
@@ -89,13 +93,14 @@ type RetentionStats struct {
 // purge au registre. Sûr pour un usage concurrent ; aucune goroutine :
 // PurgeExpired est piloté par l'appelant.
 type RetentionStore struct {
-	cellID string
-	salt   []byte
-	leaves pep.LeafSink
-	ttl    time.Duration
-	max    int
-	now    func() time.Time
-	onTrip func(string)
+	cellID  string
+	salt    []byte
+	leaves  pep.LeafSink
+	journal *registry.RecordStore
+	ttl     time.Duration
+	max     int
+	now     func() time.Time
+	onTrip  func(string)
 
 	mu      sync.Mutex
 	batches map[int64]RawBatch // indexé par windowID (monotone)
@@ -140,7 +145,7 @@ func NewRetentionStore(opts RetentionOptions) (*RetentionStore, error) {
 	s := make([]byte, len(opts.Salt))
 	copy(s, opts.Salt)
 	return &RetentionStore{
-		cellID: opts.CellID, salt: s, leaves: opts.Leaves,
+		cellID: opts.CellID, salt: s, leaves: opts.Leaves, journal: opts.Journal,
 		ttl: ttl, max: max, now: now, onTrip: opts.OnTrip,
 		batches: make(map[int64]RawBatch),
 	}, nil
@@ -197,13 +202,7 @@ func (s *RetentionStore) PurgeExpired() int {
 
 	purged := 0
 	for _, b := range expired {
-		leaf := registry.Leaf{
-			Kind:        registry.KindRetentionPurge,
-			CellID:      s.cellID,
-			PayloadHash: registry.HashPayload(s.salt, purgeManifest(s.cellID, b, nowMs)),
-			Timestamp:   s.now().UnixNano(),
-		}
-		if _, err := s.leaves.Append(context.Background(), leaf); err != nil {
+		if _, err := registry.AppendLeaf(context.Background(), s.leaves, s.journal, registry.KindRetentionPurge, s.cellID, s.salt, purgeManifest(s.cellID, b, nowMs), s.now().UnixNano()); err != nil {
 			// pas de trace, pas de destruction — le lot reste (§9.1)
 			s.stats.PurgeFailures++
 			if s.onTrip != nil {

@@ -4,6 +4,7 @@
 package translator
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -184,13 +185,13 @@ func TestAppendMetricsLeafFailClosedConfig(t *testing.T) {
 	report := sampleReport(t)
 	sink := &fakeMetricsLeaves{}
 	ctx := context.Background()
-	if _, err := AppendMetricsLeaf(ctx, sink, "", metricsSalt, report, metricsClock); err == nil {
+	if _, err := AppendMetricsLeaf(ctx, sink, nil, "", metricsSalt, report, metricsClock); err == nil {
 		t.Fatal("cellID vide accepté")
 	}
-	if _, err := AppendMetricsLeaf(ctx, sink, metricsCell, []byte("court"), report, metricsClock); err == nil {
+	if _, err := AppendMetricsLeaf(ctx, sink, nil, metricsCell, []byte("court"), report, metricsClock); err == nil {
 		t.Fatal("sel < 16 octets accepté")
 	}
-	if _, err := AppendMetricsLeaf(ctx, nil, metricsCell, metricsSalt, report, metricsClock); err == nil {
+	if _, err := AppendMetricsLeaf(ctx, nil, nil, metricsCell, metricsSalt, report, metricsClock); err == nil {
 		t.Fatal("couture feuilles absente acceptée")
 	}
 }
@@ -201,7 +202,7 @@ func TestAppendMetricsLeafHashOnlyExact(t *testing.T) {
 	report := sampleReport(t)
 	sink := &fakeMetricsLeaves{}
 	at := metricsClock
-	if _, err := AppendMetricsLeaf(context.Background(), sink, metricsCell, metricsSalt, report, at); err != nil {
+	if _, err := AppendMetricsLeaf(context.Background(), sink, nil, metricsCell, metricsSalt, report, at); err != nil {
 		t.Fatalf("AppendMetricsLeaf: %v", err)
 	}
 	leaves := sink.snapshot()
@@ -263,7 +264,7 @@ func TestAppendMetricsLeafRealRegistry(t *testing.T) {
 	defer func() { _ = log.Close(context.Background()) }()
 
 	report := sampleReport(t)
-	idx, err := AppendMetricsLeaf(ctx, log, metricsCell, metricsSalt, report, metricsClock)
+	idx, err := AppendMetricsLeaf(ctx, log, nil, metricsCell, metricsSalt, report, metricsClock)
 	if err != nil {
 		t.Fatalf("AppendMetricsLeaf: %v", err)
 	}
@@ -298,5 +299,33 @@ func TestAppendMetricsLeafRealRegistry(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("feuille de métriques absente du scan vérifié (%d feuilles)", len(leaves))
+	}
+}
+
+// #275 : AppendMetricsLeaf journalise le record TBTM1 AVANT la feuille ; journal refusé ⇒ aucune feuille.
+func TestAppendMetricsLeafIsJournaled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.jsonl")
+	key := bytes.Repeat([]byte{3}, registry.RecordKeyLen)
+	j, err := registry.OpenRecordStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	report := sampleReport(t)
+	sink := &fakeMetricsLeaves{}
+	if _, err := AppendMetricsLeaf(context.Background(), sink, j, metricsCell, metricsSalt, report, metricsClock); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(path, key)
+	if err != nil || len(recs) != 1 || len(sink.snapshot()) != 1 || recs[0].Leaf != sink.snapshot()[0] ||
+		recs[0].VerifyHash() != nil || !bytes.HasPrefix(recs[0].Record, []byte("TBTM1")) {
+		t.Fatalf("journal %d enregistrements (err=%v)", len(recs), err)
+	}
+	_ = j.Close()
+	if _, err := AppendMetricsLeaf(context.Background(), sink, j, metricsCell, metricsSalt, report, metricsClock); err == nil {
+		t.Fatal("feuille de métriques inscrite sans clair journalisé — fail-closed violé")
+	}
+	if n := len(sink.snapshot()); n != 1 {
+		t.Fatalf("%d feuilles", n)
 	}
 }

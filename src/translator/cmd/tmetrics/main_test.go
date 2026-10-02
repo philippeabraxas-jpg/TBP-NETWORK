@@ -87,6 +87,7 @@ func TestRunRefusesKeylessRegistry(t *testing.T) {
 	t.Setenv("TBP_CELL_ID", "cell-t26")
 	t.Setenv("TBP_SALT", strings.Repeat("ab", 16))
 	t.Setenv("TBP_REGISTRY_DIR", regDir)
+	setJournalEnv(t, dir)
 	err := run([]string{"--report", report})
 	if err == nil {
 		t.Fatal("registre sans clés accepté — identité forgée en silence")
@@ -106,6 +107,7 @@ func TestRunRefusesBadReport(t *testing.T) {
 	t.Setenv("TBP_CELL_ID", "cell-t26")
 	t.Setenv("TBP_SALT", strings.Repeat("ab", 16))
 	t.Setenv("TBP_REGISTRY_DIR", regDir)
+	setJournalEnv(t, dir)
 
 	bad := writeReport(t, dir, `{"version":2,"corpus_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","classes":[]}`)
 	if err := run([]string{"--report", bad}); err == nil {
@@ -133,6 +135,7 @@ func TestRunAppendsToRealRegistry(t *testing.T) {
 	t.Setenv("TBP_CELL_ID", "cell-t26")
 	t.Setenv("TBP_SALT", saltHex)
 	t.Setenv("TBP_REGISTRY_DIR", regDir)
+	setJournalEnv(t, dir)
 
 	if err := run([]string{"--report", report}); err != nil {
 		t.Fatalf("run: %v", err)
@@ -181,5 +184,53 @@ func TestRunAppendsToRealRegistry(t *testing.T) {
 	if want := registry.HashPayload(salt, record); leaves[0].PayloadHash != want {
 		t.Fatalf("hash feuille %x, attendu %x (record TBTM1 reconstruit à la main)",
 			leaves[0].PayloadHash, want)
+	}
+}
+
+// setJournalEnv pose le journal d'enregistrements requis (#275) dans dir.
+func setJournalEnv(t *testing.T, dir string) {
+	t.Helper()
+	key := filepath.Join(dir, "records.key")
+	if _, err := os.Stat(key); err != nil {
+		if err := registry.GenerateRecordKey(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TBP_AUDIT_RECORDS", filepath.Join(dir, "records.jsonl"))
+	t.Setenv("TBP_AUDIT_RECORDS_KEY_FILE", key)
+}
+
+// #275 : la feuille de métriques laisse son clair (record TBTM1) dans le journal ; sans journal configuré,
+// tmetrics refuse d'inscrire.
+func TestRunJournalsTheMetricsRecordAndRequiresTheJournal(t *testing.T) {
+	dir := t.TempDir()
+	regDir := filepath.Join(dir, "registry")
+	if err := os.MkdirAll(regDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initRegistry(t, regDir)
+	report := writeReport(t, dir, testReportJSON)
+	t.Setenv("TBP_CELL_ID", "cell-t26")
+	t.Setenv("TBP_SALT", strings.Repeat("ab", 16))
+	t.Setenv("TBP_REGISTRY_DIR", regDir)
+
+	// sans journal : refus, aucune feuille
+	t.Setenv("TBP_AUDIT_RECORDS", "")
+	t.Setenv("TBP_AUDIT_RECORDS_KEY_FILE", "")
+	if err := run([]string{"--report", report}); err == nil || !strings.Contains(err.Error(), "journal d'audit") {
+		t.Fatalf("tmetrics a inscrit (ou mal refusé) sans journal : %v", err)
+	}
+
+	setJournalEnv(t, dir)
+	if err := run([]string{"--report", report}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	key, err := registry.LoadRecordKey(os.Getenv("TBP_AUDIT_RECORDS_KEY_FILE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(os.Getenv("TBP_AUDIT_RECORDS"), key)
+	if err != nil || len(recs) != 1 || recs[0].VerifyHash() != nil || !strings.HasPrefix(string(recs[0].Record), "TBTM1") || recs[0].Leaf.Kind != registry.KindTelemetry {
+		t.Fatalf("journal : %d enregistrements (err=%v) %+v", len(recs), err, recs)
 	}
 }

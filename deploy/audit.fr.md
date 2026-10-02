@@ -88,8 +88,13 @@ Câblés à ce jour :
 | `pepd` — manifeste du démarrage mesuré (`TBPL2`) | `KindManifest` | même journal (partagé) |
 | `brokerd` — suivi d'époque (`TBPE1`), feuille d'épisode de l'écrivain asynchrone de `pepd` (`TBAD1`) | `KindEpoch`, `KindTelemetry` | même journal (partagé) |
 | Producteurs de bibliothèque à option `Journal`, câblés par le démon qui les fait tourner : contrôleur de promotion (`TBPP1`), ancreur, feuille d'arrêt du backpressure | `KindPromotion`, `KindAnchor`, `KindBackpressure` | option `Journal` (nil = feuille nue). La feuille d'arrêt et la feuille d'épisode s'écrivent autour du verrou de backpressure : un journal qui refuse ⇒ la feuille est omise (`+leaf-write-failed` dans l'alarme) et le verrou tient. |
+| `supervisord` — alertes du moniteur (`TBPS1`, sel compris) | `KindSupervision` | son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : sans journal `supervisord` ne démarre pas). Un journal qui refuse ⇒ aucune feuille ⇒ aucune alerte notifiée. |
+| `pepd` / `brokerd` — drapeaux d'échappatoires dev (`TBDV1`) | `KindTelemetry` | même journal (partagé) ; un journal qui refuse ⇒ le démarrage est refusé |
+| `tmetrics` — mesure du traducteur (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis**), qui désignent le journal du service (pepd ou brokerd) propriétaire du registre où il inscrit |
+| Producteurs de bibliothèque à option `Journal` : événements de dégradation du traducteur (`TBTD1`), puits de feuilles de l'exporteur de télémétrie (`TBTM1`, un `fsync` par record — à brancher en connaissance de cause), agrégateur de fenêtres, purge de rétention, détecteur anti-dribble | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | option `Journal` (nil = feuille nue) |
 
-Tous les autres producteurs (supervisord, les drapeaux dev, la télémétrie et
-les métriques du traducteur, …) inscrivent encore une feuille nue : leurs
-feuilles n'ont pas d'entrée de journal et `tbp-audit` n'a rien à en dire. Les
-câbler est suivi dans #275, un producteur à la fois.
+Tout producteur de feuilles de ce dépôt a désormais une couture de journal, et
+tout démon qui écrit des feuilles exige son journal. Un producteur de
+bibliothèque n'est nu que tant que son hôte ne branche pas `Journal` : rien
+dans le dépôt ne fait encore tourner les producteurs de télémétrie ou de
+dégradation dans un démon.

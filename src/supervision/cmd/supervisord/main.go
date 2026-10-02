@@ -37,6 +37,9 @@
 //	TBP_MONITOR_CELL_ID      identité du moniteur (ex. monitor-01)
 //	TBP_SALT                 sel des feuilles, hex ≥ 32 caractères (§6.2)
 //	TBP_REGISTRY_DIR         répertoire du CellLog du MONITEUR (sa chaîne)
+//	TBP_AUDIT_RECORDS        journal chiffré du clair des feuilles d'alerte (#275, #271)
+//	TBP_AUDIT_RECORDS_KEY_FILE  sa clé (0600 ; `tbp-audit keygen`) — requis : sans eux
+//	                         le moniteur ne démarre pas (une alerte non vérifiable ne vaut rien)
 //	TBP_CELLS_FILE           JSON des chaînes surveillées :
 //	                         {"cells":[{"cell_id","log_dir","origin",
 //	                           "vkey_file","manifest_dir"}…],
@@ -102,6 +105,8 @@ type config struct {
 	monitorCellID string
 	salt          []byte
 	registryDir   string
+	auditRecords  string // journal d'enregistrements (#275)
+	auditKeyFile  string
 	cellsFile     string
 	brokerSocket  string
 	tick          time.Duration
@@ -118,6 +123,14 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		return nil, err
 	}
 	registryDir, err := envRequired(getenv, "TBP_REGISTRY_DIR")
+	if err != nil {
+		return nil, err
+	}
+	auditRecords, err := envRequired(getenv, "TBP_AUDIT_RECORDS")
+	if err != nil {
+		return nil, fmt.Errorf("%w (#275 : le clair des alertes doit rester vérifiable, tbp-audit verify)", err)
+	}
+	auditKeyFile, err := envRequired(getenv, "TBP_AUDIT_RECORDS_KEY_FILE")
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +158,8 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		monitorCellID: monitorCellID,
 		salt:          salt,
 		registryDir:   registryDir,
+		auditRecords:  auditRecords,
+		auditKeyFile:  auditKeyFile,
 		cellsFile:     cellsFile,
 		brokerSocket:  brokerSocket,
 		tick:          tick,
@@ -253,9 +268,18 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 	}()
 
+	// Journal d'enregistrements (#275) : le clair de chaque feuille d'alerte, vérifiable avec
+	// `tbp-audit verify`. REQUIS : un moniteur dont les alertes ne seraient pas vérifiables ne démarre pas.
+	auditStore, err := registry.OpenRecordStoreFiles(cfg.auditRecords, cfg.auditKeyFile)
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275): %w", err)
+	}
+	defer auditStore.Close()
+
 	monitor, err := supervision.NewMonitor(ctx, supervision.MonitorOptions{
 		MonitorCellID: cfg.monitorCellID,
 		Log:           monLog,
+		Journal:       auditStore,
 		Cells:         cells,
 		Master:        master,
 		// Trigger NIL (T34b, v1) : chute confirmée ⇒ refus feuillé +

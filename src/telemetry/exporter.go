@@ -147,10 +147,11 @@ type RecordSink interface {
 // TelemetryLeafSink inscrit les records au registre de la cellule. Sûr
 // pour un usage concurrent (la sérialisation est sans état).
 type TelemetryLeafSink struct {
-	cellID string
-	salt   []byte
-	leaves pep.LeafSink
-	now    func() time.Time
+	cellID  string
+	salt    []byte
+	leaves  pep.LeafSink
+	journal *registry.RecordStore
+	now     func() time.Time
 }
 
 // NewTelemetryLeafSink construit la couture feuilles. Fail-closed :
@@ -173,16 +174,18 @@ func NewTelemetryLeafSink(cellID string, salt []byte, leaves pep.LeafSink, now f
 	return &TelemetryLeafSink{cellID: cellID, salt: s, leaves: leaves, now: now}, nil
 }
 
+// WithJournal branche le journal d'enregistrements (#275, #271) : le clair « TBTM1 » de chaque record
+// est journalisé AVANT sa feuille (un fsync par record — à brancher consciemment sur ce chemin), journal
+// refusé ⇒ aucune feuille. À appeler avant tout Feed. Nil ⇒ feuille nue (historique).
+func (s *TelemetryLeafSink) WithJournal(j *registry.RecordStore) *TelemetryLeafSink {
+	s.journal = j
+	return s
+}
+
 // Feed inscrit la feuille du record. L'erreur est PROPAGÉE — l'exporteur
 // la compte et l'alarme (jamais silencieux, §5.3).
 func (s *TelemetryLeafSink) Feed(r Record) error {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      s.cellID,
-		PayloadHash: registry.HashPayload(s.salt, telemetryRecord(r)),
-		Timestamp:   s.now().UnixNano(),
-	}
-	_, err := s.leaves.Append(context.Background(), leaf)
+	_, err := registry.AppendLeaf(context.Background(), s.leaves, s.journal, registry.KindTelemetry, s.cellID, s.salt, telemetryRecord(r), s.now().UnixNano())
 	return err
 }
 

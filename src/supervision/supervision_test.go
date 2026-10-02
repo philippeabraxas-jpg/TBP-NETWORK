@@ -219,7 +219,7 @@ type monitorFixture struct {
 	monitor  *Monitor
 }
 
-func newMonitorFixture(t *testing.T) *monitorFixture {
+func newMonitorFixture(t *testing.T, mut ...func(*MonitorOptions)) *monitorFixture {
 	t.Helper()
 	clk := &fakeClock{t: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
 	fx := &monitorFixture{
@@ -243,7 +243,7 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 	var got []Alert
 	fx.sink = &got
 	fx.trig = &triggerRecorder{}
-	mon, err := NewMonitor(testCtx, MonitorOptions{
+	opts := MonitorOptions{
 		MonitorCellID: fx.sup.cellID,
 		Log:           fx.sup.log,
 		Cells: []CellSpec{{
@@ -265,7 +265,11 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 		}),
 		Trigger: fx.trig,
 		Now:     clk.now,
-	})
+	}
+	for _, f := range mut {
+		f(&opts)
+	}
+	mon, err := NewMonitor(testCtx, opts)
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
