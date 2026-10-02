@@ -117,7 +117,12 @@ action; the agent presents both:
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
   -d '{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
   http://localhost/v1/supervision/plan/submit
-# 2. the operator approves it with the operator key, then the body is posted
+# 2a. the operator RECOMPUTES the hash from the plan in clear (the same body as submit) — never trust the hash the
+#     broker announces: the cell, the policy and the submission time come from the operator's own configuration and
+#     from the broker's arbitration view (GET /v1/supervision/arbitration → pending[].submitted_at) (#273)
+quorumproof planhash -cell cell-s2 -policy-id "$TBP_POLICY_ID" -submitted-at <submitted_at> -plan plan.json -expect <plan_hash>
+#     "conforme" → sign. "plan_hash DIFFÉRENT" (exit 1) → DO NOT SIGN: the plan the broker sealed is not this one
+# 2b. the operator approves it with the operator key, then the body is posted
 quorumproof planapprove -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/approval.json
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/approval.json \
   http://localhost/v1/supervision/plan/approve

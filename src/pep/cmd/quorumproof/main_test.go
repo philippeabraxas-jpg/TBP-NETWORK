@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -454,6 +455,169 @@ func TestPlanRevokeSignsTheRevocationMessageNotTheApproval(t *testing.T) {
 	} {
 		if err := cmdPlanRevoke(args); err == nil {
 			t.Fatalf("%s accepté", name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #273 : planhash recalcule le hash d'un plan comme le fait le broker
+// ---------------------------------------------------------------------------
+
+type nopSink struct{}
+
+func (nopSink) Append(context.Context, registry.Leaf) (uint64, error) { return 1, nil }
+
+const planJSON = `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""},{"action":"write","resource":"doc-2","params_hex":"0a0b"}]}`
+
+// writePlan écrit le plan dans un fichier PROPRE à ce corps : les variantes d'un même test ne
+// doivent jamais écraser le plan de référence (l'ordre d'itération d'une map est aléatoire).
+func writePlan(t *testing.T, dir, body string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(body))
+	p := filepath.Join(dir, "plan-"+hex.EncodeToString(sum[:6])+".json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func planHashOf(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var out strings.Builder
+	err := cmdPlanHash(args, &out)
+	h := ""
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "plan_hash=") {
+			h = strings.TrimPrefix(l, "plan_hash=")
+		}
+	}
+	return h, err
+}
+
+// Le hash recalculé par l'outil à partir du plan en clair est EXACTEMENT celui que le vrai
+// ContractStore du broker a scellé — et chaque champ du sceau le change.
+func TestPlanHashMatchesWhatTheBrokerSeals(t *testing.T) {
+	dir := t.TempDir()
+	opKey, _ := keyFile(t, dir, "operator", 4)
+	policy := [32]byte{9, 8, 7}
+	submitted := time.Date(2026, 10, 2, 8, 30, 15, 987_000_000, time.UTC) // sous-secondes : ignorées par le sceau
+	store, err := pep.NewContractStore(pep.ContractOptions{
+		CellID: "cell-s2", PolicyID: policy, OperatorKeys: []ed25519.PublicKey{opKey.Public().(ed25519.PublicKey)},
+		Salt: []byte("sel-de-test-16-octets+"), Leaves: nopSink{}, Now: func() time.Time { return submitted },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []pep.PlanStep{
+		{Action: "read", Resource: "doc-1", ParamsHash: pep.HashParams(nil)},
+		{Action: "write", Resource: "doc-2", ParamsHash: pep.HashParams([]byte{0x0a, 0x0b})},
+	}
+	sealed, err := store.Submit(context.Background(), "agent-w", steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := hex.EncodeToString(sealed[:])
+	planPath := writePlan(t, dir, planJSON)
+	base := []string{"-cell", "cell-s2", "-policy-id", hex.EncodeToString(policy[:]), "-submitted-at", submitted.Format(time.RFC3339Nano), "-plan", planPath}
+
+	got, err := planHashOf(t, base...)
+	if err != nil || got != want {
+		t.Fatalf("hash recalculé %q (err=%v), le broker a scellé %q", got, err, want)
+	}
+	// secondes Unix : même hash ; -expect conforme : succès
+	unix := append([]string(nil), base...)
+	unix[5] = strconv.FormatInt(submitted.Unix(), 10)
+	if got, err := planHashOf(t, append(unix, "-expect", want)...); err != nil || got != want {
+		t.Fatalf("secondes Unix + -expect : %q (%v)", got, err)
+	}
+
+	// chaque champ du sceau le change (et -expect refuse alors : « ne signez pas »)
+	with := func(i int, v string) []string { a := append([]string(nil), base...); a[i] = v; return a }
+	otherPolicy := policy
+	otherPolicy[0] ^= 1
+	variants := map[string][]string{
+		"cellule":    with(1, "cell-s3"),
+		"politique":  with(3, hex.EncodeToString(otherPolicy[:])),
+		"soumission": with(5, submitted.Add(time.Second).Format(time.RFC3339)),
+	}
+	for name, a := range variants {
+		if h, err := planHashOf(t, a...); err != nil || h == want {
+			t.Errorf("%s modifié : hash %q (err=%v), doit différer du sceau", name, h, err)
+		}
+		if _, err := planHashOf(t, append(a, "-expect", want)...); err == nil || !strings.Contains(err.Error(), "DIFFÉRENT") {
+			t.Errorf("%s modifié : -expect doit refuser (« DIFFÉRENT »), reçu %v", name, err)
+		}
+	}
+	planVariants := map[string]string{
+		"sujet":          strings.Replace(planJSON, "agent-w", "agent-x", 1),
+		"action":         strings.Replace(planJSON, `"read"`, `"list"`, 1),
+		"ressource":      strings.Replace(planJSON, "doc-1", "doc-9", 1),
+		"paramètres":     strings.Replace(planJSON, "0a0b", "0a0c", 1),
+		"ordre":          `{"subject":"agent-w","steps":[{"action":"write","resource":"doc-2","params_hex":"0a0b"},{"action":"read","resource":"doc-1","params_hex":""}]}`,
+		"étape en moins": `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}`,
+	}
+	for name, body := range planVariants {
+		a := with(7, writePlan(t, dir, body))
+		if h, err := planHashOf(t, a...); err != nil || h == want {
+			t.Errorf("plan avec %s modifié : hash %q (err=%v), doit différer du sceau", name, h, err)
+		}
+	}
+	// la sortie montre tout ce qui entre dans le sceau (« ce qu'on voit est ce qu'on signe »)
+	var out strings.Builder
+	if err := cmdPlanHash(base, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"cell=cell-s2", "subject=agent-w", "submitted_at=" + strconv.FormatInt(submitted.Unix(), 10), "policy_id=", "step 1: action=read resource=doc-1", "step 2: action=write resource=doc-2"} {
+		if !strings.Contains(out.String(), w) {
+			t.Errorf("sortie sans %q :\n%s", w, out.String())
+		}
+	}
+}
+
+// Le plan est lu STRICTEMENT et borné comme le broker (pep.ValidatePlan) : un plan que le broker
+// refuserait n'a pas de hash.
+func TestPlanHashRefusesWhatTheBrokerRefuses(t *testing.T) {
+	dir := t.TempDir()
+	pol := strings.Repeat("02", 32)
+	args := func(plan string) []string {
+		return []string{"-cell", "cell-s2", "-policy-id", pol, "-submitted-at", "1790000000", "-plan", writePlan(t, dir, plan)}
+	}
+	if _, err := planHashOf(t, args(planJSON)...); err != nil {
+		t.Fatalf("plan valide refusé : %v", err)
+	}
+	long := strings.Repeat("a", 256)
+	manySteps := `{"subject":"a","steps":[` + strings.TrimSuffix(strings.Repeat(`{"action":"r","resource":"x","params_hex":""},`, pep.MaxPlanSteps+1), ",") + `]}`
+	for name, body := range map[string]string{
+		"champ inconnu":         `{"subject":"a","steps":[{"action":"r","resource":"x","params_hex":"","extra":1}]}`,
+		"champ inconnu racine":  `{"subject":"a","evil":1,"steps":[{"action":"r","resource":"x","params_hex":""}]}`,
+		"contenu après l'objet": planJSON + `{"x":1}`,
+		"JSON invalide":         `{"subject":`,
+		"sujet vide":            `{"subject":"","steps":[{"action":"r","resource":"x","params_hex":""}]}`,
+		"sujet de 256 octets":   `{"subject":"` + long + `","steps":[{"action":"r","resource":"x","params_hex":""}]}`,
+		"aucune étape":          `{"subject":"a","steps":[]}`,
+		"trop d'étapes":         manySteps,
+		"action vide":           `{"subject":"a","steps":[{"action":"","resource":"x","params_hex":""}]}`,
+		"action de 256 octets":  `{"subject":"a","steps":[{"action":"` + long + `","resource":"x","params_hex":""}]}`,
+		"ressource vide":        `{"subject":"a","steps":[{"action":"r","resource":"","params_hex":""}]}`,
+		"params non hex":        `{"subject":"a","steps":[{"action":"r","resource":"x","params_hex":"zz"}]}`,
+	} {
+		if h, err := planHashOf(t, args(body)...); err == nil {
+			t.Errorf("%s : accepté (hash %q)", name, h)
+		}
+	}
+	// arguments : requis, bornes, formats
+	base := args(planJSON)
+	for name, bad := range map[string][]string{
+		"cellule vide":      {"-cell", "", "-policy-id", pol, "-submitted-at", "1790000000", "-plan", base[7]},
+		"cellule de 256":    {"-cell", long, "-policy-id", pol, "-submitted-at", "1790000000", "-plan", base[7]},
+		"politique courte":  {"-cell", "c", "-policy-id", "abcd", "-submitted-at", "1790000000", "-plan", base[7]},
+		"instant invalide":  {"-cell", "c", "-policy-id", pol, "-submitted-at", "hier", "-plan", base[7]},
+		"instant nul":       {"-cell", "c", "-policy-id", pol, "-submitted-at", "0", "-plan", base[7]},
+		"plan absent":       {"-cell", "c", "-policy-id", pol, "-submitted-at", "1790000000", "-plan", filepath.Join(dir, "absent.json")},
+		"-expect mal formé": append(append([]string(nil), base...), "-expect", "zz"),
+	} {
+		if _, err := planHashOf(t, bad...); err == nil {
+			t.Errorf("%s : accepté", name)
 		}
 	}
 }
