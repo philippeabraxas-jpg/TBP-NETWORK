@@ -53,10 +53,12 @@
 #   data.tbp.hardening.allowed_domains         ["hote.exemple", "*.exemple.org", "hote.exemple:8443"]
 #                                              (sans port : port par défaut du schéma seul)
 #   data.tbp.hardening.allowed_commands        ["ls", "/usr/bin/git"]  (commande NUE : « ls »
-#                                              passe seul, « ls -la » non ; 1er mot EXACT,
-#                                              « ls » n'autorise pas « /tmp/ls »)
+#                                              passe seul, « ls -la » non ; 1er mot EXACT, casse
+#                                              comprise, « ls » n'autorise pas « /tmp/ls »)
 #   data.tbp.hardening.allowed_command_lines   ["git status", "ls -la /srv"]  (ligne COMPLÈTE,
-#                                              blancs réduits à un espace, casse ignorée)
+#                                              blancs réduits à un espace ; CASSE EXACTE : une
+#                                              option change de sens avec la casse (-r / -R) et
+#                                              les chemins Linux y sont sensibles)
 #   data.tbp.hardening.extra_command_actions   [nom d'action, …]  (forcer le jugement « commande »)
 #   data.tbp.hardening.extra_non_command_actions [nom d'action, …]  (actions NON-exécution
 #                                              à ajouter à la liste par défaut ci-dessous)
@@ -106,10 +108,13 @@ default_non_command_actions := {
 
 non_command_actions := default_non_command_actions | {lower(a) | some a in data.tbp.hardening.extra_non_command_actions}
 
-allowed_commands := {lower(c) | some c in data.tbp.hardening.allowed_commands}
+# Commandes et lignes de commande : comparaison EXACTE, casse comprise. « ls -r /srv/Public » ne doit pas autoriser
+# « ls -R /srv/Public » ni « ls -r /srv/public » (une option change de sens avec la casse, les chemins Linux y sont
+# sensibles). L'insensibilité à la casse reste réservée aux NOMS D'HÔTE (allowed_domains).
+allowed_commands := {c | some c in data.tbp.hardening.allowed_commands}
 
 # Lignes de commande COMPLÈTES autorisées (#267), blancs réduits à un espace.
-allowed_command_lines := {regex.replace(trim_space(lower(l)), `\s+`, " ") | some l in data.tbp.hardening.allowed_command_lines}
+allowed_command_lines := {regex.replace(trim_space(l), `\s+`, " ") | some l in data.tbp.hardening.allowed_command_lines}
 
 exempt_resources := {lower(r) | some r in data.tbp.hardening.exempt_resources}
 
@@ -213,7 +218,7 @@ is_command_action if {
 has_shell_metacharacter if regex.match("[;|&$`<>(){}*?!\\\\\n\r]", input.resource)
 
 # Mots de la ligne de commande (blancs réduits).
-command_words := regex.split(`\s+`, trim_space(lower(input.resource)))
+command_words := regex.split(`\s+`, trim_space(input.resource))
 
 # Premier mot, EXACT (jamais le nom de base : « ls » ne doit pas autoriser un
 # binaire « /tmp/ls » déposé par l'agent).
@@ -221,7 +226,7 @@ command_word := command_words[0]
 
 # La ligne COMPLÈTE normalisée : l'allow-list juge aussi les ARGUMENTS (#267) — « git »
 # autorisé ne doit pas autoriser « git -c core.sshCommand=… » ni « find -exec … ».
-command_line := regex.replace(trim_space(lower(input.resource)), `\s+`, " ")
+command_line := regex.replace(trim_space(input.resource), `\s+`, " ")
 
 command_has_arguments if count(command_words) > 1
 
