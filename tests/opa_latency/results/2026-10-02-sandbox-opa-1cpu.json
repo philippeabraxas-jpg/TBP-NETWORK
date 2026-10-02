@@ -1,0 +1,97 @@
+{
+  "at": "2026-10-02T14:51:13Z",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 1,
+  "opa_version": "1.20.2",
+  "opa_cpus": "0",
+  "budget_ms": 5,
+  "transports": {
+    "unix": {
+      "cold": {
+        "trials": 10,
+        "first_request": {
+          "n": 10,
+          "p50_ms": 2.927295,
+          "p90_ms": 4.594553,
+          "p99_ms": 4.594553,
+          "p99_9_ms": 4.594553,
+          "max_ms": 5.044993,
+          "over_budget": 1,
+          "over_budget_pct": 10,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 10,
+          "p50_ms": 1.269765,
+          "p90_ms": 1.552041,
+          "p99_ms": 1.552041,
+          "p99_9_ms": 1.552041,
+          "max_ms": 2.550902,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "first_request_verdicts": {
+          "ok": 10
+        }
+      },
+      "idle": {
+        "idle_gap_s": 3,
+        "after_idle": {
+          "n": 2,
+          "p50_ms": 1.661177,
+          "p90_ms": 1.661177,
+          "p99_ms": 1.661177,
+          "p99_9_ms": 1.661177,
+          "max_ms": 1.739268,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {
+          "ok": 2
+        }
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 2000,
+            "p50_ms": 0.742231,
+            "p90_ms": 1.605141,
+            "p99_ms": 2.860671,
+            "p99_9_ms": 4.4913,
+            "max_ms": 5.276881,
+            "over_budget": 1,
+            "over_budget_pct": 0.05,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 2000
+          },
+          "client_timeout_pct": 0
+        },
+        {
+          "concurrency": 4,
+          "raw_latency": {
+            "n": 2000,
+            "p50_ms": 2.060427,
+            "p90_ms": 4.931907,
+            "p99_ms": 7.282011,
+            "p99_9_ms": 74.878845,
+            "max_ms": 151.963773,
+            "over_budget": 188,
+            "over_budget_pct": 9.4,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 1295,
+            "opa-timeout": 705
+          },
+          "client_timeout_pct": 35.25
+        }
+      ]
+    }
+  }
+}

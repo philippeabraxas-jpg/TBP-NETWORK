@@ -1,0 +1,262 @@
+{
+  "at": "2026-10-02T14:50:03Z",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 2,
+  "opa_version": "1.20.2",
+  "opa_cpus": "0,1",
+  "budget_ms": 5,
+  "transports": {
+    "tcp": {
+      "cold": {
+        "trials": 20,
+        "first_request": {
+          "n": 20,
+          "p50_ms": 2.569003,
+          "p90_ms": 3.453189,
+          "p99_ms": 3.883922,
+          "p99_9_ms": 3.883922,
+          "max_ms": 5.813518,
+          "over_budget": 1,
+          "over_budget_pct": 5,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 20,
+          "p50_ms": 1.490338,
+          "p90_ms": 2.704959,
+          "p99_ms": 3.672089,
+          "p99_9_ms": 3.672089,
+          "max_ms": 5.733375,
+          "over_budget": 1,
+          "over_budget_pct": 5,
+          "failures": 0
+        },
+        "first_request_verdicts": {
+          "ok": 20
+        }
+      },
+      "idle": {
+        "idle_gap_s": 3,
+        "after_idle": {
+          "n": 2,
+          "p50_ms": 1.566955,
+          "p90_ms": 1.566955,
+          "p99_ms": 1.566955,
+          "p99_9_ms": 1.566955,
+          "max_ms": 1.832502,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {
+          "ok": 2
+        }
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.017104,
+            "p90_ms": 1.510234,
+            "p99_ms": 3.310918,
+            "p99_9_ms": 5.699299,
+            "max_ms": 11.275847,
+            "over_budget": 11,
+            "over_budget_pct": 0.275,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3991,
+            "opa-timeout": 9
+          },
+          "client_timeout_pct": 0.225
+        },
+        {
+          "concurrency": 4,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.543017,
+            "p90_ms": 3.77842,
+            "p99_ms": 7.125822,
+            "p99_9_ms": 10.351707,
+            "max_ms": 12.320603,
+            "over_budget": 177,
+            "over_budget_pct": 4.425,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3829,
+            "opa-timeout": 171
+          },
+          "client_timeout_pct": 4.275
+        },
+        {
+          "concurrency": 8,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 2.587706,
+            "p90_ms": 7.73471,
+            "p99_ms": 26.7651,
+            "p99_9_ms": 38.304709,
+            "max_ms": 64.555344,
+            "over_budget": 847,
+            "over_budget_pct": 21.175,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 1533,
+            "opa-timeout": 2467
+          },
+          "client_timeout_pct": 61.675
+        },
+        {
+          "concurrency": 16,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 3.515402,
+            "p90_ms": 13.152245,
+            "p99_ms": 73.397349,
+            "p99_9_ms": 124.415287,
+            "max_ms": 162.037093,
+            "over_budget": 1337,
+            "over_budget_pct": 33.425,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 13,
+            "opa-timeout": 3987
+          },
+          "client_timeout_pct": 99.675
+        }
+      ]
+    },
+    "unix": {
+      "cold": {
+        "trials": 20,
+        "first_request": {
+          "n": 20,
+          "p50_ms": 2.356037,
+          "p90_ms": 4.134683,
+          "p99_ms": 5.543586,
+          "p99_9_ms": 5.543586,
+          "max_ms": 5.623115,
+          "over_budget": 2,
+          "over_budget_pct": 10,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 20,
+          "p50_ms": 1.692515,
+          "p90_ms": 2.20147,
+          "p99_ms": 3.435669,
+          "p99_9_ms": 3.435669,
+          "max_ms": 4.026452,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "first_request_verdicts": {
+          "ok": 19,
+          "opa-timeout": 1
+        }
+      },
+      "idle": {
+        "idle_gap_s": 3,
+        "after_idle": {
+          "n": 2,
+          "p50_ms": 1.583027,
+          "p90_ms": 1.583027,
+          "p99_ms": 1.583027,
+          "p99_9_ms": 1.583027,
+          "max_ms": 1.710455,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {
+          "ok": 2
+        }
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 0.860719,
+            "p90_ms": 1.343512,
+            "p99_ms": 2.652811,
+            "p99_9_ms": 4.755955,
+            "max_ms": 7.290273,
+            "over_budget": 4,
+            "over_budget_pct": 0.1,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3996,
+            "opa-timeout": 4
+          },
+          "client_timeout_pct": 0.1
+        },
+        {
+          "concurrency": 4,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.25899,
+            "p90_ms": 3.138776,
+            "p99_ms": 6.289714,
+            "p99_9_ms": 9.773796,
+            "max_ms": 11.939569,
+            "over_budget": 101,
+            "over_budget_pct": 2.525,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3783,
+            "opa-timeout": 217
+          },
+          "client_timeout_pct": 5.425
+        },
+        {
+          "concurrency": 8,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 2.621143,
+            "p90_ms": 7.061472,
+            "p99_ms": 25.142718,
+            "p99_9_ms": 38.524373,
+            "max_ms": 44.359692,
+            "over_budget": 817,
+            "over_budget_pct": 20.425,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 1866,
+            "opa-timeout": 2134
+          },
+          "client_timeout_pct": 53.35
+        },
+        {
+          "concurrency": 16,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 3.320927,
+            "p90_ms": 14.167662,
+            "p99_ms": 72.544235,
+            "p99_9_ms": 102.5662,
+            "max_ms": 118.61163,
+            "over_budget": 1275,
+            "over_budget_pct": 31.875,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 29,
+            "opa-timeout": 3971
+          },
+          "client_timeout_pct": 99.275
+        }
+      ]
+    }
+  }
+}

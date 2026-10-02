@@ -20,6 +20,9 @@ restaure l'ancien comportement synchrone. Le bras « durabilité » ci-dessous
 mesure ce mode sync = la **borne pire cas**, toujours rapportée côte à
 côte avec le bras « décision » — jamais masquée.
 
+> **Ce harnais mesure le PEP seul (OPA nil).** La latence d'OPA lui-même — démarrage à froid, charge, `opa-timeout`
+> au budget de 5 ms — est mesurée par `tests/opa_latency` (vrai OPA, vraie politique, vrai client) : voir son README.
+
 ## Deux bras de mesure (D88 amendé, arbitrage revue #29)
 
 | Bras | Puits de feuilles | Mesure | Verdict |
