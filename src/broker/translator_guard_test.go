@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,11 +16,12 @@ type fakeGate struct {
 	calls   int
 	subject string
 	natural bool
+	intent  string
 }
 
-func (f *fakeGate) Admit(_ context.Context, subject string, natural bool) error {
+func (f *fakeGate) Admit(_ context.Context, subject string, natural bool, intent string) error {
 	f.calls++
-	f.subject, f.natural = subject, natural
+	f.subject, f.natural, f.intent = subject, natural, intent
 	return f.err
 }
 
@@ -164,5 +166,35 @@ func TestHTTPProbeTimeout(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("le délai de sonde n'est pas appliqué")
+	}
+}
+
+// Arbitrage humain (§4.5) : un verdict DIFFÉRÉ n'est ni un échec de traduction ni une faute — refus sain, tracé,
+// avec l'identifiant à signer ; le refus de l'arbitre a sa raison propre. Aucune alarme dans les deux cas.
+func TestArbitrationOutcomesAreHealthyRefusals(t *testing.T) {
+	srv := opaServer(t, func(map[string]any) bool { return true }, 0)
+	defer srv.Close()
+
+	pend := staticTranslator{err: fmt.Errorf("broker: traducteur non admis : %w", &PendingArbitrationError{ID: "ab" + strings.Repeat("0", 62)})}
+	b, _, leaves, trips := newTestBroker(t, srv.URL, pend)
+	res := b.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
+	if res.Allow || res.Reason != ReasonArbitrationPending || res.ArbitrationID != "ab"+strings.Repeat("0", 62) || len(res.Token) != 0 {
+		t.Fatalf("verdict différé attendu : %+v", res)
+	}
+	if len(trips.all()) != 0 || len(leaves.all()) != 1 {
+		t.Fatalf("alarmes %v, feuilles %d — verdict sain, tracé une fois", trips.all(), len(leaves.all()))
+	}
+	if got := statsOf(t, b).TranslationFailures; got != 0 {
+		t.Fatalf("TranslationFailures=%d : un verdict différé n'est pas un échec de traduction", got)
+	}
+
+	ref := staticTranslator{err: fmt.Errorf("broker: traducteur non admis : %w", ErrArbitrationRefused)}
+	b2, _, _, trips2 := newTestBroker(t, srv.URL, ref)
+	res = b2.HandleAction(context.Background(), "agent-1", simpleIntent(t, "a", "r"))
+	if res.Allow || res.Reason != ReasonArbitrationRefused || res.ArbitrationID != "" {
+		t.Fatalf("refus d'arbitre attendu : %+v", res)
+	}
+	if len(trips2.all()) != 0 {
+		t.Fatalf("alarmes %v", trips2.all())
 	}
 }

@@ -1,0 +1,440 @@
+// Package arbiter est la file d'arbitrage HUMAIN des demandes dégradées (§4.5, T25, #275 suite).
+//
+// Quand le traducteur est tombé, un système STANDARD n'est pas refusé d'emblée : si un arbitre humain est
+// joignable, sa demande est mise en file (verdict différé — ErrPendingArbitration n'est PAS un refus). Un opérateur
+// décide par une SIGNATURE (« l'arbitrage est une signature, pas une lecture », §4.2) ; l'agent REPRÉSENTE la même
+// demande, qui est alors admise UNE fois par le chemin de traduction — et jugée ensuite par toute la chaîne
+// (OPA, quorum, plan, contrats) SANS exception : l'approbation lève l'admission du traducteur, rien d'autre.
+//
+// Doctrine :
+//   - hash-only (no-DPI) : la file ne retient que SHA-256(sujet ‖ intention), le sujet, l'état et l'échéance — jamais
+//     l'intention. L'identifiant rendu à l'agent EST ce hash : l'opérateur, qui connaît ce que l'agent veut faire,
+//     le recalcule (IntentID) et signe SON hash — il ne signe pas une lecture de la file.
+//   - joignabilité PROUVÉE : « un arbitre est joignable » = un battement de présence signé par une clé d'opérateur
+//     épinglée, frais et strictement croissant ; jamais une déclaration.
+//   - bornée partout : file pleine ⇒ refus (default-deny, pas de file implicite) ; échéance de chaque entrée ;
+//     une approbation est à usage UNIQUE et expire.
+//   - chaque événement (mise en file, décision, consommation) laisse une feuille « TBAR1 » dont le clair est
+//     journalisé AVANT l'inscription ; sans clair, pas de feuille — et pas d'effet (fail-closed).
+package arbiter
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	translator "github.com/philippeabraxas-jpg/TBP-NETWORK/src/translator"
+)
+
+// Bornes et défauts.
+const (
+	DefaultPresenceTTL = 60 * time.Second
+	MinPresenceTTL     = 10 * time.Second
+	MaxPresenceTTL     = 10 * time.Minute
+
+	DefaultEntryTTL = 10 * time.Minute
+	MinEntryTTL     = time.Minute
+	MaxEntryTTL     = time.Hour
+
+	DefaultMaxEntries = 256
+	MaxMaxEntries     = 4096
+
+	// MinDecisionTTL : une décision doit laisser à l'agent le temps de représenter sa demande.
+	MinDecisionTTL = 30 * time.Second
+
+	// HeartbeatSkew borne l'écart entre l'horodatage signé d'un battement et l'horloge de la cellule.
+	HeartbeatSkew = 30 * time.Second
+
+	maxSubjectLen = 255
+)
+
+// Verdict est la décision de l'opérateur.
+type Verdict byte
+
+const (
+	VerdictRefuse  Verdict = 0
+	VerdictApprove Verdict = 1
+)
+
+func (v Verdict) String() string {
+	if v == VerdictApprove {
+		return "approve"
+	}
+	return "refuse"
+}
+
+// Erreurs (codes machine stables côté opérateur).
+var (
+	ErrFull              = errors.New("arbiter: file d'arbitrage pleine — default-deny")
+	ErrUnknownEntry      = errors.New("arbiter: demande inconnue, expirée ou déjà tranchée")
+	ErrBadSignature      = errors.New("arbiter: signature d'opérateur invalide")
+	ErrHeartbeatStale    = errors.New("arbiter: battement hors de la fenêtre de fraîcheur")
+	ErrHeartbeatReplayed = errors.New("arbiter: battement non croissant (rejeu)")
+	ErrDecisionExpiry    = errors.New("arbiter: échéance de décision hors bornes")
+	ErrLeaf              = errors.New("arbiter: feuille impossible — aucun effet")
+)
+
+// Message signés (domaines DISTINCTS de l'approbation de plan « TBPA1 » et de la révocation « TBPR1 » : une
+// signature ne vaut que pour l'acte pour lequel elle a été donnée).
+
+// PresenceMessage : "TBAH1" ‖ unix(u64 BE).
+func PresenceMessage(at time.Time) []byte {
+	msg := append(make([]byte, 0, 13), "TBAH1"...)
+	return binary.BigEndian.AppendUint64(msg, uint64(at.Unix()))
+}
+
+// DecisionMessage : "TBAV1" ‖ verdict(1) ‖ id(32) ‖ expiry unix(u64 BE).
+func DecisionMessage(id [32]byte, v Verdict, expiry time.Time) []byte {
+	msg := append(make([]byte, 0, 5+1+32+8), "TBAV1"...)
+	msg = append(msg, byte(v))
+	msg = append(msg, id[:]...)
+	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
+}
+
+// IntentID est l'identifiant d'une demande dégradée : SHA-256("tbp-degraded-intent-v1" ‖ len(sujet) u16 ‖ sujet ‖
+// intention). Déterministe sur les octets EXACTS de l'intention : la même demande représentée identiquement a le
+// même identifiant ; un octet de différence, un autre.
+func IntentID(subject string, intent []byte) [32]byte {
+	h := sha256.New()
+	h.Write([]byte("tbp-degraded-intent-v1"))
+	var l [2]byte
+	binary.BigEndian.PutUint16(l[:], uint16(len(subject)))
+	h.Write(l[:])
+	h.Write([]byte(subject))
+	h.Write(intent)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// Options paramètre la file. Fail-closed dès la configuration.
+type Options struct {
+	CellID string
+	Salt   []byte // ≥ 16 octets, reste chez le producteur (§6.2)
+	Leaves translator.LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275). Optionnel (nil = feuille nue).
+	Journal *registry.RecordStore
+	// OperatorKeys : trousseau d'opérateurs ÉPINGLÉ (le même que le store de contrats). Requis.
+	OperatorKeys []ed25519.PublicKey
+	PresenceTTL  time.Duration // 0 ⇒ DefaultPresenceTTL
+	EntryTTL     time.Duration // 0 ⇒ DefaultEntryTTL
+	MaxEntries   int           // 0 ⇒ DefaultMaxEntries
+	OnAlarm      func(reason string)
+	Now          func() time.Time
+}
+
+type status byte
+
+const (
+	statusPending status = iota
+	statusApproved
+	statusRefused
+)
+
+type entry struct {
+	subject string
+	created time.Time
+	expires time.Time // pending : fin de la file ; décidé : fin de la décision
+	status  status
+	by      [16]byte // kid de l'opérateur décideur
+}
+
+// Queue est la file d'arbitrage. Sûre pour un usage concurrent. Implémente translator.Arbitration.
+type Queue struct {
+	cellID  string
+	salt    []byte
+	leaves  translator.LeafSink
+	journal *registry.RecordStore
+	keys    []ed25519.PublicKey
+	presTTL time.Duration
+	entTTL  time.Duration
+	max     int
+	alarm   func(string)
+	now     func() time.Time
+
+	mu      sync.Mutex
+	entries map[[32]byte]*entry
+	lastHB  time.Time // dernier battement accepté (horodatage SIGNÉ)
+}
+
+// NewQueue construit la file.
+func NewQueue(o Options) (*Queue, error) {
+	if o.CellID == "" {
+		return nil, errors.New("arbiter: cellID requis (§6.2 : feuilles attribuées)")
+	}
+	if len(o.Salt) < 16 {
+		return nil, errors.New("arbiter: sel ≥ 16 octets requis (§6.2 : feuilles hash-only)")
+	}
+	if o.Leaves == nil {
+		return nil, errors.New("arbiter: couture feuilles requise (toute décision laisse une feuille)")
+	}
+	if len(o.OperatorKeys) == 0 {
+		return nil, errors.New("arbiter: trousseau d'opérateurs requis (l'arbitrage est une signature)")
+	}
+	keys := make([]ed25519.PublicKey, len(o.OperatorKeys))
+	for i, k := range o.OperatorKeys {
+		if len(k) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("arbiter: clé d'opérateur %d de %d octets", i, len(k))
+		}
+		keys[i] = append(ed25519.PublicKey(nil), k...)
+	}
+	pt := o.PresenceTTL
+	if pt == 0 {
+		pt = DefaultPresenceTTL
+	}
+	if pt < MinPresenceTTL || pt > MaxPresenceTTL {
+		return nil, fmt.Errorf("arbiter: présence %s hors [%s, %s]", pt, MinPresenceTTL, MaxPresenceTTL)
+	}
+	et := o.EntryTTL
+	if et == 0 {
+		et = DefaultEntryTTL
+	}
+	if et < MinEntryTTL || et > MaxEntryTTL {
+		return nil, fmt.Errorf("arbiter: échéance de file %s hors [%s, %s]", et, MinEntryTTL, MaxEntryTTL)
+	}
+	mx := o.MaxEntries
+	if mx == 0 {
+		mx = DefaultMaxEntries
+	}
+	if mx < 1 || mx > MaxMaxEntries {
+		return nil, fmt.Errorf("arbiter: taille de file %d hors [1, %d]", mx, MaxMaxEntries)
+	}
+	now := o.Now
+	if now == nil {
+		now = time.Now
+	}
+	salt := append([]byte(nil), o.Salt...)
+	return &Queue{
+		cellID: o.CellID, salt: salt, leaves: o.Leaves, journal: o.Journal, keys: keys,
+		presTTL: pt, entTTL: et, max: mx, alarm: o.OnAlarm, now: now,
+		entries: make(map[[32]byte]*entry),
+	}, nil
+}
+
+func (q *Queue) kidOf(msg, sig []byte) ([16]byte, bool) {
+	for _, pub := range q.keys {
+		if ed25519.Verify(pub, msg, sig) {
+			return pep.KeyIDFromPublicKey(pub), true
+		}
+	}
+	return [16]byte{}, false
+}
+
+// Heartbeat enregistre un battement de présence signé par un opérateur épinglé. L'horodatage signé doit être frais
+// (±HeartbeatSkew) et strictement croissant (pas de rejeu).
+func (q *Queue) Heartbeat(ctx context.Context, at time.Time, sig []byte) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.now()
+	if d := now.Sub(at); d > HeartbeatSkew || d < -HeartbeatSkew {
+		return ErrHeartbeatStale
+	}
+	if _, ok := q.kidOf(PresenceMessage(at), sig); !ok {
+		return ErrBadSignature
+	}
+	if !at.After(q.lastHB) {
+		return ErrHeartbeatReplayed
+	}
+	q.lastHB = at
+	return nil
+}
+
+// Reachable : un battement valide date de moins de PresenceTTL (translator.Arbitration).
+func (q *Queue) Reachable(context.Context) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return !q.lastHB.IsZero() && q.now().Sub(q.lastHB) <= q.presTTL
+}
+
+// Enqueue met la demande en file (translator.Arbitration). item.Payload porte l'intention OPAQUE, jamais retenue :
+// seul son hash l'est. Idempotent pour une demande déjà en attente. Échec ⇒ erreur ⇒ le contrôleur refuse.
+func (q *Queue) Enqueue(ctx context.Context, item translator.ArbitrationItem) error {
+	if len(item.SystemID) > maxSubjectLen {
+		return errors.New("arbiter: sujet trop long")
+	}
+	id := IntentID(item.SystemID, item.Payload)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.now()
+	q.pruneLocked(now)
+	if e, ok := q.entries[id]; ok && e.status == statusPending {
+		return nil
+	}
+	if len(q.entries) >= q.max {
+		if q.alarm != nil {
+			q.alarm("arbiter-queue-full")
+		}
+		return ErrFull
+	}
+	if err := q.leafLocked(ctx, actEnqueue, id, item.SystemID, [16]byte{}, 0, time.Time{}, now); err != nil {
+		return err
+	}
+	q.entries[id] = &entry{subject: item.SystemID, created: now, expires: now.Add(q.entTTL), status: statusPending}
+	return nil
+}
+
+// Decide enregistre la décision signée d'un opérateur épinglé sur une demande EN ATTENTE. expiry borne le temps
+// laissé à l'agent pour représenter sa demande, dans [now+MinDecisionTTL, now+EntryTTL].
+func (q *Queue) Decide(ctx context.Context, id [32]byte, v Verdict, expiry time.Time, sig []byte) error {
+	if v != VerdictApprove && v != VerdictRefuse {
+		return ErrUnknownEntry
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.now()
+	q.pruneLocked(now)
+	e, ok := q.entries[id]
+	if !ok || e.status != statusPending {
+		return ErrUnknownEntry
+	}
+	if ttl := expiry.Sub(now); ttl < MinDecisionTTL || ttl > q.entTTL {
+		return ErrDecisionExpiry
+	}
+	kid, signed := q.kidOf(DecisionMessage(id, v, expiry), sig)
+	if !signed {
+		return ErrBadSignature
+	}
+	act := actRefuse
+	if v == VerdictApprove {
+		act = actApprove
+	}
+	if err := q.leafLocked(ctx, act, id, e.subject, kid, byte(v), expiry, now); err != nil {
+		return err
+	}
+	e.status = statusApproved
+	if v == VerdictRefuse {
+		e.status = statusRefused
+	}
+	e.expires, e.by = expiry, kid
+	return nil
+}
+
+// Outcome est ce que la file dit d'une demande représentée.
+type Outcome int
+
+const (
+	OutcomeNone     Outcome = iota // inconnue (jamais mise en file, ou expirée) : le contrôleur décide
+	OutcomePending                 // en attente d'un opérateur
+	OutcomeApproved                // approbation CONSOMMÉE : à admettre UNE fois
+	OutcomeRefused                 // refus CONSOMMÉ
+)
+
+// Take consulte et consomme. Une approbation ou un refus est à usage UNIQUE : consommé, il disparaît. Si la feuille
+// de consommation est impossible, l'entrée est conservée et l'erreur rendue (fail-closed : pas d'admission sans trace).
+func (q *Queue) Take(ctx context.Context, subject string, intent []byte) (Outcome, [32]byte, error) {
+	id := IntentID(subject, intent)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.now()
+	q.pruneLocked(now)
+	e, ok := q.entries[id]
+	if !ok {
+		return OutcomeNone, id, nil
+	}
+	switch e.status {
+	case statusPending:
+		return OutcomePending, id, nil
+	case statusApproved, statusRefused:
+		act, out := actConsumeRefused, OutcomeRefused
+		if e.status == statusApproved {
+			act, out = actConsume, OutcomeApproved
+		}
+		if err := q.leafLocked(ctx, act, id, e.subject, e.by, 0, e.expires, now); err != nil {
+			return OutcomeNone, id, err
+		}
+		delete(q.entries, id)
+		return out, id, nil
+	}
+	return OutcomeNone, id, nil
+}
+
+func (q *Queue) pruneLocked(now time.Time) {
+	for id, e := range q.entries {
+		if !now.Before(e.expires) {
+			delete(q.entries, id)
+		}
+	}
+}
+
+// Entry est la vue d'une entrée pour l'opérateur : jamais l'intention.
+type Entry struct {
+	ID        [32]byte
+	Subject   string
+	Status    string // pending | approved | refused
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// Snapshot rend la file (hors entrées échues), triée par création puis identifiant.
+func (q *Queue) Snapshot() []Entry {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.pruneLocked(q.now())
+	out := make([]Entry, 0, len(q.entries))
+	for id, e := range q.entries {
+		st := "pending"
+		switch e.status {
+		case statusApproved:
+			st = "approved"
+		case statusRefused:
+			st = "refused"
+		}
+		out = append(out, Entry{ID: id, Subject: e.subject, Status: st, CreatedAt: e.created, ExpiresAt: e.expires})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return string(out[i].ID[:]) < string(out[j].ID[:])
+	})
+	return out
+}
+
+// --- Feuille « TBAR1 » (KindTelemetry, hash-only §6.2) ----------------------------------------------------------
+//
+//	"TBAR1" ‖ action(1) ‖ id(32) ‖ u8 len(sujet) ‖ sujet ‖ kid(16) ‖ verdict(1) ‖ expiry unix(u64 BE)
+//
+// action : 1=enqueue 2=approve 3=refuse 4=consume 5=consume-refused. kid/verdict/expiry sont nuls hors décision.
+const (
+	actEnqueue        byte = 1
+	actApprove        byte = 2
+	actRefuse         byte = 3
+	actConsume        byte = 4
+	actConsumeRefused byte = 5
+)
+
+func (q *Queue) leafLocked(ctx context.Context, act byte, id [32]byte, subject string, kid [16]byte, verdict byte, expiry, now time.Time) error {
+	if len(subject) > maxSubjectLen {
+		subject = subject[:maxSubjectLen]
+	}
+	rec := make([]byte, 0, 5+1+32+1+len(subject)+16+1+8)
+	rec = append(rec, "TBAR1"...)
+	rec = append(rec, act)
+	rec = append(rec, id[:]...)
+	rec = append(rec, byte(len(subject)))
+	rec = append(rec, subject...)
+	rec = append(rec, kid[:]...)
+	rec = append(rec, verdict)
+	var exp uint64
+	if !expiry.IsZero() {
+		exp = uint64(expiry.Unix())
+	}
+	rec = binary.BigEndian.AppendUint64(rec, exp)
+	if _, err := registry.AppendLeaf(ctx, q.leaves, q.journal, registry.KindTelemetry, q.cellID, q.salt, rec, now.UnixNano()); err != nil {
+		if q.alarm != nil {
+			q.alarm("arbiter-leaf-write-failed")
+		}
+		return fmt.Errorf("%w : %v", ErrLeaf, err)
+	}
+	return nil
+}
+
+var _ translator.Arbitration = (*Queue)(nil)

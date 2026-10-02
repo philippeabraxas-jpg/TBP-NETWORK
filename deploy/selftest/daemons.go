@@ -39,6 +39,7 @@ import (
 
 	"golang.org/x/mod/sumdb/note"
 
+	arbiter "github.com/philippeabraxas-jpg/TBP-NETWORK/src/arbiter"
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -502,7 +503,8 @@ func runDaemons(s *suite, cfg config) {
 	// forme de compatibilité de schéma, jamais la source de la décision.
 	agentsPath := filepath.Join(base, "agents.json")
 	agentsJSON, _ := json.Marshal(map[string]map[string]any{
-		"agent-1": {"class": 2},
+		"agent-1":   {"class": 2},
+		"agent-std": {"class": 3}, // système STANDARD : escalade humaine en mode dégradé (§4.5)
 	})
 	if err := os.WriteFile(agentsPath, agentsJSON, 0o600); err != nil {
 		s.fail(phaseDaemons, "registre d'agents", err)
@@ -542,6 +544,7 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_TRANSLATOR_GUARD=1",
 		"TBP_TRANSLATOR_PROBE_URL="+translatorHealth.URL,
 		"TBP_TRANSLATOR_PROBE_INTERVAL_MS=500",
+		"TBP_ARBITRATION=1",
 		"TBP_MIRROR_ANCHORS_FILE="+mirrorFx.AnchorsFile,
 		"TBP_MIRROR_CELL_KEYS_FILE="+mirrorFx.CellKeysFile,
 		"TBP_AUDIT_RECORDS="+auditJournalPath,
@@ -1177,7 +1180,52 @@ func runDaemons(s *suite, cfg config) {
 		badReceipt := mirrorFx.receipt(7) // époque non ancrée
 		stB, _, errB := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/mirror/promote", json.RawMessage(badReceipt))
 		s.add(phaseDaemons, "miroir : un reçu d'une époque non ancrée est refusé (400)", errB == nil && stB == http.StatusBadRequest, fmt.Sprintf("status=%d", stB))
+
+		// --- Arbitrage humain (§4.5, #275) : un système STANDARD dégradé ---------------------------
+		// agent-std (classe hors F/I/W) n'a pas de miroir : sans arbitre joignable, refus simple ; un opérateur
+		// signe sa présence puis sa décision ; la même demande représentée est admise UNE fois (puis jugée par la
+		// chaîne : OPA refuse « write » ici, preuve que l'approbation ne contourne rien).
+		opKey := devKey("operator-1")
+		stdAction := func() (daemonActionResponse, string) {
+			st, rw, e := postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{"subject": "agent-std", "intent": denyIntent})
+			var av daemonActionResponse
+			var extra struct {
+				ArbitrationID string `json:"arbitration_id"`
+			}
+			if e != nil || st != http.StatusOK || json.Unmarshal(rw, &av) != nil {
+				return daemonActionResponse{Reason: "erreur"}, ""
+			}
+			_ = json.Unmarshal(rw, &extra)
+			return av, extra.ArbitrationID
+		}
+		noArb, _ := stdAction()
+		s.add(phaseDaemons, "arbitrage : sans arbitre joignable, un système standard dégradé est refusé (translation-failed), rien en file",
+			!noArb.Allow && noArb.Reason == "translation-failed", "raison="+noArb.Reason)
+		at := time.Now().UTC().Truncate(time.Second)
+		stH, _, errH := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/presence", map[string]string{
+			"at": at.Format(time.RFC3339), "signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.PresenceMessage(at))),
+		})
+		s.add(phaseDaemons, "arbitrage : la présence signée d'un opérateur épinglé est acceptée", errH == nil && stH == http.StatusOK, fmt.Sprintf("status=%d", stH))
+		pend, pendID := stdAction()
+		wantID := arbiter.IntentID("agent-std", []byte(denyIntent))
+		s.add(phaseDaemons, "arbitrage : arbitre joignable ⇒ verdict DIFFÉRÉ (arbitration-pending) avec l'identifiant de la demande",
+			!pend.Allow && pend.Reason == "arbitration-pending" && pendID == hex.EncodeToString(wantID[:]), fmt.Sprintf("raison=%s id=%.16s…", pend.Reason, pendID))
+		decExp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+		stD, _, errD := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", map[string]string{
+			"id": hex.EncodeToString(wantID[:]), "verdict": "approve", "expires_at": decExp.Format(time.RFC3339),
+			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(wantID, arbiter.VerdictApprove, decExp))),
+		})
+		s.add(phaseDaemons, "arbitrage : l'approbation signée de l'opérateur est acceptée", errD == nil && stD == http.StatusOK, fmt.Sprintf("status=%d", stD))
+		appr, _ := stdAction()
+		s.add(phaseDaemons, "arbitrage : la demande approuvée franchit l'admission, puis la chaîne la juge (OPA refuse : l'approbation ne contourne rien)",
+			!appr.Allow && appr.Reason == "opa-deny", "raison="+appr.Reason)
+		again, _ := stdAction()
+		s.add(phaseDaemons, "arbitrage : l'approbation est à usage unique — la représentation suivante repart en file",
+			again.Reason == "arbitration-pending", "raison="+again.Reason)
 		translatorHealth.set(true)
+		// Les feuilles de l'arbitrage (TBAR1) et de la dégradation (TBTD1) ont leur clair dans le journal, et
+		// aucune feuille du registre n'est restée sans clair (couverture log → journal).
+		verifyAuditJournal(s, phaseDaemons, "brokerd (après arbitrage)", brokerRegDir, auditJournalPath, auditKeyPath, 3)
 	}
 }
 

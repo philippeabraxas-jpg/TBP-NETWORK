@@ -119,6 +119,25 @@ fix, never the content of its request:
 - A **decision** refusal (OPA, quorum, plan, envelope…) carries no `detail`: it would be an oracle
   on the policy. Only the *form* of the request is explained.
 
+**Degraded translator (§4.5).** When the cell runs with the translator guard
+(`TBP_TRANSLATOR_GUARD=1`, `deploy/cellule.md`), a refusal can be about the *translator*, not about
+the request: `reason` `translation-failed` **without** `detail` means "the translator is
+unavailable and nothing admits this request now" — retry later; do not rewrite the request. Two
+more outcomes exist when human arbitration is wired (`TBP_ARBITRATION=1`), for **standard**
+systems only:
+
+- `reason` `arbitration-pending`, `allow:false`, with `arbitration_id` — **not** a final refusal:
+  the request is queued for a human arbiter. `arbitration_id` is
+  `SHA-256("tbp-degraded-intent-v1" ‖ u16be len(subject) ‖ subject ‖ intent)` over the **exact
+  bytes** you sent — recompute it yourself, the arbiter signs *that* hash. When the arbiter has
+  approved, **re-send the identical request**: it is admitted once (the approval is single-use and
+  expires), then judged by the whole chain like any other (OPA, quorum, plan, contracts — an
+  approval lifts only the translator's admission). Re-sending before the decision returns
+  `arbitration-pending` again, without a duplicate.
+- `reason` `arbitration-refused` — the arbiter refused this request.
+
+The queue keeps only that hash, never the content of the request.
+
 An integration that sits between an LLM agent and the cell should hand `detail` back to the agent
 verbatim: it is written so that the agent can correct its next request (`accepted` is the list
 of names it may use there).

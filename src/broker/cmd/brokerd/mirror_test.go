@@ -210,7 +210,7 @@ func TestTranslatorGuardMirrorFailoverByClass(t *testing.T) {
 		"agent-i":   {Class: pep.ClassI},
 		"agent-out": {Class: pep.ClassOut},
 	}
-	tr, start, err := setupTranslatorGuard(cfg, broker.StructuredTranslator{}, "cell-a", make([]byte, 16), &sinkLeaves{}, nil, nil, m, systemClassOf(reg))
+	tr, start, err := setupTranslatorGuard(cfg, broker.StructuredTranslator{}, "cell-a", make([]byte, 16), &sinkLeaves{}, nil, nil, m, systemClassOf(reg), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

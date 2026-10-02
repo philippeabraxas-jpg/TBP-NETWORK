@@ -414,6 +414,28 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # listens on loopback), no redirect followed
 #   TBP_TRANSLATOR_PROBE_INTERVAL_MS=5000  # [500, 60000]
 #   TBP_TRANSLATOR_PROBE_TIMEOUT_MS=2000   # [100, 10000]
+#   TBP_ARBITRATION=1              # optional, OPT-IN, only with the guard
+#                                  # (spec §4.5, #275): HUMAN arbitration of
+#                                  # degraded requests for STANDARD systems (not
+#                                  # F/I/W: those use the mirror). Degraded
+#                                  # translator + an arbiter REACHABLE (a fresh
+#                                  # operator-signed heartbeat) ⇒ the request is
+#                                  # queued (arbitration-pending + arbitration_id,
+#                                  # hash only — never the content); an operator
+#                                  # SIGNS a decision; the agent re-sends the same
+#                                  # request, admitted ONCE (single-use, expiring)
+#                                  # then judged by the whole chain. No reachable
+#                                  # arbiter ⇒ default-deny. Operator keys =
+#                                  # TBP_OPERATOR_KEYS_FILE (already measured).
+#                                  # Admin plane: POST
+#                                  # /v1/supervision/degraded/{presence,decide},
+#                                  # GET /v1/supervision/degraded. Operator
+#                                  # gestures: `quorumproof arbid|arbpresence|
+#                                  # arbdecide`. The queue is in memory (lost at
+#                                  # restart: agents just re-send).
+#   TBP_ARBITRATION_PRESENCE_TTL_S=60   # [10, 600] heartbeat validity
+#   TBP_ARBITRATION_ENTRY_TTL_S=600     # [60, 3600] queue life, decision bound
+#   TBP_ARBITRATION_MAX_PENDING=256     # [1, 4096] full ⇒ default-deny
 #   TBP_MIRROR_ANCHORS_FILE=/etc/tbp/mirror-anchors.json  # optional, OPT-IN
 #                                  # (spec §7.4, #275), BOTH mirror files together
 #                                  # and only with the guard: mirror cell for

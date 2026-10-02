@@ -25,8 +25,19 @@ import (
 // un import directe fermerait un cycle). L'adaptateur vers *translator.Controller vit dans brokerd.
 // Admit rend nil pour admettre ; toute autre issue est un refus.
 type AdmissionGate interface {
-	Admit(ctx context.Context, subject string, natural bool) error
+	Admit(ctx context.Context, subject string, natural bool, intent string) error
 }
+
+// PendingArbitrationError : la garde a mis la demande en file d'arbitrage HUMAIN (§4.5) — verdict différé, PAS un
+// refus. ID est l'identifiant (hex) de la demande, que l'arbitre signera.
+type PendingArbitrationError struct{ ID string }
+
+func (e *PendingArbitrationError) Error() string {
+	return "broker: demande en attente d'arbitrage humain (verdict différé, §4.5)"
+}
+
+// ErrArbitrationRefused : l'arbitre humain a refusé cette demande.
+var ErrArbitrationRefused = errors.New("broker: demande refusée par l'arbitre humain (§4.5)")
 
 // GuardedTranslator interpose la garde d'admission devant un Translator.
 type GuardedTranslator struct {
@@ -49,9 +60,9 @@ func NewGuardedTranslator(inner Translator, gate AdmissionGate, natural bool) (*
 
 // Translate refuse tant que la garde n'admet pas, puis délègue. Le refus ne porte AUCUN détail vers l'agent
 // (le message d'erreur reste côté broker) : l'état de santé du traducteur n'est pas un oracle. L'intention
-// n'est jamais transmise à la garde (no-DPI).
+// n'est transmise à la garde que pour être HACHÉE par la file d'arbitrage (no-DPI : jamais retenue en clair).
 func (g *GuardedTranslator) Translate(ctx context.Context, subject, intent string) (Translation, error) {
-	if err := g.gate.Admit(ctx, subject, g.natural); err != nil {
+	if err := g.gate.Admit(ctx, subject, g.natural, intent); err != nil {
 		return Translation{}, fmt.Errorf("broker: traducteur non admis : %w", err)
 	}
 	return g.inner.Translate(ctx, subject, intent)

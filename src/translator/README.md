@@ -141,13 +141,14 @@ an oracle). The **mirror cell** (§7.4) is wired, opt-in (`TBP_MIRROR_ANCHORS_FI
 *structured* input admitted on the deterministic path — OPA, quorum, plan and
 contracts still apply unchanged — if a valid promotion receipt covers the cell's
 current epoch inside the anchored healthy window (`cluster.FileAnchorSource`,
-signed k-of-n by the genesis controllers, `genesis anchors`). Human arbitration is
-**not** wired: standard systems are default-deny. Each request refused while degraded leaves
+signed k-of-n by the genesis controllers, `genesis anchors`). **Human arbitration** is wired too, opt-in (`TBP_ARBITRATION=1`, `src/arbiter`): a **standard**
+system is queued when an arbiter is reachable (a fresh operator-signed heartbeat) — verdict
+*deferred* (`arbitration-pending`), not a refusal; an operator **signs** a decision; the agent
+re-sends the identical request, admitted once and then judged by the whole chain. The queue
+keeps only a hash. Without a reachable arbiter: default-deny. Each request refused while degraded leaves
 a `TBTD1` leaf and an alarm (deduplication is the monitor's job, §4.5).
 
 ## Not implemented here
 
 - A natural-language translator: `brokerd` still accepts only `structured`, so the
   guard here gates the structured path on the probe of a translator service.
-- An `Arbitration` (human queue) implementation for a daemon — the controller
-  supports it, nothing in-tree provides it yet.

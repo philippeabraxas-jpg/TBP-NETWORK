@@ -119,6 +119,25 @@ dit quoi corriger, jamais le contenu de sa demande :
 - Un refus de **décision** (OPA, quorum, plan, enveloppe…) ne porte aucun `detail` : ce serait un
   oracle sur la politique. Seule la *forme* de la demande est expliquée.
 
+**Traducteur dégradé (§4.5).** Quand la cellule tourne avec la garde du traducteur
+(`TBP_TRANSLATOR_GUARD=1`, `deploy/cellule.fr.md`), un refus peut concerner le *traducteur* et non la
+demande : `reason` `translation-failed` **sans** `detail` veut dire « le traducteur est indisponible
+et rien n'admet cette demande maintenant » — réessayer plus tard, ne pas réécrire la demande. Deux
+autres issues existent quand l'arbitrage humain est câblé (`TBP_ARBITRATION=1`), pour les systèmes
+**standard** seulement :
+
+- `reason` `arbitration-pending`, `allow:false`, avec `arbitration_id` — **pas** un refus définitif :
+  la demande est en file pour un arbitre humain. `arbitration_id` est
+  `SHA-256("tbp-degraded-intent-v1" ‖ u16be len(sujet) ‖ sujet ‖ intention)` sur les **octets
+  exacts** envoyés — le recalculer soi-même, l'arbitre signe CE hash. Une fois l'arbitre
+  d'accord, **renvoyer la demande à l'identique** : elle est admise une fois (l'approbation est à
+  usage unique et expire), puis jugée par toute la chaîne comme n'importe quelle autre (OPA, quorum,
+  plan, contrats — une approbation ne lève que l'admission du traducteur). Renvoyer avant la
+  décision rend de nouveau `arbitration-pending`, sans doublon.
+- `reason` `arbitration-refused` — l'arbitre a refusé cette demande.
+
+La file ne retient que ce hash, jamais le contenu de la demande.
+
 Une intégration placée entre un agent LLM et la cellule doit rendre `detail` tel quel à l'agent :
 il est écrit pour que l'agent corrige sa demande suivante (`accepted` est la liste des noms qu'il
 peut employer à cet endroit).
