@@ -90,6 +90,10 @@ type ModeOptions struct {
 	// Leaves est la couture registre (T7) : chaque bascule y est tracée.
 	// Requis (une bascule de posture non tracée est interdite).
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd et brokerd le renseignent toujours.
+	Journal *registry.RecordStore
 	// OnAlarm est la couture d'alarme : appelée « mode-<monitor|closed> »
 	// à chaque bascule (jamais silencieuse). Nil ⇒ pas d'alarme externe.
 	OnAlarm func(name string)
@@ -122,6 +126,7 @@ type ModeController struct {
 	cellID  string
 	salt    []byte
 	leaves  LeafSink
+	journal *registry.RecordStore
 	onAlarm func(name string)
 	now     func() time.Time
 
@@ -155,6 +160,7 @@ func NewModeController(opts ModeOptions) (*ModeController, error) {
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
+		journal:  opts.Journal,
 		onAlarm:  opts.OnAlarm,
 		now:      now,
 		mode:     ModeMonitor,
@@ -252,13 +258,7 @@ func (c *ModeController) Allows(d Decision) bool {
 // événement de gouvernance, pas une décision). Hash-only : le registre ne
 // voit que l'engagement. L'échec d'écriture est alarmé, jamais silencieux.
 func (c *ModeController) writeLeafLocked(m PEPMode) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      c.cellID,
-		PayloadHash: registry.HashPayload(c.salt, modeChangeRecord(m)),
-		Timestamp:   c.now().UnixNano(),
-	}
-	if _, err := c.leaves.Append(context.Background(), leaf); err != nil && c.onAlarm != nil {
+	if _, err := appendLeaf(context.Background(), c.leaves, c.journal, registry.KindTelemetry, c.cellID, c.salt, modeChangeRecord(m), c.now().UnixNano()); err != nil && c.onAlarm != nil {
 		c.onAlarm(ReasonLeafWriteFailed)
 	}
 }

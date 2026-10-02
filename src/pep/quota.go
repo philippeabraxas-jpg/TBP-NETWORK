@@ -219,13 +219,13 @@ type QuotaLedger struct {
 	max      int
 	counters map[[16]byte]*PassportCounter
 
-	cellID string
+	cellID  string
 	salt    []byte
 	leaves  LeafSink
 	journal *registry.RecordStore
-	onCut  func(jti [16]byte, reason string)
-	onTrip func(reason string)
-	now    func() time.Time
+	onCut   func(jti [16]byte, reason string)
+	onTrip  func(reason string)
+	now     func() time.Time
 
 	mu      sync.Mutex
 	tripped bool // latch saturation (T14), comme T10

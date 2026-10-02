@@ -123,6 +123,10 @@ type FailClosedOptions struct {
 	// Leaves est la couture registre (T7) : bascules et levées y sont
 	// tracées. Requis (une bascule non tracée est interdite).
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd et brokerd le renseignent toujours.
+	Journal *registry.RecordStore
 	// OnAlarm est la couture d'alarme vers le monitor : appelée à chaque
 	// bascule (jamais silencieux). Nil ⇒ pas d'alarme externe (la feuille
 	// reste obligatoire).
@@ -148,6 +152,7 @@ type FailClosed struct {
 	cellID  string
 	salt    []byte
 	leaves  LeafSink
+	journal *registry.RecordStore
 	onAlarm func(name string)
 	now     func() time.Time
 
@@ -179,6 +184,7 @@ func NewFailClosed(opts FailClosedOptions) (*FailClosed, error) {
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
+		journal:  opts.Journal,
 		onAlarm:  opts.OnAlarm,
 		now:      now,
 		conds:    make(map[string]*Condition),
@@ -376,16 +382,10 @@ func (f *FailClosed) OnTrip() func(reason string) {
 // un événement système, pas une décision). Hash-only : le registre ne
 // voit que l'engagement.
 func (f *FailClosed) writeLeafLocked(action byte, name, detail string) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      f.cellID,
-		PayloadHash: registry.HashPayload(f.salt, failClosedRecord(action, name, detail)),
-		Timestamp:   f.now().UnixNano(),
-	}
 	// L'échec d'écriture est signalé sur la couture d'alarme (jamais
 	// silencieux) ; il ne DÉFAIT pas la bascule — la direction d'échec
 	// reste le déni (§9.1).
-	if _, err := f.leaves.Append(context.Background(), leaf); err != nil && f.onAlarm != nil {
+	if _, err := appendLeaf(context.Background(), f.leaves, f.journal, registry.KindTelemetry, f.cellID, f.salt, failClosedRecord(action, name, detail), f.now().UnixNano()); err != nil && f.onAlarm != nil {
 		f.onAlarm(ReasonLeafWriteFailed)
 	}
 }

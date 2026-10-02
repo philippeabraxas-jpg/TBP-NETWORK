@@ -121,6 +121,10 @@ type ClockOptions struct {
 	// tracés. Requis (une dégradation non tracée est une dégradation
 	// silencieuse — exactement ce que ce livrable interdit).
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd et brokerd le renseignent toujours.
+	Journal *registry.RecordStore
 	// OnTrip est la couture d'alarme vers T14 (fail-closed unique) :
 	// clock-skew y est signalé à chaque entrée en dégradé pour skew ;
 	// l'échec d'écriture d'une feuille aussi. Nil ⇒ pas d'alarme.
@@ -140,6 +144,7 @@ type ClockWatchdog struct {
 	cellID      string
 	salt        []byte
 	leaves      LeafSink
+	journal     *registry.RecordStore
 	onTrip      func(reason string)
 	now         func() time.Time
 
@@ -199,6 +204,7 @@ func NewClockWatchdog(opts ClockOptions) (*ClockWatchdog, error) {
 		cellID:      opts.CellID,
 		salt:        salt,
 		leaves:      opts.Leaves,
+		journal:     opts.Journal,
 		onTrip:      opts.OnTrip,
 		now:         now,
 	}, nil
@@ -288,13 +294,7 @@ func (w *ClockWatchdog) Run(ctx context.Context) {
 // writeLeaf inscrit la feuille d'alarme (KindTelemetry : une alarme n'est pas une
 // décision). Hash-only : le registre ne voit que l'engagement. Appelé sans w.mu.
 func (w *ClockWatchdog) writeLeaf(reason string, priority byte) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      w.cellID,
-		PayloadHash: registry.HashPayload(w.salt, clockAlarmRecord(reason, priority)),
-		Timestamp:   w.now().UnixNano(),
-	}
-	if _, err := w.leaves.Append(context.Background(), leaf); err != nil && w.onTrip != nil {
+	if _, err := appendLeaf(context.Background(), w.leaves, w.journal, registry.KindTelemetry, w.cellID, w.salt, clockAlarmRecord(reason, priority), w.now().UnixNano()); err != nil && w.onTrip != nil {
 		w.onTrip(ReasonLeafWriteFailed)
 	}
 }

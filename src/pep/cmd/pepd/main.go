@@ -382,6 +382,7 @@ func run() error {
 		CellID:      cellID,
 		Salt:        salt,
 		Leaves:      cellLog,
+		Journal:     auditStore,
 		QuorumState: quorumState,
 		OnAlarm:     func(name string) { log.Printf("pepd: ALARME fail-closed: %s", name) },
 	})
@@ -439,6 +440,7 @@ func run() error {
 		CellID:      cellID,
 		Salt:        salt,
 		Leaves:      cellLog,
+		Journal:     auditStore,
 		OnTrip:      failClosed.OnTrip(),
 	})
 	if err != nil {
@@ -544,6 +546,7 @@ func run() error {
 		CellID:       cellID,
 		Salt:         salt,
 		Leaves:       cellLog,
+		Journal:      auditStore,
 		OnAlarm:      func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
 		VerifyQuorum: quorum,
 		QuorumState:  quorumState,

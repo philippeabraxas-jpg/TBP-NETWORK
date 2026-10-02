@@ -82,11 +82,12 @@ Câblés à ce jour :
 |---|---|---|
 | `pepd` — décisions : validateur (`TBPD1`/`TBPD2`), client OPA, coupures de quota, refus dry-run | `KindDecision` | `TBP_AUDIT_RECORDS` (chemin du journal) + `TBP_AUDIT_RECORDS_KEY_FILE` (`tbp-audit keygen`). **Requis** par `pepd` (sans journal il ne démarre pas). Un journal qui refuse d'écrire ⇒ aucune feuille ⇒ un allow devient un deny (`leaf-write-failed`). |
 | `pepd` — audit de réécriture d'ano (`TBAN1`, #178) | `KindTelemetry` | même journal (partagé) |
+| `pepd` / `brokerd` — feuilles d'état et d'alarme : déclenchements et levées fail-closed (`TBFF1`), alarmes d'horloge (`TBPC1`), bascules de posture (`TBPM1`), alarmes de révision OPA (`TBPR1`), télémétrie dry-run (`TBPF2`) | `KindTelemetry` | même journal (partagé) |
 | `brokerd` — chaîne de décision (`TBPD1`), client OPA, contrats de plan (`TBPL1`/`TBPL2`, signature comprise), quorum classe W (`TBPQ1`) | `KindDecision`, `KindContract`, `KindQuorum` | son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : `brokerd` ne démarre pas sans eux). Même ordre fail-closed : journal refusé ⇒ aucune feuille ⇒ l'émission est refusée. |
 
-Tous les autres producteurs (supervisord, le suivi d'époque, la surveillance de
-révision OPA, la garde de provisionnement, les drapeaux dev, le manifeste,
-l'ancrage, la feuille de télémétrie du dry-run, alarmes d'horloge, bascules de
-mode, déclenchements fail-closed, …) inscrivent encore une feuille nue : leurs
+Tous les autres producteurs (supervisord, le suivi d'époque, la garde de
+provisionnement, les drapeaux dev, le manifeste, l'ancrage, les feuilles du
+backpressure et de l'écrivain asynchrone, la télémétrie et les métriques du
+traducteur, …) inscrivent encore une feuille nue : leurs
 feuilles n'ont pas d'entrée de journal et `tbp-audit` n'a rien à en dire. Les
 câbler est suivi dans #275, un producteur à la fois.

@@ -649,6 +649,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		CellID:     cfg.cellID,
 		Salt:       cfg.salt,
 		Leaves:     cellLog,
+		Journal:    auditStore,
 		OnTrip:     onTrip,
 	})
 	if err != nil {
