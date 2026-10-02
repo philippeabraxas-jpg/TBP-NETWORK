@@ -26,6 +26,29 @@
 //	TBP_ANO_MAX_EXCHANGES     échanges vivants maximum (défaut 1024)
 //	TBP_ANO_MAX_ENTRIES       entrées maximum par échange (défaut 1024)
 //
+// Démarrage mesuré (#272) — anod est la dernière ligne avant la sortie des données : ses
+// règles, son trousseau et son binaire sont mesurés comme ceux de pepd et de brokerd
+// (registry.ProvisioningGuard, issue #192) :
+//
+//	TBP_CELL_ID               requis — identité de la cellule (entre dans le témoin)
+//	TBP_SALT                  requis — sel des feuilles de provisionnement, hex ≥ 32
+//	                          caractères (§6.2, ne quitte jamais la cellule)
+//	TBP_REGISTRY_DIR          requis — journal PROPRE à anod (clé de cellule, feuilles de
+//	                          genèse / démarrage / transition / refus)
+//	TBP_PROVISIONING_WITNESS_FILE  requis — témoin signé, HORS de TBP_REGISTRY_DIR
+//	TBP_QUORUM_KEYRING_FILE   requis — trousseau des contrôleurs (quorum), même format que
+//	                          TBP_KEYRING_FILE ; mesuré comme fichier d'AUTORITÉ
+//	TBP_QUORUM_MIN            requis — k : signatures distinctes d'une preuve de transition
+//	TBP_PROVISIONING_TRANSITION_PROOF_FILE  optionnel — preuve de quorum d'un changement
+//	                          DÉLIBÉRÉ (règles, trousseau, binaire, réglages) : le refus de
+//	                          démarrage annonce la condition à signer
+//	TBP_PROVISIONING_EXTRA_FILES  optionnel — « nom=chemin,… » de fichiers à mesurer en plus
+//
+// Mesuré : le fichier de règles, le trousseau d'émetteurs, le trousseau de contrôleurs, le
+// binaire d'anod, les réglages qui décident ce qui sort (classifieur, délais, bornes) et k.
+// Modifier l'un d'eux entre deux démarrages — retirer un motif, élargir keep_paths, brancher
+// un classifieur — est REFUSÉ sans preuve de quorum liée à (état attesté, état cible).
+//
 // Doctrine §1 : le moindre défaut de configuration est FATAL au démarrage.
 package main
 
@@ -65,9 +88,21 @@ func main() {
 }
 
 type config struct {
-	socket            string
-	keyring           map[[16]byte]ed25519.PublicKey
-	rules             *ano.Rules
+	socket      string
+	keyring     map[[16]byte]ed25519.PublicKey
+	keyringPath string
+	rules       *ano.Rules
+	rulesPath   string
+	// démarrage mesuré (#272)
+	cellID            string
+	salt              []byte
+	registryDir       string
+	witnessFile       string
+	quorumKeyringPath string
+	quorumKeyring     map[[16]byte]ed25519.PublicKey
+	quorumMin         int
+	proofFile         string
+	extraFiles        string
 	classifierSocket  string
 	classifierTimeout time.Duration
 	grace             time.Duration
@@ -98,6 +133,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return cfg, fmt.Errorf("TBP_KEYRING_FILE: %w", err)
 	}
 	cfg.keyring = kr
+	cfg.keyringPath = getenv("TBP_KEYRING_FILE")
 	rulesPath := getenv("TBP_ANO_RULES_FILE")
 	if rulesPath == "" {
 		return cfg, errors.New("TBP_ANO_RULES_FILE requis (des règles vides sont un choix explicite : le fichier doit exister)")
@@ -109,6 +145,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if cfg.rules, err = ano.ParseRules(data); err != nil {
 		return cfg, fmt.Errorf("TBP_ANO_RULES_FILE: %w", err)
 	}
+	cfg.rulesPath = rulesPath
 	cfg.classifierSocket = getenv("TBP_ANO_CLASSIFIER_SOCKET")
 	ms, err := envInt(getenv, "TBP_ANO_CLASSIFIER_TIMEOUT_MS", 5, 1, 100)
 	if err != nil {
@@ -124,6 +161,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return cfg, err
 	}
 	if cfg.maxEntries, err = envInt(getenv, "TBP_ANO_MAX_ENTRIES", ano.DefaultMaxEntries, 1, 1<<20); err != nil {
+		return cfg, err
+	}
+	if err := loadProvisioningConfig(getenv, &cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -191,6 +231,26 @@ func run(ctx context.Context, getenv func(string) string) error {
 	cfg, err := loadConfig(getenv)
 	if err != nil {
 		return err
+	}
+	// Démarrage mesuré (#272) AVANT tout le reste : anod n'engage ni moteur ni socket tant que ses
+	// règles, son trousseau et son binaire ne sont pas conformes au témoin.
+	binary, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("binaire d'anod introuvable (mesure #272): %w", err)
+	}
+	cellLog, signer, verifier, err := openRegistry(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := cellLog.Close(closeCtx); err != nil {
+			log.Printf("anod: fermeture du registre: %v", err)
+		}
+	}()
+	if err := setupProvisioning(ctx, cfg, binary, signer, verifier, cellLog); err != nil {
+		return fmt.Errorf("provisionnement: %w", err)
 	}
 	opts := ano.Options{
 		Rules:                 cfg.rules,

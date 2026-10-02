@@ -669,8 +669,18 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   du quorum. Les deux attestent aussi les **réglages d'échelle** (`quorum-settings` : `TBP_QUORUM_MIN` et
   la topologie, #224) : abaisser k en éditant l'environnement est une divergence, et le changement est
   autorisé par le k qui était attesté. Adopter cela sur une cellule qui a déjà tourné demande une preuve de
-  transition (la nouvelle entrée change le condensé). Les deux acceptent `TBP_PROVISIONING_EXTRA_FILES` (par exemple le fichier de
-  règles d'`anod`).
+  transition (la nouvelle entrée change le condensé). Les deux acceptent `TBP_PROVISIONING_EXTRA_FILES`. **`anod` se mesure
+  lui-même** (#272) : il redémarre indépendamment de `pepd`, donc le démon qui décide ce qui sort de la
+  cellule ne peut pas dépendre du contrôle de démarrage d'un autre. `anod` atteste son **fichier de
+  règles** (`ano-rules`), son trousseau d'émetteurs, son trousseau de contrôleurs (autorité), **son
+  propre binaire** (`anod-binary`), les réglages qui décident ce qui est relâché (`ano-settings` : socket
+  du classifieur, délai, grâce, bornes) et `k` (`quorum-settings`). Retirer un motif, élargir
+  `keep_paths` ou brancher un classifieur entre deux démarrages est **refusé** sans preuve de quorum liée
+  à (état attesté, état cible), condition `provisioning-transition-anod|from=…|to=…` — le refus
+  l'affiche. `anod` exige sa propre chaîne et son témoin : `TBP_CELL_ID`, `TBP_SALT`,
+  `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (hors du répertoire du registre, qui doit déjà
+  exister), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN` ; il n'existe pas d'échappatoire « dev » pour le
+  désactiver. Mettre à jour un `anod` existant exige une preuve de transition.
 - **Comment.** Un condensé sur la liste triée (nom, SHA-256) est engagé au premier démarrage
   dans un témoin signé par la clé de cellule, hors de `TBP_REGISTRY_DIR`. À chaque démarrage
   suivant le condensé doit correspondre ; sinon le démon refuse de démarrer, écrit une
