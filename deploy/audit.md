@@ -115,10 +115,12 @@ Wired so far:
 | `supervisord` — monitor alerts (`TBPS1`, salt included) | `KindSupervision` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: no journal ⇒ `supervisord` does not start). A journal that refuses ⇒ no leaf ⇒ no alert is notified. |
 | `pepd` / `brokerd` — dev-escape-hatch flags (`TBDV1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ the start is refused |
 | `tmetrics` — translator measurement (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**), pointing at the journal of the service (pepd or brokerd) that owns the registry it appends to |
+| `brokerd` — translator degradation guard, **opt-in** `TBP_TRANSLATOR_GUARD=1` (#275): down / recovered episodes and every refusal while degraded (`TBTD1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ no leaf and the `translator-leaf-write-failed` alarm, the failure direction stays deny |
 | `pepd` — passport telemetry pipeline, **opt-in** `TBP_TELEMETRY=1` (#275): window aggregator (`TBAG1`, one leaf per sealed window, empty ones included), anti-dribble detector (`TBAD1`), retention purge (`TBRP1`) | `KindTelemetry`, `KindTelemetryAlert`, `KindRetentionPurge` | same journal (shared); a journal that refuses ⇒ no leaf and the `leaf-write-failed` alarm, never silence |
-| Library producers with a `Journal` option, not yet run inside a daemon: translator degradation events (`TBTD1`), telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly) | `KindTelemetry` | `Journal` option (nil = bare leaf) |
+| Library producers with a `Journal` option, not yet run inside a daemon: telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly) | `KindTelemetry` | `Journal` option (nil = bare leaf) |
 
 Every producer of leaves in this repository now has a journal seam, and every
 daemon that writes leaves requires its journal. A library producer is bare only
-until its host wires `Journal` — `pepd` runs the telemetry pipeline (opt-in);
-nothing in-tree runs the translator degradation producer inside a daemon yet.
+until its host wires `Journal` — `pepd` runs the telemetry pipeline (opt-in) and
+`brokerd` the translator degradation controller (opt-in); nothing in-tree runs
+the telemetry exporter sink inside a daemon yet.

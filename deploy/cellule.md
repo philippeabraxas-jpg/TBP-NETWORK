@@ -397,6 +397,23 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #   TBP_OPA_EXPECTED_UID=$(id -u tbp-opa)  # UID the kernel must report
 #                                      # for OPA at every connection
 #   TBP_TRANSLATOR=structured
+#   TBP_TRANSLATOR_GUARD=1         # optional, OPT-IN (spec §4.5, T25, #275):
+#                                  # controlled degradation in front of the
+#                                  # translator. The controller BOOTS degraded:
+#                                  # normal mode is earned by a green probe
+#                                  # (GET, 200) of the translator's health URL;
+#                                  # until then every request is refused
+#                                  # (translation-failed, no detail to the
+#                                  # agent). No mirror cell / human arbitration
+#                                  # is wired: degraded ⇒ default-deny. Every
+#                                  # switch and refusal leaves a TBTD1 leaf +
+#                                  # an alarm. Any TBP_TRANSLATOR_PROBE_*
+#                                  # without =1 is refused.
+#   TBP_TRANSLATOR_PROBE_URL=http://127.0.0.1:8000/health  # required with the
+#                                  # guard; literal LOOPBACK IP only (the vLLM
+#                                  # listens on loopback), no redirect followed
+#   TBP_TRANSLATOR_PROBE_INTERVAL_MS=5000  # [500, 60000]
+#   TBP_TRANSLATOR_PROBE_TIMEOUT_MS=2000   # [100, 10000]
 #   # --- custody DEV (lab/CI only) — security review #113: unlike the
 #   # two OPA dev flags above, this one used to be accepted with NO
 #   # dedicated flag at all; refused at startup now unless

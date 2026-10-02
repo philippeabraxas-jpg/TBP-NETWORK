@@ -126,9 +126,22 @@ CI wiring (workflows are read-only for the agent — copy this step):
     --scorer-cmd "<deployed scorer>" --out report.json   # exit 1 = regression
 ```
 
+## Wiring into `brokerd` (#275)
+
+`brokerd` runs the controller **opt-in** (`TBP_TRANSLATOR_GUARD=1`, see
+`deploy/cellule.md`): `broker.GuardedTranslator` consults it before any
+translation, `broker.HTTPProbe` is its probe (GET on a literal loopback URL, 200
+required, no redirect, no proxy). The controller boots degraded; a synchronous
+probe establishes the state before the broker serves, then the supervision loop
+re-probes — never the decision path. Every refusal is a healthy
+`translation-failed` with no detail for the agent (the translator's health is not
+an oracle). Mirror cell and human arbitration are **not** wired: degraded ⇒
+default-deny, for structured input too. Each request refused while degraded leaves
+a `TBTD1` leaf and an alarm (deduplication is the monitor's job, §4.5).
+
 ## Not implemented here
 
-- Wiring of the degradation controller into `brokerd` (the broker
-  currently refuses any non-`structured` translator, so the
-  natural-language path is not assembled yet — the controller is ready for
-  the day it is).
+- A natural-language translator: `brokerd` still accepts only `structured`, so the
+  guard here gates the structured path on the probe of a translator service.
+- A `MirrorCell` (§7.4) and an `Arbitration` (human queue) implementation for a
+  daemon — the controller supports them, nothing in-tree provides them yet.

@@ -163,7 +163,8 @@ brokerd/supervisord réels), fail-closed, rapport JSON dans
   « TBTM1 ») est livrée et testée sur un mini-corpus d'exemple.
 - `brokerd` v1 n'accepte que le traducteur `structured` : le chemin
   langage naturel / escalade humaine n'est pas câblé (le contrôleur de
-  dégradation, lui, est livré et testé).
+  dégradation est livré, testé et tourne dans `brokerd` en garde opt-in —
+  sans cellule miroir ni arbitrage : dégradé ⇒ default-deny).
 - L'inter-domaine est différé par la spec elle-même (§13, issue #33).
 - La durabilité bornée-async du registre (T38) est livrée (PR #78,
   fusionnée).

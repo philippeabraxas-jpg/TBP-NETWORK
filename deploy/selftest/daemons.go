@@ -525,7 +525,18 @@ func runDaemons(s *suite, cfg config) {
 	}
 	s.add(phaseDaemons, "clés DEV émises (émetteur 0600, opérateurs, cells.json — custody D97)", true, "")
 
+	// Dégradation contrôlée du traducteur (T25, §4.5) : brokerd sonde ce faux service de santé (loopback).
+	translatorHealth, err := startHealthStub()
+	if err != nil {
+		s.fail(phaseDaemons, "service de santé du traducteur (harnais)", err)
+		return
+	}
+	defer translatorHealth.stop()
+
 	brokerEnv := append(os.Environ(),
+		"TBP_TRANSLATOR_GUARD=1",
+		"TBP_TRANSLATOR_PROBE_URL="+translatorHealth.URL,
+		"TBP_TRANSLATOR_PROBE_INTERVAL_MS=500",
 		"TBP_AUDIT_RECORDS="+auditJournalPath,
 		"TBP_AUDIT_RECORDS_KEY_FILE="+auditKeyPath,
 		"TBP_CELL_ID="+daemonsCellID,
@@ -853,6 +864,48 @@ func runDaemons(s *suite, cfg config) {
 	foundDev, derr := waitPayloadHash(ctx, daemonsCellID, brokerRegDir, devLeaf, 5*time.Second)
 	s.add(phaseDaemons, "#208 : les échappatoires dev actives de brokerd sont consignées en feuille KindTelemetry (recalculable par re-hash)",
 		derr == nil && foundDev, fmt.Sprintf("trouvée=%v err=%v", foundDev, derr))
+
+	// --- Dégradation contrôlée du traducteur (T25, §4.5, #275) ----------------
+	// Le service de santé tombe : brokerd REFUSE (refus sain « translation-failed », jamais une
+	// admission) ; il revient : le chemin se rouvre sans redémarrage (la demande atteint OPA).
+	translatorHealth.set(false)
+	closedOK := false
+	var closedReason string
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		st, rw, e := postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{"subject": "agent-1", "intent": denyIntent})
+		var av daemonActionResponse
+		if e == nil && st == http.StatusOK && json.Unmarshal(rw, &av) == nil {
+			closedReason = av.Reason
+			if !av.Allow && av.Reason == "translation-failed" && av.Token == "" {
+				closedOK = true
+				break
+			}
+		}
+	}
+	s.add(phaseDaemons, "T25 : traducteur dégradé (sonde rouge) ⇒ brokerd refuse (translation-failed), jamais d'admission",
+		closedOK, "dernière raison="+closedReason)
+	translatorHealth.set(true)
+	reopenedOK := false
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		st, rw, e := postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{"subject": "agent-1", "intent": denyIntent})
+		var av daemonActionResponse
+		if e == nil && st == http.StatusOK && json.Unmarshal(rw, &av) == nil {
+			closedReason = av.Reason
+			if av.Reason == "opa-deny" { // la demande a franchi le traducteur et atteint OPA
+				reopenedOK = true
+				break
+			}
+		}
+	}
+	s.add(phaseDaemons, "T25 : sonde verte ⇒ le chemin se rouvre sans redémarrage (la demande atteint OPA)",
+		reopenedOK, "dernière raison="+closedReason)
+	brokerLog, _ := os.ReadFile(filepath.Join(base, "brokerd.log"))
+	tbtdRecovered := registry.HashPayload(cellSalt, []byte{'T', 'B', 'T', 'D', '1', 2})
+	foundRec, rerr := waitPayloadHash(ctx, daemonsCellID, brokerRegDir, tbtdRecovered, 10*time.Second)
+	s.add(phaseDaemons, "T25 : bascules et refus alarmés (log) et la reprise laisse une feuille TBTD1 recalculable",
+		strings.Contains(string(brokerLog), "ALARME: translator-down") &&
+			strings.Contains(string(brokerLog), "ALARME: translator-default-deny") && rerr == nil && foundRec,
+		fmt.Sprintf("feuille reprise trouvée=%v err=%v", foundRec, rerr))
 
 	// --- Issue #207 (R-14) : un jeton d'époque au bail échu ne remplace pas ---
 	// l'époque vivante. Le jeton est AUTHENTIQUE (signé 2-of-3 par les
