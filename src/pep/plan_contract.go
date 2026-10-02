@@ -382,6 +382,27 @@ func (s *ContractStore) clock() time.Time {
 	return time.Now()
 }
 
+// ValidatePlan applique au sujet et aux étapes les bornes que Submit exige
+// (ErrPlanSubmissionInvalid sinon) : sujet 1..255 octets (u8 dans le sceau),
+// 1..MaxPlanSteps étapes, action 1..255, ressource 1..1024. Exportée pour que l'outil
+// d'opérateur (quorumproof planhash, #273) refuse exactement ce que le broker refuse —
+// jamais une seconde copie des bornes qui dériverait.
+func ValidatePlan(subject string, steps []PlanStep) error {
+	if len(subject) < 1 || len(subject) > maxPlanSubjectLen {
+		return ErrPlanSubmissionInvalid
+	}
+	if len(steps) < 1 || len(steps) > MaxPlanSteps {
+		return ErrPlanSubmissionInvalid
+	}
+	for _, st := range steps {
+		if len(st.Action) < 1 || len(st.Action) > maxPlanActionLen ||
+			len(st.Resource) < 1 || len(st.Resource) > maxPlanResourceLen {
+			return ErrPlanSubmissionInvalid
+		}
+	}
+	return nil
+}
+
 // Submit scelle un plan soumis par l'agent (D58) et le met en attente
 // d'approbation. Renvoie le hash scellé — c'est lui qui est présenté (avec
 // le plan en clair) à l'opérateur. Saturation ou feuille impossible =
@@ -389,17 +410,8 @@ func (s *ContractStore) clock() time.Time {
 // pour lequel le plan est soumis (#235) : lui seul pourra consommer les
 // étapes (VerifyStep compare au sujet résolu par le broker).
 func (s *ContractStore) Submit(ctx context.Context, subject string, steps []PlanStep) ([32]byte, error) {
-	if len(subject) < 1 || len(subject) > maxPlanSubjectLen {
-		return [32]byte{}, ErrPlanSubmissionInvalid
-	}
-	if len(steps) < 1 || len(steps) > MaxPlanSteps {
-		return [32]byte{}, ErrPlanSubmissionInvalid
-	}
-	for _, st := range steps {
-		if len(st.Action) < 1 || len(st.Action) > maxPlanActionLen ||
-			len(st.Resource) < 1 || len(st.Resource) > maxPlanResourceLen {
-			return [32]byte{}, ErrPlanSubmissionInvalid
-		}
+	if err := ValidatePlan(subject, steps); err != nil {
+		return [32]byte{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

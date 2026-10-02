@@ -239,6 +239,47 @@ func runScale2(s *suite, cfg config) {
 		s.fail(ph, "plan soumis (canal opérateur)", fmt.Errorf("status=%d err=%v", submitStatus, err))
 		return
 	}
+	// #273 : l'opérateur RECALCULE le hash du plan en clair avant de signer (quorumproof
+	// planhash) : le submitted_at vient de la vue d'arbitrage du broker, le reste du plan
+	// reçu et de la configuration de la cellule — pas du hash que le broker annonce.
+	planFile := filepath.Join(base, "plan.json")
+	planBody := `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}`
+	forgedFile := filepath.Join(base, "plan-forged.json")
+	forgedBody := `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-9","params_hex":""}]}`
+	if err := os.WriteFile(planFile, []byte(planBody), 0o600); err != nil {
+		s.fail(ph, "plan en clair", err)
+		return
+	}
+	if err := os.WriteFile(forgedFile, []byte(forgedBody), 0o600); err != nil {
+		s.fail(ph, "plan falsifié", err)
+		return
+	}
+	_, arbRaw, _ := getUnix(adminHC, "http://brokerd/v1/supervision/arbitration")
+	var arb struct {
+		Pending []struct {
+			Hash        string `json:"hash"`
+			SubmittedAt string `json:"submitted_at"`
+		} `json:"pending"`
+	}
+	_ = json.Unmarshal(arbRaw, &arb)
+	submittedAt := ""
+	for _, p := range arb.Pending {
+		if p.Hash == planSub.PlanHash {
+			submittedAt = p.SubmittedAt
+		}
+	}
+	if submittedAt == "" {
+		s.fail(ph, "vue d'arbitrage : plan en attente introuvable", fmt.Errorf("%s", arbRaw))
+		return
+	}
+	planArgs := func(file string) []string {
+		return []string{"planhash", "-cell", scale2CellID, "-policy-id", policyHex, "-submitted-at", submittedAt, "-plan", file, "-expect", planSub.PlanHash}
+	}
+	_, errP, err := runCmd(cfg.repo, nil, qpBin, planArgs(planFile)...)
+	s.add(ph, "#273 : quorumproof planhash recalcule le hash que le broker a scellé (plan en clair + submitted_at de la vue d'arbitrage)", err == nil, strings.TrimSpace(errP))
+	_, _, err = runCmd(cfg.repo, nil, qpBin, planArgs(forgedFile)...)
+	s.add(ph, "#273 : témoin — un plan en clair différent de celui scellé est refusé par -expect (ne signez pas)", err != nil, "")
+
 	approvalFile := filepath.Join(base, "approval.json")
 	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-key", opKeyPath, "-out", approvalFile); err != nil {
 		s.fail(ph, "quorumproof planapprove", fmt.Errorf("%v — %s", err, errB))
