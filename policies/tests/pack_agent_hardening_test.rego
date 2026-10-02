@@ -235,9 +235,10 @@ test_command_default_deny_without_allowlist if {
 test_command_allowlist_is_exact_first_word_and_bare if {
 	cfg := {"allowed_commands": ["ls", "/usr/bin/git"]}
 
-	# commande NUE : passe ; en majuscules, avec blancs de tête : passe (même forme)
+	# commande NUE : passe, avec blancs de tête et de queue ; la casse, elle, est EXACTE (« LS » n'est pas « ls »)
 	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls"}, cfg)
-	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "  LS  "}, cfg)
+	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "  ls  "}, cfg)
+	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "LS"}, cfg)
 	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "/usr/bin/git"}, cfg)
 
 	# « ls » n'autorise PAS un binaire déposé par l'agent, ni un autre chemin
@@ -263,14 +264,42 @@ test_command_arguments_are_judged if {
 	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "rm -rf /"}, cfg)
 	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "rm -rf /"}, cfg)
 
-	# voisins autorisés : la ligne EXACTE (blancs et casse normalisés) et la commande nue
-	every r in ["git status", "  GIT   Status ", "ls -la /srv", "ls", "find"] {
+	# voisins autorisés : la ligne EXACTE (blancs normalisés, casse exacte) et la commande nue
+	every r in ["git status", "  git   status ", "ls -la /srv", "ls", "find"] {
 		not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
 		not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
 	}
 	ok_with_cfg := object.union({"allowed_command_lines": ["git status"]}, {})
 	h.ok with input as {"action": "exec", "class": 0, "resource": "git status"}
 		with data.tbp.hardening as ok_with_cfg
+}
+
+# Revue tierce (2 octobre, 4.3) : la ligne de commande était comparée sans tenir compte de la casse, alors qu'une
+# option change de sens avec la casse (-r / -R, -c / -C) et que les chemins Linux y sont sensibles.
+test_command_lines_are_case_sensitive if {
+	cfg := {"allowed_command_lines": ["ls -r /srv/Public", "git status"], "allowed_commands": ["ls"]}
+
+	# la ligne exacte passe
+	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls -r /srv/Public"}, cfg)
+	not "command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls -r /srv/Public"}, cfg)
+
+	# option ou chemin dont la casse diffère : refusé, comme une commande connue appelée avec d'autres arguments
+	every r in ["ls -R /srv/Public", "ls -r /srv/public", "ls -r /SRV/Public", "git Status"] {
+		"command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
+	}
+
+	# premier mot dont la casse diffère : commande inconnue
+	every r in ["LS -r /srv/Public", "Git status", "GIT STATUS"] {
+		"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": r}, cfg)
+	}
+	not h.ok with input as {"action": "exec", "class": 0, "resource": "ls -R /srv/Public"}
+		with data.tbp.hardening as cfg
+
+	# les blancs restent normalisés (un espace de plus n'est pas une autre commande)
+	not "command-args-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "ls   -r   /srv/Public"}, cfg)
+
+	# la commande NUE est exacte aussi : « LS » ni « Ls » ne passent sur la foi de « ls »
+	"command-not-allowlisted" in viol_cfg({"action": "exec", "class": 0, "resource": "Ls"}, {"allowed_commands": ["ls"]})
 }
 
 test_command_shell_metacharacters_denied_even_if_command_allowed if {

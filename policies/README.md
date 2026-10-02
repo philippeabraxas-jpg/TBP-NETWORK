@@ -115,8 +115,10 @@ bundle as data, including in the deployment selftest.
 - **Commands are default-deny, and judged whole (#267).** With no allowlist, no command
   passes. `allowed_commands: ["ls"]` allows the **bare** `ls` and nothing else — not
   `ls -la`, not `/tmp/ls`, not `lsof`. To allow arguments, list the **exact line** in
-  `allowed_command_lines` (whitespace collapsed, case ignored). Upgrading: a bundle that
-  listed `"git"` and relied on any arguments must now list the lines it really runs.
+  `allowed_command_lines` (whitespace collapsed, **case exact** — an option changes meaning with
+  case, `-r` / `-R`, and Linux paths are case-sensitive; only host names stay case-insensitive).
+  Upgrading: a bundle that listed `"git"` and relied on any arguments must now list the lines it
+  really runs, and one that relied on case-insensitive matching must now list the exact case.
 - **Any action not known as non-executing is judged as a command (#268).** Known:
   `read`, `write`, `delete`, `list`, `create`, `update`, `append`, `get`, `put`, `post`,
   `patch`, `head`, `options`, `http.send`, `open_tunnel`. Any other action name (`invoke`,
