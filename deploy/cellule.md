@@ -918,12 +918,28 @@ go build -o /usr/local/bin/opawatchdog ./src/supervision/cmd/opawatchdog
 useradd --system --no-create-home --shell /usr/sbin/nologin tbp-opa-watchdog
 install -m 0644 src/supervision/tbp-opa-watchdog.service /etc/systemd/system/
 install -m 0644 src/supervision/tbp-opa-watchdog.rules /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules
+tbp-audit keygen -out /etc/tbp/opawd-audit.key
 # /etc/tbp/opa-watchdog.env (0600):
 #   TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
-#   TBP_OPAWD_DRY_RUN=1          # first: log the decision, restart nothing
+#   TBP_OPAWD_CELL_ID=cell-a  TBP_OPAWD_LOG_ID=opawd-cell-a
+#   TBP_OPAWD_REGISTRY_DIR=/var/lib/tbp/opa-watchdog/registry
+#   TBP_OPAWD_AUDIT_RECORDS=/var/lib/tbp/opa-watchdog/audit-records.jsonl
+#   TBP_OPAWD_AUDIT_RECORDS_KEY_FILE=/etc/tbp/opawd-audit.key
+#   TBP_OPAWD_DRY_RUN=1          # first: log the decision, restart nothing (no leaf either)
 systemctl daemon-reload && systemctl enable --now tbp-opa-watchdog
 journalctl -u tbp-opa-watchdog -f
 ```
+
+Every restart is **leafed before it runs** (§5.3, "an alert is first a leaf"): the watchdog has
+its own signed chain and encrypted audit journal, like the monitor (§7.1), and writes a
+`KindSupervision` leaf (`TBPS1`, event 6 `opa-restart-requested`, detail = the state of every
+source) *then* executes `systemctl`. **No leaf, no restart**: if its journal or chain refuses,
+the watchdog logs `untraced-refused` and does nothing — OPA stalled already denies everything
+(fail-closed), so not restarting prolongs a refusal, it does not open a hole. A failed restart
+(`opa-restart-failed`) and an exhausted budget (`opa-restart-budget-exhausted`, once per episode,
+retried until written) are leafed as alarms. Verify with `tbp-audit verify` on its chain and
+journal. Not yet done: this chain is not anchored into the master chain nor watched by
+`supervisord` (the monitor's anchor-freshness check would flag it forever) — audit it directly.
 
 Bounds (all fail-closed at startup if unreadable or out of range): `TBP_OPAWD_COOLDOWN_S`
 (default 30) of rest after every attempt, and `TBP_OPAWD_MAX_PER_HOUR` (default 3)
@@ -935,8 +951,7 @@ unit and nothing more; the unit name must match `TBP_OPAWD_UNIT` and the rule.
 
 After a restart OPA is cold (first requests may be slow, see `tests/opa_latency`) and the
 revision watcher re-verifies the pinned bundle before the cell's conditions clear — a
-restart never bypasses the revision check. Honest limits: the restart decision is logged
-to the journal, not yet written as a registry leaf; the unit and the polkit rule are
+restart never bypasses the revision check. Honest limits: the unit and the polkit rule are
 verified by tests for consistency but not run under a real systemd here (the selftest
 exercises the real OPA, brokerd and watchdog with a stand-in `systemctl`).
 

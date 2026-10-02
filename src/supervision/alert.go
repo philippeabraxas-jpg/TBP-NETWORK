@@ -21,8 +21,13 @@ package supervision
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 // alertMagic est la séparation de domaine du record d'alerte (§11.3).
@@ -50,7 +55,23 @@ const (
 	// AlertEventFailoverRefused : déclenchement REFUSÉ (budget épuisé,
 	// couture absente ou en faute — escalade humaine, T34b, D80).
 	AlertEventFailoverRefused byte = 5
+	// AlertEventOPARestart : le chien de garde d'OPA (cmd/opawatchdog, #275) a décidé de redémarrer OPA — Notice « restart-requested »
+	// (feuillée AVANT l'acte : pas de redémarrage sans trace) ou Alarm « restart-failed » (la commande a échoué). CellID = la
+	// cellule dont OPA est redémarré.
+	AlertEventOPARestart byte = 6
+	// AlertEventOPARestartRefused : OPA reste bloqué mais le chien de garde ne redémarre pas (budget horaire épuisé, ou
+	// feuille impossible) — escalade humaine, jamais un silence (#275).
+	AlertEventOPARestartRefused byte = 7
 )
+
+func validAlertEvent(e byte) bool {
+	switch e {
+	case AlertEventChainFault, AlertEventAnchorStale, AlertEventManifestFault, AlertEventFailoverTrigger, AlertEventFailoverRefused,
+		AlertEventOPARestart, AlertEventOPARestartRefused:
+		return true
+	}
+	return false
+}
 
 // Verdicts (champ verdict du record).
 const (
@@ -81,9 +102,7 @@ type AlertRecord struct {
 // §11.3). Fail-closed : event/verdict inconnus, cellID ou reason hors
 // bornes ⇒ erreur, jamais de record tronqué.
 func MarshalAlertRecord(r AlertRecord) ([]byte, error) {
-	switch r.Event {
-	case AlertEventChainFault, AlertEventAnchorStale, AlertEventManifestFault, AlertEventFailoverTrigger, AlertEventFailoverRefused:
-	default:
+	if !validAlertEvent(r.Event) {
 		return nil, fmt.Errorf("supervision: event %d inconnu", r.Event)
 	}
 	switch r.Verdict {
@@ -129,9 +148,7 @@ func ParseAlertRecord(data []byte) (AlertRecord, error) {
 		return r, fmt.Errorf("%w : entête tronquée", ErrAlertRecordMalformed)
 	}
 	r.Event = rest[0]
-	switch r.Event {
-	case AlertEventChainFault, AlertEventAnchorStale, AlertEventManifestFault, AlertEventFailoverTrigger, AlertEventFailoverRefused:
-	default:
+	if !validAlertEvent(r.Event) {
 		return r, fmt.Errorf("%w : event %d inconnu", ErrAlertRecordMalformed, r.Event)
 	}
 	idLen := int(rest[1])
@@ -190,3 +207,27 @@ type AlarmSinkFunc func(ctx context.Context, a Alert) error
 
 // Raise implémente AlarmSink.
 func (f AlarmSinkFunc) Raise(ctx context.Context, a Alert) error { return f(ctx, a) }
+
+// WriteAlert construit le record « TBPS1 » de (event, cellID, verdict, reason, detail) et le FEUILLE — KindSupervision, hash
+// salé (§6.2), clair journalisé d'abord quand journal != nil (journal-before-leaf, #275). C'est le chemin d'écriture commun du
+// moniteur et du chien de garde d'OPA : « une alerte est d'abord une feuille » (§5.3). Feuille impossible ⇒ erreur, et rien
+// n'a été notifié ni exécuté sur la foi d'une alerte qui n'existe pas comme preuve. logCellID est l'identité du log qui
+// feuille (celui du producteur), pas la cellule concernée.
+func WriteAlert(ctx context.Context, sink registry.LeafAppender, journal *registry.RecordStore, logCellID string, now time.Time,
+	event byte, cellID string, verdict byte, reason string, detail []byte) (Alert, error) {
+	rec := AlertRecord{Event: event, CellID: cellID, DetailHash: sha256.Sum256(detail), Verdict: verdict, Reason: reason}
+	raw, err := MarshalAlertRecord(rec)
+	if err != nil {
+		return Alert{}, err
+	}
+	salt := make([]byte, supervisionSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return Alert{}, fmt.Errorf("supervision: sel de feuille : %w", err)
+	}
+	leafHash := registry.HashPayload(salt, raw)
+	idx, err := registry.AppendLeaf(ctx, sink, journal, registry.KindSupervision, logCellID, salt, raw, now.UnixNano())
+	if err != nil {
+		return Alert{}, fmt.Errorf("supervision: feuille d'alerte impossible : %w", err)
+	}
+	return Alert{Record: rec, Raw: raw, Salt: salt, Detail: detail, LeafIndex: idx, LeafHash: leafHash}, nil
+}
