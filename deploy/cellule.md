@@ -431,8 +431,11 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # /v1/supervision/degraded/{presence,decide},
 #                                  # GET /v1/supervision/degraded. Operator
 #                                  # gestures: `quorumproof arbid|arbpresence|
-#                                  # arbdecide`. The queue is in memory (lost at
-#                                  # restart: agents just re-send).
+#                                  # arbdecide`. The queue lives in memory and is
+#                                  # RESTORED at start from the journal (queued /
+#                                  # approved / refused entries, not the arbiter's
+#                                  # presence: heartbeats start again) — see the
+#                                  # persistence note at TBP_MIRROR_* above.
 #   TBP_ARBITRATION_PRESENCE_TTL_S=60   # [10, 600] heartbeat validity
 #   TBP_ARBITRATION_ENTRY_TTL_S=600     # [60, 3600] queue life, decision bound
 #   TBP_ARBITRATION_MAX_PENDING=256     # [1, 4096] full ⇒ default-deny
@@ -462,7 +465,18 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # CURRENT epoch and the anchored window has
 #                                  # not ended. Failover only lifts the
 #                                  # translator admission: OPA, quorum, plan and
-#                                  # contracts apply unchanged.
+#                                  # contracts apply unchanged. PERSISTENCE: at
+#                                  # start, the current promotion and the
+#                                  # arbitration queue are rebuilt from the audit
+#                                  # journal (no state file): what GRANTS a right
+#                                  # (a promotion, an approval) is restored only if
+#                                  # its leaf is in the signed log (inclusion
+#                                  # proof); consumptions/refusals apply as soon as
+#                                  # the hash matches; the mirror window never
+#                                  # outlives today's signed anchors. Unreadable
+#                                  # journal or log ⇒ alarm, empty state (re-post
+#                                  # the receipt; agents re-send). The journal is
+#                                  # re-read in full: start-up grows with it.
 #   # --- custody DEV (lab/CI only) — security review #113: unlike the
 #   # two OPA dev flags above, this one used to be accepted with NO
 #   # dedicated flag at all; refused at startup now unless

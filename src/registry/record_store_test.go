@@ -348,3 +348,63 @@ func (c *captureSink) Append(_ context.Context, l Leaf) (uint64, error) {
 	c.leaves = append(c.leaves, l)
 	return uint64(len(c.leaves)), nil
 }
+
+// VerifyRecordsInLog : un seul passage pour plusieurs enregistrements ; chacun reçoit SON verdict.
+func TestVerifyRecordsInLogBatch(t *testing.T) {
+	ctx := context.Background()
+	logDir := t.TempDir()
+	log, verifier := openTestLog(t, ctx, logDir, nil)
+	defer log.Close(ctx)
+	key := testRecordKey(t)
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	store, _ := OpenRecordStore(path, key)
+	defer store.Close()
+	for i, rec := range []string{"un", "deux", "trois"} {
+		if _, err := AppendSealed(ctx, log, store, KindDecision, "cell-a", testSalt, []byte(rec), int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// orphelin : clair journalisé, feuille jamais inscrite
+	orphan := Leaf{Kind: KindDecision, CellID: "cell-a", PayloadHash: HashPayload(testSalt, []byte("orphelin")), Timestamp: 9}
+	if err := store.Put(orphan, testSalt, []byte("orphelin")); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ReadRecords(path, key)
+	if err != nil || len(recs) != 4 {
+		t.Fatalf("relecture : %d %v", len(recs), err)
+	}
+	// clair altéré : même feuille, autre contenu
+	forged := recs[0]
+	forged.Record = []byte("falsifie")
+	recs = append(recs, forged)
+
+	got, err := VerifyRecordsInLogDir(ctx, logDir, verifier, recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{true, true, true, false, false}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("enregistrement %d : %v, attendu %v", i, got[i], want[i])
+		}
+	}
+	// mauvais vérificateur : checkpoint non opposable ⇒ erreur, rien n'est tenu pour vérifié
+	_, otherV := openTestLog(t, ctx, t.TempDir(), nil)
+	got, err = VerifyRecordsInLogDir(ctx, logDir, otherV, recs)
+	if err == nil {
+		t.Fatal("checkpoint accepté avec la clé publique d'un autre log")
+	}
+	for i, g := range got {
+		if g {
+			t.Errorf("enregistrement %d tenu pour vérifié malgré l'erreur", i)
+		}
+	}
+	// log illisible
+	if got, err = VerifyRecordsInLogDir(ctx, t.TempDir(), verifier, recs); err == nil {
+		t.Fatal("log vide accepté")
+	}
+	// aucune entrée : rien à vérifier
+	if got, err = VerifyRecordsInLogDir(ctx, logDir, verifier, nil); err != nil || len(got) != 0 {
+		t.Fatalf("vide : %v %v", got, err)
+	}
+}

@@ -886,6 +886,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		return err
 	}
 
+	// Restauration de l'état du miroir et de la file d'arbitrage depuis le journal (voir persistence.go) : AVANT de servir.
+	restorePersistedState(ctx, cfg, verifier, mirror, arbQueue, onTrip)
+
 	brk, err := broker.NewBroker(broker.BrokerOptions{
 		CellID:     cfg.cellID,
 		Salt:       cfg.salt,

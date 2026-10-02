@@ -1222,6 +1222,66 @@ func runDaemons(s *suite, cfg config) {
 		again, _ := stdAction()
 		s.add(phaseDaemons, "arbitrage : l'approbation est à usage unique — la représentation suivante repart en file",
 			again.Reason == "arbitration-pending", "raison="+again.Reason)
+
+		// --- Persistance (#275) : l'état survit à un redémarrage BRUTAL (kill), sans fichier d'état ---------------
+		// Une demande approuvée et non consommée, une demande en attente et la promotion du miroir sont retrouvées
+		// depuis le journal, ancrées dans le log signé. brokerd redémarre ici avec le traducteur TOUJOURS tombé et
+		// sans nouveau battement d'arbitre ni nouveau reçu.
+		stdPendingIntent := `{"action":"read","resource":"doc-9","class":3}`
+		pendBody := func(subject, intent string) (daemonActionResponse, string) {
+			st, rw, e := postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{"subject": subject, "intent": intent})
+			var av daemonActionResponse
+			var extra struct {
+				ArbitrationID string `json:"arbitration_id"`
+			}
+			if e != nil || st != http.StatusOK || json.Unmarshal(rw, &av) != nil {
+				return daemonActionResponse{Reason: "erreur"}, ""
+			}
+			_ = json.Unmarshal(rw, &extra)
+			return av, extra.ArbitrationID
+		}
+		_, _ = pendBody("agent-std", stdPendingIntent) // mise en file (arbitre joignable : battement frais)
+		decExp2 := time.Now().Add(8 * time.Minute).UTC().Truncate(time.Second)
+		stD2, _, errD2 := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", map[string]string{
+			"id": hex.EncodeToString(wantID[:]), "verdict": "approve", "expires_at": decExp2.Format(time.RFC3339),
+			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(wantID, arbiter.VerdictApprove, decExp2))),
+		})
+		s.add(phaseDaemons, "persistance : une seconde approbation signée (avant le redémarrage) est acceptée", errD2 == nil && stD2 == http.StatusOK, fmt.Sprintf("status=%d", stD2))
+		brokerd3.stop() // SIGKILL : aucun arrêt propre
+		if err := writeEpoch0(); err != nil {
+			s.fail(phaseDaemons, "epoch 0 (persistance)", err)
+			return
+		}
+		brokerd4, err := startDaemon(brokerdBin, brokerEnv, filepath.Join(base, "brokerd-persistance.log"))
+		if err != nil {
+			s.fail(phaseDaemons, "brokerd (persistance)", err)
+			return
+		}
+		defer brokerd4.stop()
+		back := false
+		for i := 0; i < 75 && !back; i++ {
+			time.Sleep(200 * time.Millisecond)
+			st, _, gerr := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/epoch")
+			back = gerr == nil && st == http.StatusOK
+		}
+		s.add(phaseDaemons, "persistance : brokerd redémarre (kill -9) sur le même journal et le même registre", back, "")
+		if back {
+			stM, rawM, _ := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/mirror")
+			s.add(phaseDaemons, "persistance : la promotion du miroir est retrouvée SANS redéposer de reçu",
+				stM == http.StatusOK && strings.Contains(string(rawM), `"available":true`), strings.TrimSpace(string(rawM)))
+			critAfter, _ := pendBody("agent-1", denyIntent)
+			s.add(phaseDaemons, "persistance : le système critique franchit l'admission après le redémarrage (miroir restauré)",
+				critAfter.Reason != "translation-failed" && critAfter.Reason != "erreur", "raison="+critAfter.Reason)
+			stillPend, _ := pendBody("agent-std", stdPendingIntent)
+			s.add(phaseDaemons, "persistance : la demande en attente est retrouvée en attente (sans arbitre joignable)",
+				stillPend.Reason == "arbitration-pending", "raison="+stillPend.Reason)
+			apprAfter, _ := pendBody("agent-std", denyIntent)
+			s.add(phaseDaemons, "persistance : l'approbation restaurée admet la demande (puis OPA la juge), UNE fois",
+				apprAfter.Reason == "opa-deny", "raison="+apprAfter.Reason)
+			againAfter, _ := pendBody("agent-std", denyIntent)
+			s.add(phaseDaemons, "persistance : l'approbation restaurée n'est pas rejouable (consommée)",
+				againAfter.Reason == "translation-failed" || againAfter.Reason == "arbitration-pending", "raison="+againAfter.Reason)
+		}
 		translatorHealth.set(true)
 		// Les feuilles de l'arbitrage (TBAR1) et de la dégradation (TBTD1) ont leur clair dans le journal, et
 		// aucune feuille du registre n'est restée sans clair (couverture log → journal).

@@ -20,6 +20,7 @@ import (
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 func TestMirrorFromEnv(t *testing.T) {
@@ -82,13 +83,15 @@ type mirrorHarness struct {
 	epoch    atomic.Uint64
 	now      atomic.Int64 // unix secondes
 	anchors  string
+	ctrlPubs map[int]ed25519.PublicKey
+	keysFile string
 }
 
 type epochVar struct{ h *mirrorHarness }
 
 func (e epochVar) CurrentEpoch() (uint64, error) { return e.h.epoch.Load(), nil }
 
-func newMirrorHarness(t *testing.T, windowStart, windowEnd time.Time, anchorEpoch uint64) *mirrorHarness {
+func newMirrorHarness(t *testing.T, windowStart, windowEnd time.Time, anchorEpoch uint64, journal ...*registry.RecordStore) *mirrorHarness {
 	t.Helper()
 	h := &mirrorHarness{bundle: sha256.Sum256([]byte("bundle"))}
 	ctrlPubs := map[int]ed25519.PublicKey{}
@@ -119,8 +122,13 @@ func newMirrorHarness(t *testing.T, windowStart, windowEnd time.Time, anchorEpoc
 	}
 	h.epoch.Store(anchorEpoch)
 	h.now.Store(time.Now().Unix())
+	var jr *registry.RecordStore
+	if len(journal) > 0 {
+		jr = journal[0]
+	}
+	h.ctrlPubs, h.keysFile = ctrlPubs, keysFile
 	gate, err := newMirrorGate(mirrorConfig{enabled: true, anchorsFile: h.anchors, cellKeysFile: keysFile}, "cell-a",
-		make([]byte, 16), &sinkLeaves{}, nil, ctrlPubs, 2, epochVar{h}, func() time.Time { return time.Unix(h.now.Load(), 0) })
+		make([]byte, 16), &sinkLeaves{}, jr, ctrlPubs, 2, epochVar{h}, func() time.Time { return time.Unix(h.now.Load(), 0) })
 	if err != nil {
 		t.Fatal(err)
 	}

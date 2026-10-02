@@ -455,8 +455,12 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # /v1/supervision/degraded/{presence,decide},
 #                                  # GET /v1/supervision/degraded. Gestes
 #                                  # d'opérateur : `quorumproof arbid|arbpresence|
-#                                  # arbdecide`. La file est en mémoire (perdue au
-#                                  # redémarrage : les agents renvoient).
+#                                  # arbdecide`. La file vit en mémoire et est
+#                                  # RESTAURÉE au démarrage depuis le journal
+#                                  # (entrées en attente / approuvées / refusées,
+#                                  # pas la présence de l'arbitre : les battements
+#                                  # reprennent) — voir la note de persistance à
+#                                  # TBP_MIRROR_* ci-dessus.
 #   TBP_ARBITRATION_PRESENCE_TTL_S=60   # [10, 600] validité d'un battement
 #   TBP_ARBITRATION_ENTRY_TTL_S=600     # [60, 3600] vie en file, borne d'une décision
 #   TBP_ARBITRATION_MAX_PENDING=256     # [1, 4096] pleine ⇒ default-deny
@@ -489,6 +493,19 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # pas échue. Le failover ne lève QUE
 #                                  # l'admission du traducteur : OPA, quorum, plan
 #                                  # et contrats s'appliquent sans changement.
+#                                  # PERSISTANCE : au démarrage, la promotion
+#                                  # courante et la file d'arbitrage sont
+#                                  # reconstruites depuis le journal d'audit (pas de
+#                                  # fichier d'état) : ce qui ACCORDE un droit (une
+#                                  # promotion, une approbation) n'est restauré que
+#                                  # si sa feuille est dans le log signé (preuve
+#                                  # d'inclusion) ; consommations et refus
+#                                  # s'appliquent dès que le hash correspond ; la
+#                                  # fenêtre du miroir ne survit jamais aux ancres
+#                                  # signées d'aujourd'hui. Journal ou log illisible
+#                                  # ⇒ alarme, état vide (redéposer le reçu ; les
+#                                  # agents renvoient). Le journal est relu en
+#                                  # entier : le démarrage s'allonge avec lui.
 #   # --- custody DEV (labo/CI seulement) — revue de sécurité #113 : contrairement
 #   # aux deux drapeaux de dev d'OPA ci-dessus, celui-ci était accepté sans
 #   # AUCUN drapeau dédié ; refusé maintenant au démarrage sauf si
