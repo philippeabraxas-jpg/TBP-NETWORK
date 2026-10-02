@@ -53,7 +53,6 @@ export default function () {
     token: TOKEN,
     action: 'read.list',
     resource: 'registry/docs/42',
-    epoch: 0,
   });
   const res = http.post(`${PEP}/v1/evaluate`, body, {
     headers: { 'Content-Type': 'application/json' },

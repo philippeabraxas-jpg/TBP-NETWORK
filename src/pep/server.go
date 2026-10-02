@@ -8,14 +8,13 @@ package pep
 // construit à la main avec ses propres oublis.
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"time"
-)
 
-func decodeJSON(r io.Reader, dst any) error { return json.NewDecoder(r).Decode(dst) }
+	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
+)
 
 // maxEvaluateBodyBytes borne le corps de /v1/evaluate et /v1/passport/consume.
 // Dérivée du pire message LÉGITIME : jeton de MaxTokenWireSize octets (base64
@@ -57,16 +56,29 @@ func NewServer(h http.Handler, t ServerTimeouts) *http.Server {
 	}
 }
 
-// decodeBoundedJSON lit le corps JSON de r en au plus limit octets. Rend false
-// après avoir écrit la réponse : 413 si la borne est dépassée, 400 sinon.
+// decodeBoundedJSON lit le corps JSON de r en au plus limit octets et le décode STRICTEMENT (#289, suite
+// de #241/#274) : clé en double, champ inconnu ou de casse inexacte, contenu après l'objet et UTF-8
+// invalide sont refusés — ce qu'un proxy, un WAF ou un journal lit doit être ce que pepd applique. Rend
+// false après avoir écrit la réponse : 413 si la borne est dépassée, 400 sinon, avec le détail que le
+// client peut lire pour corriger son corps (code stable, clé fautive bornée, noms exacts acceptés —
+// jamais le contenu de la requête).
 func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, limit int64, dst any) bool {
-	if err := decodeJSON(http.MaxBytesReader(w, r.Body, limit), dst); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "corps trop volumineux"})
 			return false
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "corps JSON illisible"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "corps JSON illisible", "detail": strictjson.Detail{Code: "body-unreadable"}})
+		return false
+	}
+	if err := strictjson.Decode(body, dst); err != nil {
+		var detail any
+		if se, ok := strictjson.As(err); ok {
+			detail = se.Detail
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "corps JSON illisible", "detail": detail})
 		return false
 	}
 	return true

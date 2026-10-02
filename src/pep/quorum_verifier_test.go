@@ -264,10 +264,11 @@ func TestModeEndpointRejectsForgedProofRealCrypto(t *testing.T) {
 	}
 
 	// L'ancienne attaque exacte de la revue #89 : des identités déclarées,
-	// aucune signature — refusée (le champ n'existe même plus sur le fil).
+	// aucune signature — refusée (le champ n'existe même plus sur le fil : depuis #289 il est refusé
+	// dès le décodage strict, 400 unknown-field, sans effet sur la posture).
 	legacy, _ := json.Marshal(map[string]any{"mode": "closed", "signers": []string{"x", "x"}})
-	if status, _ := post(legacy); status != http.StatusForbidden {
-		t.Fatalf("attaque #89 (signers déclarés, sans signature) : status=%d, veut 403", status)
+	if status, body := post(legacy); status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"unknown-field"`)) || !bytes.Contains(body, []byte(`"signers"`)) {
+		t.Fatalf("attaque #89 (signers déclarés, sans signature) : status=%d body=%s, veut 400 unknown-field « signers »", status, body)
 	}
 	if mc.Mode() != ModeMonitor {
 		t.Fatal("mode basculé par l'attaque #89")

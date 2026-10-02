@@ -326,13 +326,13 @@ func newPEPStack(cfg Config, plans int, leaves interface {
 // ---------------------------------------------------------------------------
 
 // evalRequestBody sérialise le corps /v1/evaluate (même forme que le
-// listener T15 : token base64, action, resource, epoch).
+// listener T15 : token base64, action, resource — le champ « epoch » a disparu du protocole et le
+// corps est décodé strictement depuis #289 : un champ en trop est refusé).
 func evalRequestBody(token []byte, action, resource string) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"token":    base64.StdEncoding.EncodeToString(token),
 		"action":   action,
 		"resource": resource,
-		"epoch":    0,
 	})
 }
 

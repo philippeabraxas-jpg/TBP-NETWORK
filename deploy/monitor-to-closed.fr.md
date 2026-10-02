@@ -76,11 +76,13 @@ clés publiques ; la fenêtre de rollback (étape 4) est décidée.
 # QuorumMessage("mode-closed", expiry) = "TBPQ1" ‖ len(condition) u16 BE
 # ‖ condition ‖ expiry u64 BE (pep.QuorumMessage). Un corps qui ne fait que
 # DÉCLARER des noms ("signers": [...], l'ancien format d'avant #89) n'est
-# plus même un champ valide — il est ignoré en silence et la demande est
-# refusée faute de toute signature :
+# plus même un champ valide — le corps est décodé strictement (#289), donc
+# refusé dès sa lecture : 400 avec {"detail":{"code":"unknown-field",
+# "key":"signers","accepted":[…]}}, et la posture ne bouge pas :
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
-# attendu : 403 (aucune signature). Une seule signature valide (k=2) DOIT
+# attendu : 400 (champ inconnu). Un corps de la bonne forme sans aucune
+# signature rend 403, et une seule signature valide (k=2) DOIT
 # aussi échouer — voir la phase mono de deploy/selftest/mono.go pour
 # l'exemple complet (helper signCtrl) qui produit de vraies signatures par
 # contrôleur et exerce 1 signature-403 → 2 signatures-200 :

@@ -613,7 +613,6 @@ func scenarioTokenReplay(ctx context.Context, cfg Config, sink *countingSink, sa
 			"token":    base64.StdEncoding.EncodeToString(token),
 			"action":   "read.list",
 			"resource": "registry/docs/42",
-			"epoch":    0,
 		})
 		if err != nil {
 			return verdict{}, err
