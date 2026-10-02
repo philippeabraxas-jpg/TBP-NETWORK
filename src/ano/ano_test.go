@@ -705,6 +705,17 @@ func TestExpandExponent(t *testing.T) {
 		"0.5e1":                "5",
 		"1e0":                  "1",
 		"0e5":                  "0",
+		// revue tierce 4.7 : zéros de tête de l'exposant (grammaire JSON : « e+015 » = « e15 »)
+		"4.111111111111111e+015":    "4111111111111111",
+		"4.111111111111111E+0015":   "4111111111111111",
+		"4.111111111111111e015":     "4111111111111111",
+		"4111111111111111e+000":     "4111111111111111",
+		"4111111111111111e-0":       "4111111111111111",
+		"-4.111111111111111e+00015": "-4111111111111111",
+		"1.5e-003":                  "0.0015",
+		"1.5e-0003":                 "0.0015",
+		"1e+00":                     "1",
+		"1e0000000000000000000099":  "1" + strings.Repeat("0", 99),
 	} {
 		got, ok := expandExponent(in)
 		if !ok || got != want {
@@ -712,7 +723,7 @@ func TestExpandExponent(t *testing.T) {
 		}
 	}
 	// formes hors périmètre : pas d'expansion (et surtout pas d'allocation pilotée par l'entrée)
-	for _, in := range []string{"42", "1.5", "1e100", "1e999999999", "abc", "1e", "e5", "--1e2", "1.e2"} {
+	for _, in := range []string{"42", "1.5", "1e100", "1e0100", "1e+000100", "1e999999999", "abc", "1e", "e5", "--1e2", "1.e2", "1e+", "1e-", "1e+-3"} {
 		if got, ok := expandExponent(in); ok {
 			t.Fatalf("expandExponent(%q) = %q, veut pas d'expansion", in, got)
 		}
@@ -724,19 +735,19 @@ func TestExponentNumberStillScrubbedByPatterns(t *testing.T) {
 		Patterns: []PatternRule{{Name: "pan", Regex: `[0-9]{16}`}},
 	}), Classifier: answer(false)})
 	open(t, a, "ex")
-	in := `{"plain":4111111111111111,"exp":4.111111111111111e15,"exp2":4111111111111111E0,"neg":-4.111111111111111e15,"small":4.1e3,"f":1.5}`
+	in := `{"plain":4111111111111111,"exp":4.111111111111111e15,"exp2":4111111111111111E0,"neg":-4.111111111111111e15,"small":4.1e3,"f":1.5,"zp":4.111111111111111e+015,"zp2":4.111111111111111E+0015,"zn":41111111111111110000e-0004}`
 	out, rep, err := a.MaskJSON(context.Background(), "ex", []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(out)
-	for _, leak := range []string{"4111111111111111", "4.111111111111111e15", "4111111111111111E0"} {
+	for _, leak := range []string{"4111111111111111", "4.111111111111111e15", "4111111111111111E0", "4.111111111111111e+015", "4.111111111111111E+0015", "41111111111111110000e-0004"} {
 		if strings.Contains(s, leak) {
 			t.Fatalf("%q sort en clair : %s", leak, s)
 		}
 	}
-	if rep.Spans != 4 {
-		t.Fatalf("Spans=%d, veut 4 (plain, exp, exp2, neg) : %s", rep.Spans, s)
+	if rep.Spans != 7 {
+		t.Fatalf("Spans=%d, veut 7 (plain, exp, exp2, neg, zp, zp2, zn) : %s", rep.Spans, s)
 	}
 	// voisins : un nombre exponentiel sans motif, et un décimal, sont inchangés
 	if !strings.Contains(s, `"small":4.1e3`) || !strings.Contains(s, `"f":1.5`) {

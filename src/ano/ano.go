@@ -375,7 +375,7 @@ func (a *Ano) maskLeaf(ctx context.Context, ex *exchange, path []string, raw []b
 
 // numberMatchesPattern dit si un motif correspond à la forme texte d'un nombre JSON OU à sa forme
 // décimale PLEINE : « 4.111111111111111e15 » est le nombre 4111111111111111 ; un motif [0-9]{16}
-// ne le voyait pas (#238, re-revue de 8873638). L'expansion est bornée (exposant ≤ 2 chiffres).
+// ne le voyait pas (#238, re-revue de 8873638). L'expansion est bornée (valeur de l'exposant ≤ 99).
 func (a *Ano) numberMatchesPattern(text string) bool {
 	if len(a.rules.findSpans(text)) > 0 {
 		return true
@@ -386,11 +386,15 @@ func (a *Ano) numberMatchesPattern(text string) bool {
 	return false
 }
 
-var exponentNumberRe = regexp.MustCompile(`^(-?)([0-9]+)(?:\.([0-9]+))?[eE]([+-]?[0-9]{1,2})$`)
+// L'exposant est borné par sa VALEUR (≤ 99), pas par le nombre de chiffres écrits : la grammaire JSON admet des zéros
+// de tête (« e+015 » vaut « e15 »), et « 4.111111111111111e+015 » sortait en clair alors que « …e15 » était masqué
+// (revue tierce du 2 octobre, 4.7). `0*` avale les zéros de tête (temps linéaire, RE2) ; « e100 », « e0100 » et les
+// exposants plus grands restent hors périmètre — aucune allocation pilotée par l'entrée.
+var exponentNumberRe = regexp.MustCompile(`^(-?)([0-9]+)(?:\.([0-9]+))?[eE]([+-]?)0*([0-9]{1,2})$`)
 
 // expandExponent rend la notation décimale pleine d'un nombre à exposant (« 4.1e3 » → « 4100 »,
 // « 1.5e-3 » → « 0.0015 »), par arithmétique de chaînes — jamais de flottant, donc sans perte —
-// et ok=false pour toute autre forme. L'exposant est borné à deux chiffres : au plus ~100
+// et ok=false pour toute autre forme. La VALEUR de l'exposant est bornée à 99 : au plus ~100
 // caractères produits, aucune allocation pilotée par l'entrée.
 func expandExponent(text string) (string, bool) {
 	m := exponentNumberRe.FindStringSubmatch(text)
@@ -398,9 +402,12 @@ func expandExponent(text string) (string, bool) {
 		return "", false
 	}
 	sign, intPart, frac := m[1], m[2], m[3]
-	exp, err := strconv.Atoi(m[4])
+	exp, err := strconv.Atoi(m[5])
 	if err != nil {
 		return "", false
+	}
+	if m[4] == "-" {
+		exp = -exp
 	}
 	digits := intPart + frac
 	point := len(intPart) + exp // position de la virgule dans « digits »
