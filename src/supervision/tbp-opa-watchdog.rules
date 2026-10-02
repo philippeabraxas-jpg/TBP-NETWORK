@@ -1,0 +1,10 @@
+// tbp-opa-watchdog.rules — polkit : l'utilisateur tbp-opa-watchdog peut redémarrer tbp-opa.service, et RIEN d'autre
+// (issue #275). Installer sous /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules. Si TBP_OPAWD_UNIT change, changer ICI aussi.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "tbp-opa.service" &&
+        action.lookup("verb") == "restart" &&
+        subject.user == "tbp-opa-watchdog") {
+        return polkit.Result.YES;
+    }
+});

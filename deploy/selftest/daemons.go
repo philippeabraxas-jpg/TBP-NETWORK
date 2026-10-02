@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/mod/sumdb/note"
@@ -259,6 +260,12 @@ func runDaemons(s *suite, cfg config) {
 		return
 	}
 	s.add(phaseDaemons, "build supervisord (deploy/superviseur.md étape 3)", true, supervisordBin)
+	opawatchdogBin := filepath.Join(binDir, "opawatchdog")
+	if _, errB, err := runCmd(cfg.repo, nil, cfg.goBin, "build", "-o", opawatchdogBin, "./src/supervision/cmd/opawatchdog"); err != nil {
+		s.fail(phaseDaemons, "build opawatchdog", fmt.Errorf("%v — %s", err, errB))
+		return
+	}
+	s.add(phaseDaemons, "build opawatchdog (deploy/cellule.md, « OPA sous attaque »)", true, opawatchdogBin)
 
 	// --- Témoins : démarrage sans environnement = refus fail-closed --------
 	hermetic := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
@@ -1286,7 +1293,86 @@ func runDaemons(s *suite, cfg config) {
 		// Les feuilles de l'arbitrage (TBAR1) et de la dégradation (TBTD1) ont leur clair dans le journal, et
 		// aucune feuille du registre n'est restée sans clair (couverture log → journal).
 		verifyAuditJournal(s, phaseDaemons, "brokerd (après arbitrage)", brokerRegDir, auditJournalPath, auditKeyPath, 3)
+
+		// --- OPA bloqué (#275) : le PEP signale, le chien de garde redémarre --------------------------------
+		// Dernière étape : le verrou T14 de brokerd reste posé après elle. OPA est GELÉ (SIGSTOP : vivant mais
+		// muet — exactement le cas qu'un « est-il en vie ? » ne voit pas). Le « systemctl » est un script de test
+		// qui consigne ses arguments et dégèle OPA : on prouve la décision et la commande exacte, pas systemd.
+		runOPAWatchdogStage(s, cfg, base, opawatchdogBin, brokerAdminSock, brokerAdminHC, opa, func(subject, intent string) string {
+			av, _ := pendBody(subject, intent)
+			return av.Reason
+		})
 	}
+}
+
+// runOPAWatchdogStage vérifie la boucle « OPA muet → statut stalled → redémarrage demandé » avec le vrai OPA, le vrai
+// brokerd et le vrai chien de garde.
+func runOPAWatchdogStage(s *suite, cfg config, base, wdBin, brokerAdminSock string, brokerAdminHC *http.Client, opa *opaServer, send func(subject, intent string) string) {
+	state := func() string {
+		st, raw, err := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/opa")
+		var v struct {
+			State string `json:"state"`
+		}
+		if err != nil || st != http.StatusOK || json.Unmarshal(raw, &v) != nil {
+			return "illisible"
+		}
+		return v.State
+	}
+	s.add(phaseDaemons, "#275 : brokerd sert GET /v1/supervision/opa — OPA sain au départ", state() == "healthy", "état="+state())
+
+	marker := filepath.Join(base, "opawd-systemctl.out")
+	fakeCtl := filepath.Join(base, "fake-systemctl.sh")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\nkill -CONT %d\n", marker, opa.cmd.Process.Pid)
+	if err := os.WriteFile(fakeCtl, []byte(script), 0o755); err != nil {
+		s.fail(phaseDaemons, "#275 : faux systemctl", err)
+		return
+	}
+	wd, err := startDaemon(wdBin, append(os.Environ(),
+		"TBP_OPAWD_SOURCES=brokerd="+brokerAdminSock,
+		"TBP_OPAWD_SYSTEMCTL="+fakeCtl,
+		"TBP_OPAWD_POLL_MS=250", "TBP_OPAWD_CONFIRM=2", "TBP_OPAWD_COOLDOWN_S=5",
+	), filepath.Join(base, "opawatchdog.log"))
+	if err != nil {
+		s.fail(phaseDaemons, "#275 : opawatchdog", err)
+		return
+	}
+	defer wd.stop()
+
+	time.Sleep(1500 * time.Millisecond)
+	_, errM := os.Stat(marker)
+	s.add(phaseDaemons, "#275 : OPA sain ⇒ le chien de garde ne redémarre rien", os.IsNotExist(errM), "")
+
+	// OPA gelé : des demandes restent sans réponse (3 suffisent), puis le silence dépasse la fenêtre (3 s).
+	if err := opa.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		s.fail(phaseDaemons, "#275 : gel d'OPA (SIGSTOP)", err)
+		return
+	}
+	resumed := false
+	defer func() {
+		if !resumed {
+			_ = opa.cmd.Process.Signal(syscall.SIGCONT)
+		}
+	}()
+	for i := 0; i < 4; i++ {
+		send("agent-1", `{"action":"write","resource":"doc-1","class":1}`)
+	}
+	stalled := false
+	for i := 0; i < 60 && !stalled; i++ {
+		time.Sleep(250 * time.Millisecond)
+		stalled = state() == "stalled"
+	}
+	s.add(phaseDaemons, "#275 : OPA gelé ⇒ le PEP (brokerd) se dit « stalled », sans toucher à OPA", stalled, "état="+state())
+
+	var got []byte
+	for i := 0; i < 80 && len(got) == 0; i++ {
+		time.Sleep(250 * time.Millisecond)
+		got, _ = os.ReadFile(marker)
+	}
+	s.add(phaseDaemons, "#275 : le chien de garde demande exactement « systemctl --no-ask-password restart tbp-opa.service »",
+		strings.TrimSpace(string(got)) == "--no-ask-password restart tbp-opa.service", strings.TrimSpace(string(got)))
+	resumed = true
+	s.add(phaseDaemons, "#275 : OPA, relancé par le redémarreur, répond de nouveau",
+		waitHTTP200("http://"+daemonsOPAAddr+"/health", 10*time.Second) == nil, "")
 }
 
 // conditionToSign extrait de la sortie d'un démon la condition annoncée par son refus
