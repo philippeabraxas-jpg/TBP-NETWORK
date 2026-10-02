@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
@@ -87,6 +88,8 @@ func (s *opaServer) httpClient(keepAlive bool, maxConns int) *http.Client {
 type config struct {
 	opaBin, regoDir, path, opaCPUs string
 	port                           int
+	admission                      pep.AdmissionOptions // file bornée devant OPA ; zéro = historique (non bornée)
+	subjects                       int                  // sujets distincts en rotation sous charge
 }
 
 func (c config) start(transport string, tmp string, n int) (*opaServer, error) {
@@ -146,6 +149,7 @@ func (c config) realClient(s *opaServer, keepAlive bool, maxConns int) *pep.OPAC
 	hc := s.httpClient(keepAlive, maxConns)
 	cl, err := pep.NewOPAClient(pep.OPAOptions{
 		Endpoint: s.baseURL() + c.path, HTTPClient: hc, CellID: "cell-latency", Salt: bytes.Repeat([]byte{1}, 16), Leaves: nopLeaves{},
+		Admission: c.admission,
 	})
 	if err != nil {
 		panic(err)
@@ -153,8 +157,10 @@ func (c config) realClient(s *opaServer, keepAlive bool, maxConns int) *pep.OPAC
 	return cl
 }
 
-func evalInput() pep.OPAInput {
-	return pep.OPAInput{Subject: "agent-1", Action: "read", Resource: "doc-1", Class: pep.ClassW}
+func evalInput() pep.OPAInput { return evalInputFor("agent-1") }
+
+func evalInputFor(subject string) pep.OPAInput {
+	return pep.OPAInput{Subject: subject, Action: "read", Resource: "doc-1", Class: pep.ClassW}
 }
 
 // --- statistiques -----------------------------------------------------------------------------------------------
@@ -312,8 +318,9 @@ func steady(c config, srv *opaServer, conc, total int, budget time.Duration) ste
 	}
 	v := verdicts{}
 	var vmu sync.Mutex
+	var rot atomic.Uint64
 	run(func() time.Duration {
-		d := cl.Eval(context.Background(), evalInput())
+		d := cl.Eval(context.Background(), evalInputFor(fmt.Sprintf("agent-%d", rot.Add(1)%uint64(max(1, c.subjects)))))
 		vmu.Lock()
 		v[d.Reason]++
 		vmu.Unlock()
@@ -322,10 +329,67 @@ func steady(c config, srv *opaServer, conc, total int, budget time.Duration) ste
 	return steadyResult{Concurrency: conc, Raw: summarize(raw, budget), Verdicts: v, TimeoutPct: v.pct(pep.ReasonOPATimeout)}
 }
 
+type floodResult struct {
+	AttackerConc int      `json:"attacker_concurrency"`
+	LegitSubj    int      `json:"legit_subjects"`
+	Attacker     verdicts `json:"attacker_verdicts"`
+	Legit        verdicts `json:"legit_verdicts"`
+	LegitOKPct   float64  `json:"legit_ok_pct"`
+	AttackerOK   float64  `json:"attacker_ok_pct"`
+}
+
+// flood : UN sujet inonde OPA à concurrence élevée pendant que quelques sujets légitimes envoient des demandes
+// espacées. Mesure ce que subissent les légitimes (part d'allow du client réel) — l'objet de la file équitable.
+func flood(c config, srv *opaServer, attackers, legit int, dur, pace time.Duration) floodResult {
+	cl := c.realClient(srv, true, attackers+legit)
+	for i := 0; i < 300; i++ {
+		cl.Eval(context.Background(), evalInputFor("warm"))
+	}
+	atk, lg := verdicts{}, verdicts{}
+	var mu sync.Mutex
+	stop := time.Now().Add(dur)
+	var wg sync.WaitGroup
+	for g := 0; g < attackers; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(stop) {
+				d := cl.Eval(context.Background(), evalInputFor("attacker"))
+				mu.Lock()
+				atk[d.Reason]++
+				mu.Unlock()
+				if pace > 0 {
+					time.Sleep(pace)
+				}
+			}
+		}()
+	}
+	for g := 0; g < legit; g++ {
+		wg.Add(1)
+		subj := fmt.Sprintf("legit-%d", g)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(stop) {
+				d := cl.Eval(context.Background(), evalInputFor(subj))
+				mu.Lock()
+				lg[d.Reason]++
+				mu.Unlock()
+				time.Sleep(5 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+	okPct := func(v verdicts) float64 {
+		return 100 - v.pct(pep.ReasonOPATimeout) - v.pct(pep.ReasonOPAOverloaded) - v.pct(pep.ReasonOPAUnreachable)
+	}
+	return floodResult{AttackerConc: attackers, LegitSubj: legit, Attacker: atk, Legit: lg, LegitOKPct: okPct(lg), AttackerOK: okPct(atk)}
+}
+
 type transportReport struct {
 	Cold   coldResult     `json:"cold"`
 	Idle   idleResult     `json:"idle"`
 	Steady []steadyResult `json:"steady"`
+	Flood  *floodResult   `json:"flood,omitempty"`
 }
 
 type report struct {
@@ -359,6 +423,14 @@ func main() {
 	flag.StringVar(&c.path, "path", "/v1/data/tbp/example/action", "chemin de décision OPA")
 	flag.StringVar(&c.opaCPUs, "opa-cpus", "", "épingler OPA à ces cœurs (taskset -c) ; lancer l'outil lui-même sous taskset sur les AUTRES")
 	flag.IntVar(&c.port, "port", 18991, "port TCP d'OPA")
+	flag.IntVar(&c.admission.MaxInflight, "max-inflight", 0, "file bornée devant OPA : requêtes simultanées (0 = désactivée, historique)")
+	flag.IntVar(&c.admission.MaxQueue, "max-queue", 0, "file bornée : demandes en attente au-delà")
+	flag.IntVar(&c.admission.SubjectShare, "subject-share", 0, "file bornée : part maximale d'un même sujet, en % (0 = 100)")
+	flag.IntVar(&c.subjects, "subjects", 32, "sujets distincts en rotation sous charge")
+	floodAtk := flag.Int("flood-attackers", 0, "scénario d'inondation : concurrence de l'attaquant (0 = pas de scénario)")
+	floodLegit := flag.Int("flood-legit", 4, "scénario d'inondation : sujets légitimes")
+	floodDur := flag.Duration("flood-duration", 4*time.Second, "scénario d'inondation : durée")
+	floodPace := flag.Duration("flood-pace", 200*time.Microsecond, "scénario d'inondation : pause de l'attaquant entre deux demandes (0 = boucle serrée, qui sature le CPU du client lui-même)")
 	transports := flag.String("transport", "both", "tcp | unix | both")
 	coldTrials := flag.Int("cold-trials", 20, "démarrages d'OPA pour la mesure à froid")
 	idleGap := flag.Duration("idle-gap", 5*time.Second, "inactivité avant la requête « après inactivité »")
@@ -417,6 +489,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "[%s] charge, concurrence %d…\n", tr, n)
 			t.Steady = append(t.Steady, steady(c, srv, n, *total, *budget))
 		}
+		if *floodAtk > 0 {
+			fmt.Fprintf(os.Stderr, "[%s] inondation (%d attaquants, %d légitimes)…\n", tr, *floodAtk, *floodLegit)
+			f := flood(c, srv, *floodAtk, *floodLegit, *floodDur, *floodPace)
+			t.Flood = &f
+		}
 		srv.stop()
 		rep.Transport[tr] = t
 	}
@@ -454,6 +531,10 @@ func printReport(r report) {
 		for _, st := range t.Steady {
 			row(fmt.Sprintf("charge, concurrence %d", st.Concurrency), st.Raw)
 			fmt.Printf("  %-22s client réel au budget : %v  → opa-timeout %.1f %%\n", "", st.Verdicts, st.TimeoutPct)
+		}
+		if t.Flood != nil {
+			fmt.Printf("  INONDATION %d attaquants vs %d légitimes : légitimes %.1f %% servis %v ; attaquant %.1f %% servi %v\n",
+				t.Flood.AttackerConc, t.Flood.LegitSubj, t.Flood.LegitOKPct, t.Flood.Legit, t.Flood.AttackerOK, t.Flood.Attacker)
 		}
 	}
 }

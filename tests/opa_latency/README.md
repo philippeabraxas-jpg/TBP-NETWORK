@@ -73,6 +73,27 @@ concurrentes par cœur**. Au-delà, deux effets s'ajoutent : (1) la file d'atten
 supposés indépendants, trois d'affilée surviennent environ toutes les heures à 1 % de timeouts, environ toutes les
 30 s à 5 % — et les timeouts réels sont corrélés (rafales, file d'attente d'OPA), donc pires que cette estimation.
 
+### 4. L'inondation : la file bornée équitable (issue #275)
+
+Scénario `-flood-attackers 16 -flood-legit 4` (OPA sur 2 cœurs dédiés, Unix, 4 s, l'attaquant fait une pause de
+200 µs entre deux demandes) : **un** sujet inonde avec 16 flux, 4 sujets légitimes envoient en continu. Part des
+demandes **légitimes** servies (`ok`) :
+
+| Configuration | Légitimes servies | Attaquant servi | Refus `opa-overloaded` |
+|---|---|---|---|
+| Sans file (historique) | **0,6 %** | 0,2 % | 0 |
+| File équitable (`-max-inflight 2 -max-queue 16 -subject-share 25`, les défauts) | **98,9 %** | 5,5 % | 84 135 (attaquant) / 6 (légitimes) |
+
+Mesures ad hoc de la même séance (non conservées en JSON) : `max-inflight 3` → 95,5 % ; `max-inflight 2` avec
+`subject-share 50` → 98,7 %. Une première version à file FIFO simple ne laissait passer que 7-12 % des légitimes : c'est
+l'ordre **équitable** (le sujet le moins servi passe d'abord) et la part par sujet qui font la différence, pas la
+file seule. Rapports : `results/2026-10-02-sandbox-flood-*.json`.
+
+**Ce que ce chiffre ne dit PAS : le coût des feuilles.** Doctrine inchangée, une feuille par refus : ici ~21 000
+refus/s sont produits par l'attaquant, donc autant de feuilles à journaliser. L'outil utilise un puits de feuilles
+factice : le coût réel sur le registre (journal AEAD, ancrage, backpressure) **n'est pas mesuré**. Le backpressure du
+registre (feuilles refusées quand le journal sature) reste le garde-fou ; à mesurer sur le pilote.
+
 ### Ce que ces chiffres NE disent PAS
 - Le matériel du pilote : sur des cœurs plus rapides le point de saturation monte, il ne disparaît pas.
 - Un bundle **signé** : la vérification de signature coûte au chargement, pas à l'évaluation (non mesuré ici).
@@ -81,7 +102,8 @@ supposés indépendants, trois d'affilée surviennent environ toutes les heures 
 
 ## Leviers (non appliqués ici — décisions d'arbitrage)
 1. **Échauffement au démarrage** (avant de servir) : quelques évaluations brutes (sans feuille) pour sortir du froid.
-2. **Limiter la concurrence vers OPA** dans le client (sémaphore borné) : la file attend côté PEP, hors d'OPA, et un
-   dépassement devient un refus immédiat et explicite plutôt qu'un effondrement.
+2. ~~**Limiter la concurrence vers OPA** dans le client~~ — **appliqué** (issue #275) : file bornée équitable, voir §4 ;
+   un dépassement est un refus immédiat `opa-overloaded` plutôt qu'un effondrement, et un OPA muet est signalé
+   `opa-stalled` au superviseur.
 3. **Dimensionner OPA** : ≥ 1 cœur par ~2-3 décisions concurrentes visées ; ou plusieurs instances.
 4. **Revoir le budget ou `TripAfter`** : une décision de spec (§9.1), pas de code.

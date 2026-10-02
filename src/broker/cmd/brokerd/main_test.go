@@ -1002,3 +1002,26 @@ func TestBrokerdStartupOPARevisionMismatchRefuses(t *testing.T) {
 		t.Fatalf("erreur=%v, veut mention de révision OPA non vérifiée (§92.A5)", err)
 	}
 }
+
+// La file bornée devant OPA est active par défaut ; une valeur illisible refuse le démarrage (jamais un défaut silencieux).
+func TestLoadConfigOPATuning(t *testing.T) {
+	cfg, err := loadConfig(mapGetenv(validConfigEnv()), statPresent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.opaTuning.Admission.MaxInflight != 2 || cfg.opaTuning.Admission.MaxQueue != 16 || cfg.opaTuning.StallWindow != 3*time.Second {
+		t.Fatalf("défauts = %+v", cfg.opaTuning)
+	}
+	env := validConfigEnv()
+	env["TBP_OPA_MAX_INFLIGHT"] = "4"
+	env["TBP_OPA_STALL_WINDOW_MS"] = "0"
+	cfg, err = loadConfig(mapGetenv(env), statPresent)
+	if err != nil || cfg.opaTuning.Admission.MaxInflight != 4 || cfg.opaTuning.StallWindow != 0 {
+		t.Fatalf("valeurs explicites mal lues : %+v %v", cfg.opaTuning, err)
+	}
+	env = validConfigEnv()
+	env["TBP_OPA_SUBJECT_SHARE"] = "250"
+	if _, err := loadConfig(mapGetenv(env), statPresent); err == nil || !strings.Contains(err.Error(), "TBP_OPA_SUBJECT_SHARE") {
+		t.Fatalf("erreur=%v, veut refus sur part hors bornes", err)
+	}
+}

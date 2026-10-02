@@ -1,0 +1,88 @@
+{
+  "at": "2026-10-02T15:58:47Z",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 2,
+  "opa_version": "1.20.2",
+  "opa_cpus": "0,1",
+  "budget_ms": 5,
+  "transports": {
+    "unix": {
+      "cold": {
+        "trials": 0,
+        "first_request": {
+          "n": 0,
+          "p50_ms": 0,
+          "p90_ms": 0,
+          "p99_ms": 0,
+          "p99_9_ms": 0,
+          "max_ms": 0,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 0,
+          "p50_ms": 0,
+          "p90_ms": 0,
+          "p99_ms": 0,
+          "p99_9_ms": 0,
+          "max_ms": 0,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "first_request_verdicts": {}
+      },
+      "idle": {
+        "idle_gap_s": 5,
+        "after_idle": {
+          "n": 0,
+          "p50_ms": 0,
+          "p90_ms": 0,
+          "p99_ms": 0,
+          "p99_9_ms": 0,
+          "max_ms": 0,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {}
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 500,
+            "p50_ms": 0.732177,
+            "p90_ms": 1.028176,
+            "p99_ms": 2.164866,
+            "p99_9_ms": 3.176546,
+            "max_ms": 3.771192,
+            "over_budget": 0,
+            "over_budget_pct": 0,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 500
+          },
+          "client_timeout_pct": 0
+        }
+      ],
+      "flood": {
+        "attacker_concurrency": 16,
+        "legit_subjects": 4,
+        "attacker_verdicts": {
+          "ok": 16,
+          "opa-timeout": 9697
+        },
+        "legit_verdicts": {
+          "ok": 8,
+          "opa-timeout": 1430
+        },
+        "legit_ok_pct": 0.5563282336578652,
+        "attacker_ok_pct": 0.16472768454647735
+      }
+    }
+  }
+}

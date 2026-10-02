@@ -916,6 +916,50 @@ jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket
 Cela ne fait pas survivre une machine à sa propre perte ; un second backend OPA
 et les miroirs du §7.4 sont un chantier séparé (échelle 3).
 
+## OPA sous attaque : une file bornée équitable, et un signal de blocage (issue #275)
+
+OPA coûte ~1 ms par évaluation et sature vers 2-3 requêtes concurrentes par
+cœur (`tests/opa_latency`). Sans borne, un seul sujet qui inonde remplit la file
+d'OPA lui-même, toutes les requêtes dépassent le budget de 5 ms et les agents
+légitimes sont refusés (mesuré : 0,5 % des requêtes légitimes servies sous une
+inondation de 16 attaquants). Le client place donc une **file bornée et
+équitable devant OPA** :
+
+- au plus `TBP_OPA_MAX_INFLIGHT` requêtes simultanées dans OPA (défaut 2 ; `0`
+  désactive la file — non bornée, l'ancien comportement) ; `TBP_OPA_MAX_QUEUE`
+  attendent derrière (défaut 16). Le budget de 5 ms court dès l'arrivée :
+  l'attente en fait partie, et une requête qui ne peut plus finir à temps est
+  refusée au lieu d'être envoyée ;
+- la requête en attente dont le sujet a le **moins** de requêtes dans OPA passe
+  d'abord, et un même sujet ne peut tenir plus de `TBP_OPA_SUBJECT_SHARE` % des
+  places en vol + en attente (défaut 25) — l'inondation d'un agent ne peut pas
+  affamer les autres (mesuré : 95-99 % des requêtes légitimes servies sous la
+  même inondation) ;
+- une requête refusée est refusée immédiatement, raison `opa-overloaded`, **une
+  feuille par refus** comme tout refus. Ce n'est ni une faute d'OPA (pas de
+  compteur de fautes consécutives, pas de verrou : OPA n'a même pas été sollicité)
+  ni une preuve de santé. Sous attaque, attendez-vous à autant de feuilles :
+  dimensionnez le registre en conséquence.
+
+Si OPA ne répond plus du tout — aucune réponse dans le budget pendant
+`TBP_OPA_STALL_WINDOW_MS` (défaut 3000 ; `0` désactive), avec au moins 3 demandes
+restées sans réponse — le PEP **signale** `opa-stalled` (classe I, fail-closed,
+se lève seul quand OPA répond de nouveau et sert la révision épinglée). **Le PEP
+ne tue ni ne redémarre jamais OPA lui-même** (séparation des privilèges) : c'est
+le superviseur. L'état se lit sur le socket d'administration :
+
+```bash
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/supervision/opa
+# {"state":"healthy|overloaded|stalled","stalled":false,"silent_ms":12,"unanswered":0,
+#  "consecutive_faults":0,"admission":{"inflight":0,"queued":0,"admitted":..,"shed_queue_full":..}}
+```
+
+(brokerd sert la même route sur son socket d'administration.) Pour les agents et
+intégrateurs : `opa-overloaded` et `opa-stalled` sont de nouvelles raisons de
+refus — réessayer avec un recul, jamais en boucle serrée. Transférer la file à un
+second TBP quand le premier est compromis ou tombé n'est **pas** dans ce
+changement (reporté : à concevoir).
+
 ## Les preuves de quorum de classe W sont à usage unique (issue #206)
 
 Une action de classe W porte une preuve de quorum k-of-n liée à (action,

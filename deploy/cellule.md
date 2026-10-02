@@ -864,6 +864,45 @@ jq '. + {condition:"opa-revision-mismatch"}' /tmp/p.json | curl -s --unix-socket
 not make one machine survive its own loss; a second OPA backend and the mirrors
 of §7.4 are a separate work item (scale 3).
 
+## OPA under attack: a bounded fair queue, and a stall signal (issue #275)
+
+OPA costs ~1 ms per evaluation and saturates at about 2–3 concurrent requests per
+core (`tests/opa_latency`). Unbounded, one flooding subject fills OPA's own queue,
+every request blows the 5 ms budget, and legitimate agents are denied
+(measured: 0.5 % of legitimate requests served under a 16-attacker flood).
+So the client now puts a **bounded, fair queue in front of OPA**:
+
+- at most `TBP_OPA_MAX_INFLIGHT` requests in OPA at once (default 2; `0` turns
+  the queue off — unbounded, the former behaviour); `TBP_OPA_MAX_QUEUE` wait
+  behind them (default 16). The 5 ms budget starts at arrival: waiting is part of
+  it, and a request that cannot finish in time is refused instead of sent;
+- the waiting request whose subject has the **fewest** requests in OPA goes
+  first, and one subject can hold at most `TBP_OPA_SUBJECT_SHARE` % of the
+  places in flight + waiting (default 25) — a flood by one agent cannot starve
+  the others (measured: 95–99 % of legitimate requests served under the same flood);
+- a refused request is denied immediately with reason `opa-overloaded`, **one
+  leaf per refusal** like every other deny. It is neither an OPA fault (no
+  consecutive-fault count, no latch: OPA was not even asked) nor proof of health.
+  Under attack, expect that many leaves: size the registry accordingly.
+
+If OPA stops answering altogether — no response within the budget for
+`TBP_OPA_STALL_WINDOW_MS` (default 3000; `0` disables), with at least 3 requests
+left unanswered — the PEP **signals** `opa-stalled` (class I, fail-closed,
+self-clears once OPA answers again and serves the pinned revision). **The PEP
+never kills or restarts OPA itself** (privilege separation): the supervisor does.
+Read the state from the admin socket:
+
+```bash
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/supervision/opa
+# {"state":"healthy|overloaded|stalled","stalled":false,"silent_ms":12,"unanswered":0,
+#  "consecutive_faults":0,"admission":{"inflight":0,"queued":0,"admitted":..,"shed_queue_full":..}}
+```
+
+(brokerd serves the same route on its admin socket.) For agents and integrators:
+`opa-overloaded` and `opa-stalled` are new deny reasons — retry with backoff,
+never in a tight loop. Handing the queue to a second TBP when the first is
+compromised or down is **not** part of this change (deferred: design later).
+
 ## Class W quorum proofs are single-use (issue #206)
 
 A class-W action carries a k-of-n quorum proof bound to (action, resource,

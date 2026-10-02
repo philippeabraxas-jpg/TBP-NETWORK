@@ -66,15 +66,21 @@ func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte
 	if err != nil {
 		return nil, err
 	}
+	tuning, err := pep.OPATuningFromEnv(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("pepd: %w", err)
+	}
 	client, err := pep.NewOPAClient(pep.OPAOptions{
-		Endpoint:   endpoint,
-		HTTPClient: hc,
-		CellID:     cellID,
-		Salt:       salt,
-		Leaves:     cellLog,
-		Journal:    journal,
-		OnTrip:     onTrip,
-		TripAfter:  tripAfter,
+		Endpoint:    endpoint,
+		HTTPClient:  hc,
+		CellID:      cellID,
+		Salt:        salt,
+		Leaves:      cellLog,
+		Journal:     journal,
+		OnTrip:      onTrip,
+		TripAfter:   tripAfter,
+		Admission:   tuning.Admission,
+		StallWindow: tuning.StallWindow,
 	})
 	if err != nil {
 		return nil, err
@@ -205,6 +211,7 @@ func opaAutoClearConfig(getenv func(string) string) (probes int, interval time.D
 // opa-revision-mismatch (bundle substitué, classe W) n'y figurent : leur
 // levée reste une décision humaine.
 var opaAutoClearConditions = []string{
+	pep.ReasonOPAStalled,
 	pep.ReasonOPATimeout,
 	pep.ReasonOPAUnreachable,
 	pep.ReasonOPAError,
