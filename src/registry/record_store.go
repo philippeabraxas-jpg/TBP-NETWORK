@@ -433,6 +433,63 @@ func (r SealedRecord) VerifyInLog(ctx context.Context, fetch LogFetcher, verifie
 	return uint64(idx), nil
 }
 
+// VerifyRecordsInLog vérifie PLUSIEURS enregistrements contre le log en une seule lecture : checkpoint signé,
+// hash de toutes les feuilles et constructeur de preuves partagés (VerifyInLog les refait à chaque appel). Rend, pour
+// chaque enregistrement, vrai ssi son hash correspond à sa feuille ET que celle-ci est dans le log avec une preuve
+// d'inclusion RFC 6962 valide contre la racine du checkpoint. L'erreur ne porte que sur la lecture du log elle-même
+// (alors aucun enregistrement n'est tenu pour vérifié). Utilisé pour restaurer, au démarrage, un état dérivé du
+// journal : ce qui ACCORDE un droit (approbation, promotion) ne se croit que s'il est ancré dans le log signé.
+func VerifyRecordsInLog(ctx context.Context, fetch LogFetcher, verifier note.Verifier, recs []SealedRecord) ([]bool, error) {
+	ok := make([]bool, len(recs))
+	if len(recs) == 0 {
+		return ok, nil
+	}
+	raw, err := fetch.ReadCheckpoint(ctx)
+	if err != nil {
+		return ok, fmt.Errorf("checkpoint : %w", err)
+	}
+	cp, err := ParseCheckpoint(raw, verifier)
+	if err != nil {
+		return ok, err
+	}
+	hashes, err := client.FetchLeafHashes(ctx, fetch.ReadTile, 0, cp.Size, cp.Size)
+	if err != nil {
+		return ok, fmt.Errorf("lecture du log : %w", err)
+	}
+	index := make(map[string]int, len(hashes))
+	for i, lh := range hashes {
+		if _, dup := index[string(lh)]; !dup {
+			index[string(lh)] = i
+		}
+	}
+	pb, err := client.NewProofBuilder(ctx, cp.Size, fetch.ReadTile)
+	if err != nil {
+		return ok, err
+	}
+	h := rfc6962.DefaultHasher
+	for i, r := range recs {
+		if r.VerifyHash() != nil {
+			continue
+		}
+		want := h.HashLeaf(r.LeafData)
+		idx, found := index[string(want)]
+		if !found {
+			continue
+		}
+		p, err := pb.InclusionProof(ctx, uint64(idx))
+		if err != nil {
+			continue
+		}
+		ok[i] = proof.VerifyInclusion(h, uint64(idx), cp.Size, want, p, cp.Hash) == nil
+	}
+	return ok, nil
+}
+
+// VerifyRecordsInLogDir : comme VerifyRecordsInLog, sur un log POSIX local (le répertoire de registre d'une cellule).
+func VerifyRecordsInLogDir(ctx context.Context, logDir string, verifier note.Verifier, recs []SealedRecord) ([]bool, error) {
+	return VerifyRecordsInLog(ctx, client.FileFetcher{Root: logDir}, verifier, recs)
+}
+
 // LogFetcher est la lecture seule d'un log (client.FileFetcher / HTTPFetcher).
 type LogFetcher interface {
 	ReadCheckpoint(ctx context.Context) ([]byte, error)

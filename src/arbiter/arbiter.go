@@ -12,6 +12,7 @@
 //     le recalcule (IntentID) et signe SON hash — il ne signe pas une lecture de la file.
 //   - joignabilité PROUVÉE : « un arbitre est joignable » = un battement de présence signé par une clé d'opérateur
 //     épinglée, frais et strictement croissant ; jamais une déclaration.
+//   - persistante sans fichier d'état : au démarrage, Restore reconstruit la file depuis le journal (voir Restore) ;
 //   - bornée partout : file pleine ⇒ refus (default-deny, pas de file implicite) ; échéance de chaque entrée ;
 //     une approbation est à usage UNIQUE et expire.
 //   - chaque événement (mise en file, décision, consommation) laisse une feuille « TBAR1 » dont le clair est
@@ -19,6 +20,7 @@
 package arbiter
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -274,10 +276,12 @@ func (q *Queue) Enqueue(ctx context.Context, item translator.ArbitrationItem) er
 		}
 		return ErrFull
 	}
-	if err := q.leafLocked(ctx, actEnqueue, id, item.SystemID, [16]byte{}, 0, time.Time{}, now); err != nil {
+	expires := now.Add(q.entTTL)
+	// l'échéance de mise en file entre dans la feuille : c'est ce qui permet de RESTAURER l'entrée (Restore)
+	if err := q.leafLocked(ctx, actEnqueue, id, item.SystemID, [16]byte{}, 0, expires, now); err != nil {
 		return err
 	}
-	q.entries[id] = &entry{subject: item.SystemID, created: now, expires: now.Add(q.entTTL), status: statusPending}
+	q.entries[id] = &entry{subject: item.SystemID, created: now, expires: expires, status: statusPending}
 	return nil
 }
 
@@ -402,7 +406,9 @@ func (q *Queue) Snapshot() []Entry {
 //
 //	"TBAR1" ‖ action(1) ‖ id(32) ‖ u8 len(sujet) ‖ sujet ‖ kid(16) ‖ verdict(1) ‖ expiry unix(u64 BE)
 //
-// action : 1=enqueue 2=approve 3=refuse 4=consume 5=consume-refused. kid/verdict/expiry sont nuls hors décision.
+// action : 1=enqueue 2=approve 3=refuse 4=consume 5=consume-refused. kid/verdict sont nuls hors décision ; expiry est
+// l'échéance de la mise en file (enqueue), de la décision (approve/refuse) ou de l'entrée consommée. Un « enqueue » à
+// expiry nulle (format antérieur à la restauration) n'est pas restaurable.
 const (
 	actEnqueue        byte = 1
 	actApprove        byte = 2
@@ -438,3 +444,103 @@ func (q *Queue) leafLocked(ctx context.Context, act byte, id [32]byte, subject s
 }
 
 var _ translator.Arbitration = (*Queue)(nil)
+
+// RestoreStats rend compte d'une restauration.
+type RestoreStats struct {
+	Pending, Approved, Refused int // entrées vivantes restaurées
+	Skipped                    int // enregistrements TBAR1 ignorés (non vérifiés, périmés, incohérents)
+}
+
+// Restore reconstruit la file depuis les enregistrements du journal (déjà déchiffrés par registry.ReadRecords), dans
+// l'ordre du journal : mise en file, décision, consommation. Rien n'est lu d'un fichier d'état séparé : l'état est
+// DÉRIVÉ des événements déjà audités, authentifiés (AEAD) et ancrés dans le log signé.
+//
+//   - Ce qui ACCORDE un droit — une approbation — n'est restauré que si inLog(rec) est vrai : la feuille est dans le
+//     log signé (registry.VerifyRecordsInLog). Un enregistrement journal forgé avec la clé mais jamais inscrit ne
+//     rouvre donc rien.
+//   - Ce qui RETIRE ou ne grant rien (refus, consommation, mise en file) s'applique dès que le hash correspond : une
+//     consommation dont la feuille n'a pas atteint le checkpoint avant l'arrêt ne doit PAS ressusciter l'approbation.
+//   - Les entrées échues sont écartées ; la file reste bornée (MaxEntries).
+//
+// À appeler au démarrage, avant de servir. Les battements de présence ne sont pas restaurés : un arbitre se
+// manifeste de nouveau (joignabilité prouvée, jamais présumée).
+func (q *Queue) Restore(recs []registry.SealedRecord, inLog func(registry.SealedRecord) bool) RestoreStats {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var st RestoreStats
+	for _, r := range recs {
+		if r.Leaf.Kind != registry.KindTelemetry || r.Leaf.CellID != q.cellID || !bytes.HasPrefix(r.Record, []byte("TBAR1")) {
+			continue
+		}
+		if !bytes.Equal(r.Salt, q.salt) || r.VerifyHash() != nil {
+			st.Skipped++
+			continue
+		}
+		act, id, subject, kid, _, expiry, ok := parseLeafRecord(r.Record)
+		if !ok {
+			st.Skipped++
+			continue
+		}
+		switch act {
+		case actEnqueue:
+			if expiry.IsZero() || len(q.entries) >= q.max {
+				st.Skipped++
+				continue
+			}
+			if _, exists := q.entries[id]; !exists {
+				q.entries[id] = &entry{subject: subject, created: time.Unix(0, r.Leaf.Timestamp), expires: expiry, status: statusPending}
+			}
+		case actApprove:
+			e, exists := q.entries[id]
+			if !exists || e.status != statusPending || inLog == nil || !inLog(r) {
+				st.Skipped++
+				continue
+			}
+			e.status, e.expires, e.by = statusApproved, expiry, kid
+		case actRefuse:
+			if e, exists := q.entries[id]; exists && e.status == statusPending {
+				e.status, e.expires, e.by = statusRefused, expiry, kid
+			} else {
+				st.Skipped++
+			}
+		case actConsume, actConsumeRefused:
+			delete(q.entries, id)
+		default:
+			st.Skipped++
+		}
+	}
+	q.pruneLocked(q.now())
+	for _, e := range q.entries {
+		switch e.status {
+		case statusPending:
+			st.Pending++
+		case statusApproved:
+			st.Approved++
+		case statusRefused:
+			st.Refused++
+		}
+	}
+	return st
+}
+
+// parseLeafRecord décode un enregistrement « TBAR1 » (voir leafLocked) ; strict sur la longueur.
+func parseLeafRecord(rec []byte) (act byte, id [32]byte, subject string, kid [16]byte, verdict byte, expiry time.Time, ok bool) {
+	const head = 5 + 1 + 32 + 1
+	if len(rec) < head {
+		return
+	}
+	act = rec[5]
+	copy(id[:], rec[6:38])
+	sl := int(rec[38])
+	if len(rec) != head+sl+16+1+8 {
+		return
+	}
+	subject = string(rec[head : head+sl])
+	copy(kid[:], rec[head+sl:])
+	verdict = rec[head+sl+16]
+	if exp := binary.BigEndian.Uint64(rec[head+sl+17:]); exp != 0 {
+		expiry = time.Unix(int64(exp), 0)
+	}
+	ok = true
+	return
+}

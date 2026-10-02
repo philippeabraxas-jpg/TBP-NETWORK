@@ -22,8 +22,10 @@ package main
 // exception ; seule l'admission par le traducteur est levée.
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -95,6 +97,8 @@ func parseMirrorCellKeys(data []byte) (map[string]ed25519.PublicKey, error) {
 // mirrorGate : PromotionController + état de la promotion courante. Satisfait translator.MirrorCell.
 type mirrorGate struct {
 	self   string
+	salt   []byte
+	keys   map[string]ed25519.PublicKey
 	ctl    *cluster.PromotionController
 	src    *cluster.FileAnchorSource
 	epochs broker.EpochProvider
@@ -135,7 +139,7 @@ func newMirrorGate(cfg mirrorConfig, self string, salt []byte, leaves cluster.Le
 	if err != nil {
 		return nil, err
 	}
-	return &mirrorGate{self: self, ctl: ctl, src: src, epochs: epochs, now: now}, nil
+	return &mirrorGate{self: self, salt: append([]byte(nil), salt...), keys: keys, ctl: ctl, src: src, epochs: epochs, now: now}, nil
 }
 
 // Promote tranche un reçu (octets bruts du plan d'administration). Succès ⇒ la promotion courante est
@@ -184,4 +188,69 @@ func systemClassOf(reg broker.AgentRegistry) func(subject string) bool {
 		}
 		return rec.Class == pep.ClassF || rec.Class == pep.ClassI || rec.Class == pep.ClassW
 	}
+}
+
+// Restore rétablit, au démarrage, la promotion courante depuis le journal (déjà déchiffré par registry.ReadRecords) :
+// la DERNIÈRE décision « promue » de cette cellule (feuille « TBPP1 », verdict 1), comme le fait la porte en
+// fonctionnement. Rien n'est lu d'un fichier d'état : l'état est dérivé d'événements audités.
+//
+// Une promotion ACCORDE un droit : elle n'est restaurée que si (1) sa feuille est dans le log signé (inLog), (2) la
+// cellule candidate est toujours dans les clés mesurées, et (3) l'ancre signée d'AUJOURD'HUI donne encore le même
+// hash de bundle pour cette époque et une fenêtre saine qui court encore — le journal ne prolonge jamais la fenêtre
+// ancrée. Sinon rien n'est restauré : un opérateur redépose un reçu (comportement antérieur).
+func (g *mirrorGate) Restore(recs []registry.SealedRecord, inLog func(registry.SealedRecord) bool) bool {
+	var cell string
+	var epoch uint64
+	var bundle [32]byte
+	var found *registry.SealedRecord
+	for i := range recs {
+		r := &recs[i]
+		if r.Leaf.Kind != registry.KindPromotion || r.Leaf.CellID != g.self || !bytes.HasPrefix(r.Record, []byte("TBPP1")) ||
+			!bytes.Equal(r.Salt, g.salt) || r.VerifyHash() != nil {
+			continue
+		}
+		c, e, b, promoted, ok := parsePromotionRecord(r.Record)
+		if !ok || !promoted {
+			continue
+		}
+		cell, epoch, bundle, found = c, e, b, r
+	}
+	if found == nil || inLog == nil || !inLog(*found) {
+		return false
+	}
+	if _, known := g.keys[cell]; !known || cell == g.self {
+		return false
+	}
+	if anchored, ok := g.src.BundleAnchor(epoch); !ok || anchored != bundle {
+		return false
+	}
+	_, end, ok := g.src.HealthyWindow(epoch)
+	if !ok || !g.now().Before(end) {
+		return false
+	}
+	g.mu.Lock()
+	g.cell, g.epoch, g.end = cell, epoch, end
+	g.mu.Unlock()
+	return true
+}
+
+// parsePromotionRecord décode « TBPP1 » ‖ verdict ‖ u8 len(cell) ‖ cell ‖ epoch u64 BE ‖ bundle 32 ‖ u8 len(reason) ‖
+// reason (cluster.PromotionController.leafLocked). promoted = verdict 1 (« ok »).
+func parsePromotionRecord(rec []byte) (cell string, epoch uint64, bundle [32]byte, promoted, ok bool) {
+	if len(rec) < 5+1+1 {
+		return
+	}
+	verdict, cl := rec[5], int(rec[6])
+	off := 7 + cl
+	if len(rec) < off+8+32+1 {
+		return
+	}
+	cell = string(rec[7:off])
+	epoch = binary.BigEndian.Uint64(rec[off:])
+	copy(bundle[:], rec[off+8:off+8+32])
+	rl := int(rec[off+8+32])
+	if len(rec) != off+8+32+1+rl {
+		return
+	}
+	return cell, epoch, bundle, verdict == 0x01, true
 }
