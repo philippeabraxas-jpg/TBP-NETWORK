@@ -58,8 +58,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -188,28 +186,8 @@ func loadKeyring(path string) (map[[16]byte]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	var raw map[string]string
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("JSON: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, errors.New("trousseau vide (§12)")
-	}
-	kr := make(map[[16]byte]ed25519.PublicKey, len(raw))
-	for kidHex, pubHex := range raw {
-		kid, err := hex.DecodeString(kidHex)
-		if err != nil || len(kid) != 16 {
-			return nil, fmt.Errorf("kid %q illisible (hex 16 octets)", kidHex)
-		}
-		pub, err := hex.DecodeString(pubHex)
-		if err != nil || len(pub) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("clé %q illisible (Ed25519)", kidHex)
-		}
-		var k [16]byte
-		copy(k[:], kid)
-		kr[k] = ed25519.PublicKey(pub)
-	}
-	return kr, nil
+	// même décodeur STRICT que pepd et le provisionnement (revue tierce 4.4)
+	return pep.ParseKeyring(data)
 }
 
 // listenUnix ouvre le socket d'écoute (0660). Un fichier existant qui n'est

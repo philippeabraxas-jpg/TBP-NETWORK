@@ -1554,11 +1554,17 @@ func parseGenesisControllers(data []byte) (map[int]ed25519.PublicKey, error) {
 		return nil, errors.New("manifest de genèse sans clé de contrôleur (§3.2)")
 	}
 	controllers := make(map[int]ed25519.PublicKey, len(mf.PubKeys))
+	seen := make(map[string]int, len(mf.PubKeys))
 	for i, pubHex := range mf.PubKeys {
 		pub, err := hex.DecodeString(pubHex)
 		if err != nil || len(pub) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("manifest: clé contrôleur %d illisible (Ed25519 hex)", i+1)
 		}
+		// la même clé sous deux key_id ferait compter une signature deux fois dans le quorum (revue tierce 4.4)
+		if first, dup := seen[string(pub)]; dup {
+			return nil, fmt.Errorf("manifest: la clé du contrôleur %d est déjà le contrôleur %d — une signature compterait deux fois", i+1, first)
+		}
+		seen[string(pub)] = i + 1
 		controllers[i+1] = ed25519.PublicKey(pub) // key_id 1-basé (genèse)
 	}
 	return controllers, nil
@@ -1572,12 +1578,14 @@ func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("clés d'opérateurs: %w", err)
 	}
 	var raw []string
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := strictjson.Decode(data, &raw); err != nil {
 		return nil, fmt.Errorf("clés d'opérateurs JSON: %w", err)
 	}
 	if len(raw) == 0 {
 		return nil, errors.New("clés d'opérateurs : liste vide — le store de contrats exige ≥ 1 opérateur (T30)")
 	}
+	// le doublon se juge sur la clé DÉCODÉE : « AA… » et « aa… » sont la même clé (revue tierce 4.4) —
+	// comparer le texte laissait une clé compter pour deux opérateurs
 	seen := map[string]bool{}
 	keys := make([]ed25519.PublicKey, 0, len(raw))
 	for _, pubHex := range raw {
@@ -1585,10 +1593,10 @@ func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
 		if err != nil || len(pub) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("clé d'opérateur %q illisible (Ed25519 hex)", pubHex)
 		}
-		if seen[pubHex] {
-			return nil, fmt.Errorf("clé d'opérateur %q en double", pubHex)
+		if seen[string(pub)] {
+			return nil, fmt.Errorf("clé d'opérateur %q en double (même clé, casse hexadécimale éventuellement différente)", pubHex)
 		}
-		seen[pubHex] = true
+		seen[string(pub)] = true
 		keys = append(keys, ed25519.PublicKey(pub))
 	}
 	return keys, nil

@@ -11,9 +11,10 @@ package pep
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
 
 // Noms logiques des fichiers d'autorité de la garde : le témoin conserve leur contenu, et
@@ -26,15 +27,23 @@ const (
 // ParseKeyring décode un trousseau JSON {kid_hex: pub_hex} (§12, épinglé) — celui des
 // émetteurs de jetons comme celui des contrôleurs. Séparé du chargement de fichier pour que le
 // provisionnement lise le trousseau ATTESTÉ (octets du témoin), pas le fichier courant.
+//
+// Décodage STRICT (revue tierce du 2 octobre, 4.4 ; même doctrine que #241/#289) : une clé JSON
+// dupliquée, un type inattendu ou un contenu final est refusé. Et l'ambiguïté qui survit à la
+// syntaxe l'est aussi : deux identifiants qui ne diffèrent que par la casse de l'hexadécimal
+// (« AB… » / « ab… ») décodent le MÊME kid — la carte Go d'un décodeur standard en gardait un au
+// hasard (3 fois sur 40 la première, 37 la seconde) ; deux kid pour UNE clé publique laisseraient
+// une seule signature compter pour deux dans un quorum.
 func ParseKeyring(data []byte) (map[[16]byte]ed25519.PublicKey, error) {
 	var raw map[string]string
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := strictjson.Decode(data, &raw); err != nil {
 		return nil, fmt.Errorf("keyring JSON: %w", err)
 	}
 	if len(raw) == 0 {
 		return nil, errors.New("keyring vide (§12)")
 	}
 	keyring := make(map[[16]byte]ed25519.PublicKey, len(raw))
+	seenPub := make(map[string]string, len(raw))
 	for kidHex, pubHex := range raw {
 		kid, err := hex.DecodeString(kidHex)
 		if err != nil || len(kid) != 16 {
@@ -46,6 +55,13 @@ func ParseKeyring(data []byte) (map[[16]byte]ed25519.PublicKey, error) {
 		}
 		var k [16]byte
 		copy(k[:], kid)
+		if _, dup := keyring[k]; dup {
+			return nil, fmt.Errorf("keyring: kid %q en double (même identifiant, casse hexadécimale différente) — refus : laquelle des clés serait retenue est indéterminée", kidHex)
+		}
+		if other, dup := seenPub[string(pub)]; dup {
+			return nil, fmt.Errorf("keyring: la même clé publique sous deux identifiants (%q et %q) — une signature compterait deux fois dans un quorum", other, kidHex)
+		}
+		seenPub[string(pub)] = kidHex
 		keyring[k] = ed25519.PublicKey(pub)
 	}
 	return keyring, nil

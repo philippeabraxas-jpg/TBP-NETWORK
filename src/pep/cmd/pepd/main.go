@@ -169,7 +169,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -896,30 +895,10 @@ func loadKeyring(path string) (map[[16]byte]ed25519.PublicKey, error) {
 
 // parseKeyring décode un trousseau JSON {kid_hex: pub_hex}. Séparé de loadKeyring pour
 // que le provisionnement (#218) puisse lire le trousseau ATTESTÉ (octets du témoin) et
-// non le fichier courant.
+// non le fichier courant. Une SEULE implémentation, STRICTE (pep.ParseKeyring, revue tierce
+// 4.4) : clé JSON dupliquée, casse hexadécimale ambiguë et clé publique sous deux kid refusés.
 func parseKeyring(data []byte) (map[[16]byte]ed25519.PublicKey, error) {
-	var raw map[string]string
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("keyring JSON: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, errors.New("keyring vide (§12)")
-	}
-	keyring := make(map[[16]byte]ed25519.PublicKey, len(raw))
-	for kidHex, pubHex := range raw {
-		kid, err := hex.DecodeString(kidHex)
-		if err != nil || len(kid) != 16 {
-			return nil, fmt.Errorf("keyring: kid %q illisible (hex 16 octets)", kidHex)
-		}
-		pub, err := hex.DecodeString(pubHex)
-		if err != nil || len(pub) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("keyring: clé %q illisible (Ed25519)", kidHex)
-		}
-		var k [16]byte
-		copy(k[:], kid)
-		keyring[k] = ed25519.PublicKey(pub)
-	}
-	return keyring, nil
+	return pep.ParseKeyring(data)
 }
 
 // loadOrGenerateCellKey charge la clef note du CellLog (T3) ou la génère
