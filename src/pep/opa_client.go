@@ -61,6 +61,13 @@ const (
 	ReasonOPAError           = "opa-error"
 	ReasonOPABadResponse     = "opa-bad-response"
 	ReasonOPACallerCancelled = "opa-caller-cancelled"
+	// ReasonOPAOverloaded : la file bornée devant OPA a refusé la demande (file pleine, part du sujet atteinte, ou budget
+	// épuisé en attente). OPA n'a PAS été sollicité : refus fail-closed immédiat, ni faute d'OPA (pas de compteur de
+	// fautes consécutives, pas de verrou T14) ni preuve de santé.
+	ReasonOPAOverloaded = "opa-overloaded"
+	// ReasonOPAStalled : OPA ne répond plus du tout — aucune réponse HTTP depuis StallWindow alors que des demandes lui ont
+	// été envoyées (bloqué, ou mort). Distinct d'une simple lenteur : c'est le signal que le superviseur redémarre OPA.
+	ReasonOPAStalled = "opa-stalled"
 )
 
 // maxOPAResponse borne le corps de réponse lu (64 Kio — une décision
@@ -167,6 +174,11 @@ type OPAOptions struct {
 	// une faute de disponibilité, c'est un OPA qui ment ou un bundle
 	// cassé. Négatif ⇒ erreur.
 	TripAfter int
+	// Admission : la file bornée devant OPA (opa_admission.go). Zéro ⇒ désactivée (concurrence non bornée, historique).
+	Admission AdmissionOptions
+	// StallWindow : durée sans AUCUNE réponse d'OPA, alors que des demandes lui ont été envoyées, au bout de laquelle
+	// OPA est tenu pour bloqué (ReasonOPAStalled, via OnTrip). 0 ⇒ détection désactivée ; négatif ⇒ erreur.
+	StallWindow time.Duration
 	// Now est l'horloge NTS de la cellule (§6.2) pour la feuille.
 	// Nil ⇒ time.Now (dev).
 	Now func() time.Time
@@ -187,6 +199,11 @@ type OPAClient struct {
 
 	tripAfter int64
 	faults    atomic.Int64 // fautes OPA consécutives (issue #205)
+
+	adm         *admission
+	stallWindow time.Duration
+	lastAlive   atomic.Int64 // unix ns de la dernière réponse HTTP d'OPA (quel que soit son statut)
+	unanswered  atomic.Int64 // demandes ENVOYÉES à OPA sans réponse depuis lastAlive
 }
 
 // NewOPAClient construit le client. Fail-closed : endpoint, cellID, sel
@@ -210,6 +227,12 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 	if opts.TripAfter < 0 {
 		return nil, errors.New("pep: TripAfter négatif refusé")
 	}
+	if opts.StallWindow < 0 {
+		return nil, errors.New("pep: StallWindow négatif refusé")
+	}
+	if a := opts.Admission; a.MaxInflight < 0 || a.MaxQueue < 0 || a.SubjectShare < 0 || a.SubjectShare > 100 || a.MinService < 0 {
+		return nil, errors.New("pep: file d'admission OPA : valeurs négatives ou part hors [0, 100] refusées")
+	}
 	tripAfter := int64(opts.TripAfter)
 	if tripAfter == 0 {
 		tripAfter = 1
@@ -228,7 +251,7 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 	}
 	salt := make([]byte, len(opts.Salt))
 	copy(salt, opts.Salt)
-	return &OPAClient{
+	c := &OPAClient{
 		endpoint: opts.Endpoint,
 		timeout:  timeout,
 		hc:       hc,
@@ -240,7 +263,12 @@ func NewOPAClient(opts OPAOptions) (*OPAClient, error) {
 		now:      now,
 
 		tripAfter: tripAfter,
-	}, nil
+
+		adm:         newAdmission(opts.Admission, now),
+		stallWindow: opts.StallWindow,
+	}
+	c.lastAlive.Store(now().UnixNano()) // départ : « vivant à l'instant » — le compte à rebours démarre avec le client
+	return c, nil
 }
 
 // Timeout rapporte le budget strict appliqué à chaque appel (§9.1).
@@ -254,9 +282,21 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 	start := time.Now()
 
 	// Circuit-breaker §12 : deadline STRICTE, implémentée ici côté appelant
-	// — OPA ne fournit aucune coupure à 5 ms.
+	// — OPA ne fournit aucune coupure à 5 ms. Le budget court dès l'ARRIVÉE : l'attente dans la file bornée
+	// (opa_admission.go) en fait partie.
 	ectx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+
+	if c.adm != nil {
+		release, shed := c.adm.acquire(ectx, in.Subject, c.now().Add(c.timeout))
+		if release == nil {
+			if ctx.Err() != nil { // le contexte de l'appelant s'est terminé : pas une surcharge
+				return c.finish(ctx, in, OPADecision{Reason: ReasonOPACallerCancelled, Err: ctx.Err()}, start)
+			}
+			return c.finish(ctx, in, OPADecision{Reason: ReasonOPAOverloaded, Err: fmt.Errorf("pep: file d'admission OPA : %s", shed)}, start)
+		}
+		defer release()
+	}
 
 	var reqBody opaRequest
 	reqBody.Input.JTI = hex.EncodeToString(in.JTI[:])
@@ -280,12 +320,17 @@ func (c *OPAClient) Eval(ctx context.Context, in OPAInput) OPADecision {
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		if reason, callerErr, ok := classifyContextFault(ctx, ectx); ok {
-			return c.finish(ctx, in, OPADecision{Reason: reason, Err: callerErr}, start)
+		reason, callerErr, ok := classifyContextFault(ctx, ectx)
+		if !ok {
+			reason, callerErr = ReasonOPAUnreachable, err
 		}
-		return c.finish(ctx, in, OPADecision{Reason: ReasonOPAUnreachable, Err: err}, start)
+		if reason != ReasonOPACallerCancelled {
+			c.noteUnanswered() // envoyée à OPA, aucune réponse
+		}
+		return c.finish(ctx, in, OPADecision{Reason: reason, Err: callerErr}, start)
 	}
 	defer resp.Body.Close()
+	c.noteAlive() // OPA a répondu (quel que soit le statut) : il n'est ni bloqué ni mort
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxOPAResponse))
@@ -356,8 +401,9 @@ func (c *OPAClient) finish(ctx context.Context, in OPAInput, d OPADecision, star
 		if c.onTrip != nil {
 			c.onTrip(d.Reason)
 		}
-	case ReasonOPACallerCancelled:
-		// Ni faute d'OPA ni preuve de santé : le compteur ne bouge pas.
+	case ReasonOPACallerCancelled, ReasonOPAOverloaded:
+		// Ni faute d'OPA ni preuve de santé : le compteur ne bouge pas (OPA n'a pas été sollicité, ou le contexte de
+		// l'appelant s'est terminé).
 	default:
 		// Allow, deny métier, règle indéfinie : OPA a répondu sainement.
 		c.faults.Store(0)
@@ -389,4 +435,69 @@ func decisionLeafRecord(jti [16]byte, allow bool, reason string) []byte {
 	record = append(record, verdict, byte(len(reason)))
 	record = append(record, reason...)
 	return record
+}
+
+// minUnansweredForStall : demandes envoyées sans réponse avant qu'un silence de StallWindow compte comme un blocage (un
+// OPA simplement inactif n'est pas bloqué : il faut que des demandes soient restées sans réponse).
+const minUnansweredForStall = 3
+
+// overloadedHoldMS : un refus de la file de moins de 5 s fait encore dire « overloaded ».
+const overloadedHoldMS = 5000
+
+func (c *OPAClient) noteAlive() {
+	c.lastAlive.Store(c.now().UnixNano())
+	c.unanswered.Store(0)
+}
+
+// noteUnanswered compte une demande envoyée sans réponse ; au franchissement de la fenêtre de blocage, signale
+// ReasonOPAStalled par la couture d'alarme (T14 possède le latch).
+func (c *OPAClient) noteUnanswered() {
+	c.unanswered.Add(1)
+	if c.Stalled() && c.onTrip != nil {
+		c.onTrip(ReasonOPAStalled)
+	}
+}
+
+// Stalled : OPA ne répond plus du tout — au moins minUnansweredForStall demandes envoyées sans réponse ET aucune
+// réponse depuis StallWindow. Faux si la détection est désactivée (StallWindow 0).
+func (c *OPAClient) Stalled() bool {
+	if c.stallWindow <= 0 {
+		return false
+	}
+	silent := c.now().Sub(time.Unix(0, c.lastAlive.Load()))
+	return c.unanswered.Load() >= minUnansweredForStall && silent >= c.stallWindow
+}
+
+// OPAStatus est l'état d'OPA vu du client : ce qu'un superviseur lit pour décider de redémarrer OPA.
+type OPAStatus struct {
+	// State : "healthy", "overloaded" (la file refuse mais OPA répond) ou "stalled" (silence total). Un OPA qui répond
+	// lentement n'est PAS « stalled » : le tuer jetterait le travail en cours et repartirait à froid.
+	State             string          `json:"state"`
+	Stalled           bool            `json:"stalled"`
+	SilentMS          int64           `json:"silent_ms"`  // depuis la dernière réponse d'OPA
+	Unanswered        int64           `json:"unanswered"` // demandes envoyées sans réponse depuis
+	ConsecutiveFaults int64           `json:"consecutive_faults"`
+	Admission         *AdmissionStats `json:"admission,omitempty"`
+}
+
+// Status rend l'état courant (lecture seule, sans effet).
+func (c *OPAClient) Status() OPAStatus {
+	st := OPAStatus{
+		SilentMS:          c.now().Sub(time.Unix(0, c.lastAlive.Load())).Milliseconds(),
+		Unanswered:        c.unanswered.Load(),
+		ConsecutiveFaults: c.faults.Load(),
+		Stalled:           c.Stalled(),
+		State:             "healthy",
+	}
+	if c.adm != nil {
+		a := c.adm.snapshot()
+		st.Admission = &a
+		if a.Queued > 0 || (a.SinceLastShedMS >= 0 && a.SinceLastShedMS < overloadedHoldMS) {
+			st.State = "overloaded"
+		}
+	}
+	if st.Stalled {
+		st.State = "stalled"
+	}
+	return st
 }

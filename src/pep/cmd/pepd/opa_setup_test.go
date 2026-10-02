@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
@@ -247,5 +248,55 @@ func TestOpaRevisionIntervalDefaultAndExplicit(t *testing.T) {
 	d, err = opaRevisionInterval(envOf(map[string]string{"TBP_OPA_REVISION_CHECK_INTERVAL_MS": "5000"}))
 	if err != nil || d != 5*time.Second {
 		t.Fatalf("explicite: d=%v err=%v, veut 5s/nil", d, err)
+	}
+}
+
+func TestSetupOPAAdmissionQueueOnByDefaultAndTunable(t *testing.T) {
+	policy := testPolicyID(t)
+	srv := newOPAStub(t, hex.EncodeToString(policy[:]))
+	env := map[string]string{
+		"TBP_OPA_ENDPOINT":         srv.URL + "/v1/data/tbp/allow",
+		"TBP_OPA_INSECURE_TCP_DEV": "1",
+	}
+	res, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, newOPASetupCellLog(t), nil, nil, envOf(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := res.client.Status().Admission; a == nil {
+		t.Fatal("la file bornée devant OPA doit être active par défaut")
+	}
+	env["TBP_OPA_MAX_INFLIGHT"] = "0"
+	res, err = setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, newOPASetupCellLog(t), nil, nil, envOf(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.client.Status().Admission != nil {
+		t.Fatal("TBP_OPA_MAX_INFLIGHT=0 doit désactiver la file")
+	}
+}
+
+func TestSetupOPAAdmissionBadValueRefusesStartup(t *testing.T) {
+	policy := testPolicyID(t)
+	srv := newOPAStub(t, hex.EncodeToString(policy[:]))
+	_, err := setupOPA(context.Background(), "cell-test", []byte(testSalt32), policy, newOPASetupCellLog(t), nil, nil,
+		envOf(map[string]string{
+			"TBP_OPA_ENDPOINT":         srv.URL + "/v1/data/tbp/allow",
+			"TBP_OPA_INSECURE_TCP_DEV": "1",
+			"TBP_OPA_MAX_QUEUE":        "beaucoup",
+		}))
+	if err == nil || !strings.Contains(err.Error(), "TBP_OPA_MAX_QUEUE") {
+		t.Fatalf("erreur=%v, veut refus de démarrage sur valeur illisible", err)
+	}
+}
+
+func TestOPAStalledIsAutoClearable(t *testing.T) {
+	found := false
+	for _, c := range opaAutoClearConditions {
+		if c == pep.ReasonOPAStalled {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("un OPA bloqué puis revenu doit pouvoir être relâché par la sonde (comme opa-timeout)")
 	}
 }

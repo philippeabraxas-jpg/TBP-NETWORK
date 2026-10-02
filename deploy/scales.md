@@ -37,7 +37,7 @@ the table, not only those two). Tracked in #86.
 | mTLS network listener | `TBP_BROKER_TLS_*` | absent (Unix socket) | required if agents are remote | required, dedicated agent CA | required |
 | Skill registry + tiers | `TBP_SKILL_REGISTRY_FILE`, bundle `require_skill_registry` | n/a (no broker) | recommended, **set `require_skill_registry`** | required | required |
 | Per-agent scope | bundle `agent_scope.require_agent_scope` | n/a (no broker) | recommended | required | required |
-| OPA fault handling | `TBP_OPA_TRIP_AFTER`, `TBP_OPA_AUTOCLEAR_PROBES` | defaults (3 / 3) | defaults | defaults; a second OPA backend is planned | defined in the handshake (#33) |
+| OPA fault handling | `TBP_OPA_TRIP_AFTER`, `TBP_OPA_AUTOCLEAR_PROBES`, `TBP_OPA_MAX_INFLIGHT`, `TBP_OPA_MAX_QUEUE`, `TBP_OPA_SUBJECT_SHARE`, `TBP_OPA_STALL_WINDOW_MS` | defaults (3 / 3) | defaults | defaults; a second OPA backend is planned | defined in the handshake (#33) |
 | Provisioning witness | `TBP_PROVISIONING_WITNESS_FILE` | required (admin signs a change) | required | required | required |
 | Measured boot | `TBP_MEASURED_BOOT_*` | required | required | required | required |
 | Supervisor / independent monitor | `superviseur.md` | absent | optional | required | required |

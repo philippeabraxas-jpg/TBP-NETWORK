@@ -407,6 +407,7 @@ func run() error {
 		class pep.Class
 	}{
 		{pep.ReasonOPATimeout, pep.ClassI},
+		{pep.ReasonOPAStalled, pep.ClassI}, // OPA ne répond plus du tout : le superviseur le redémarre (opa_admission.go)
 		{pep.ReasonOPAUnreachable, pep.ClassI},
 		{pep.ReasonOPAError, pep.ClassI},
 		{pep.ReasonOPABadResponse, pep.ClassI},
@@ -618,7 +619,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("plan d'administration: %w", err)
 	}
-	adminSrv := pep.NewServer(listener.AdminHandler(), pep.DefaultServerTimeouts)
+	// L'état d'OPA vu du client (file bornée, blocage) rejoint le plan d'administration : c'est ce que lit le superviseur.
+	adminHandler := listener.AdminHandler()
+	if opaClient != nil {
+		adminMux := http.NewServeMux()
+		adminMux.Handle("/v1/supervision/opa", pep.OPAStatusHandler(opaClient))
+		adminMux.Handle("/", adminHandler)
+		adminHandler = adminMux
+	}
+	adminSrv := pep.NewServer(adminHandler, pep.DefaultServerTimeouts)
 
 	// Proxy bloquant (revue de sécurité #94) : OPTIONNEL — désactivé sauf
 	// déclaration explicite de TBP_PROXY_ADDR+TBP_PROXY_BACKEND. Sans lui,

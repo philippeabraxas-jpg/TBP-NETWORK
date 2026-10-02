@@ -279,6 +279,7 @@ type config struct {
 	opaExpectedUID      uint32
 	opaInsecureTCPDev   bool
 	opaRevisionInterval time.Duration // 0 ⇒ défaut du watcher (§92.A5)
+	opaTuning           pep.OPATuning // file bornée devant OPA + détection de blocage (TBP_OPA_MAX_INFLIGHT…)
 	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes.
 	// issuerSeedFile ("" ⇒ HSM) : seed Ed25519 DEV, fichier 0600 — labo/CI
 	// uniquement. Les quatre champs issuerPKCS11* ("" ⇒ dev), tous requis
@@ -391,6 +392,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	}
 	if tr := getenv("TBP_TRANSLATOR"); tr != "structured" {
 		return nil, fmt.Errorf("TBP_TRANSLATOR=%q refusé — seul \"structured\" est assemblé en v1 (traducteur langage naturel : T24/T25)", tr)
+	}
+	opaTuning, err := pep.OPATuningFromEnv(getenv)
+	if err != nil {
+		return nil, err
 	}
 	guardCfg, err := translatorGuardFromEnv(getenv)
 	if err != nil {
@@ -531,6 +536,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		opaExpectedUID:       opaExpectedUID,
 		opaInsecureTCPDev:    opaInsecureTCPDev,
 		opaRevisionInterval:  opaRevisionInterval,
+		opaTuning:            opaTuning,
 		translatorGuard:      guardCfg,
 		mirror:               mirrorCfg,
 		arbitration:          arbCfg,
@@ -663,6 +669,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		Leaves:     cellLog,
 		Journal:    auditStore,
 		OnTrip:     onTrip,
+
+		Admission:   cfg.opaTuning.Admission,
+		StallWindow: cfg.opaTuning.StallWindow,
 	})
 	if err != nil {
 		return err
@@ -1182,6 +1191,8 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": req.Verdict})
 	})
+	// L'état d'OPA vu du client (file bornée, blocage) : ce que lit le superviseur pour redémarrer OPA. Lecture seule.
+	adminMux.Handle("GET /v1/supervision/opa", pep.OPAStatusHandler(opaClient))
 	// Cellule miroir (§7.4) : lecture du statut et promotion par reçu signé. Sur le socket ADMIN : l'accès au
 	// socket EST le contrôle d'accès ; le reçu est de toute façon vérifié (signature de la cellule miroir
 	// contre les clés mesurées, bundle = ancre signée par le quorum, fenêtre ancrée). Sans miroir configuré :
