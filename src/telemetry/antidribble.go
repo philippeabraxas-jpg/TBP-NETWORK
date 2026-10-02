@@ -226,7 +226,11 @@ type DetectorOptions struct {
 	CellID string
 	Salt   []byte       // ≥ 16 octets, reste chez le producteur (§6.2)
 	Leaves pep.LeafSink // registre de la cellule (obligatoire)
-	Params ScoreParams  // composite versionné — voir DefaultScoreParams
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275, #271 :
+	// tbp-audit verify). Optionnel ici (nil = feuille nue, historique). Journal refusé ⇒
+	// pas de feuille (même chemin d'erreur qu'un registre en panne).
+	Journal *registry.RecordStore
+	Params  ScoreParams // composite versionné — voir DefaultScoreParams
 
 	Window      time.Duration // grille minute du détecteur (défaut 60 s)
 	MaxEntities int           // borne de la map d'entités (défaut 4096)
@@ -282,6 +286,7 @@ type Detector struct {
 	cellID  string
 	salt    []byte
 	leaves  pep.LeafSink
+	journal *registry.RecordStore
 	params  ScoreParams
 	paramsH [32]byte
 	window  time.Duration
@@ -335,6 +340,7 @@ func NewDetector(opts DetectorOptions) (*Detector, error) {
 		cellID:  opts.CellID,
 		salt:    opts.Salt,
 		leaves:  opts.Leaves,
+		journal: opts.Journal,
 		params:  opts.Params,
 		paramsH: paramsHash(opts.Params, w.Milliseconds()),
 		window:  w,
@@ -642,13 +648,7 @@ func (d *Detector) fireAlert(t int64, key string, p *entityProfile, score uint16
 		Sum7d:    sum7,
 	}
 	manifest := alertManifest(d.cellID, d.params.Version, a, p.emaFast, p.emaSlow, d.paramsH, d.now().UnixMilli())
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetryAlert,
-		CellID:      d.cellID,
-		PayloadHash: registry.HashPayload(d.salt, manifest),
-		Timestamp:   d.now().UnixNano(),
-	}
-	if _, err := d.leaves.Append(context.Background(), leaf); err != nil {
+	if _, err := registry.AppendLeaf(context.Background(), d.leaves, d.journal, registry.KindTelemetryAlert, d.cellID, d.salt, manifest, d.now().UnixNano()); err != nil {
 		atomic.AddUint64(&d.stats.AlertFailures, 1)
 		if d.onTrip != nil {
 			d.onTrip(pep.ReasonLeafWriteFailed)

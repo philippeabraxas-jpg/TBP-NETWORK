@@ -55,11 +55,13 @@ func mapGetenv(m map[string]string) func(string) string {
 
 func validConfigEnv() map[string]string {
 	return map[string]string{
-		"TBP_MONITOR_CELL_ID":    "monitor-01",
-		"TBP_SALT":               strings.Repeat("01", 16),
-		"TBP_REGISTRY_DIR":       "/srv/tbp/monitor",
-		"TBP_CELLS_FILE":         "/etc/tbp/cells.json",
-		"TBP_CELL_BROKER_SOCKET": "/run/tbp/broker.sock",
+		"TBP_MONITOR_CELL_ID":        "monitor-01",
+		"TBP_SALT":                   strings.Repeat("01", 16),
+		"TBP_REGISTRY_DIR":           "/srv/tbp/monitor",
+		"TBP_AUDIT_RECORDS":          "/srv/tbp/monitor-audit/records.jsonl",
+		"TBP_AUDIT_RECORDS_KEY_FILE": "/etc/tbp/monitor-records.key",
+		"TBP_CELLS_FILE":             "/etc/tbp/cells.json",
+		"TBP_CELL_BROKER_SOCKET":     "/run/tbp/broker.sock",
 	}
 }
 
@@ -100,6 +102,8 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		{"salt_absent", func(e map[string]string) { delete(e, "TBP_SALT") }, "TBP_SALT requis"},
 		{"salt_trop_court", func(e map[string]string) { e["TBP_SALT"] = "aabb" }, "hex ≥ 16 octets"},
 		{"registry_absent", func(e map[string]string) { delete(e, "TBP_REGISTRY_DIR") }, "TBP_REGISTRY_DIR requis"},
+		{"journal_absent", func(e map[string]string) { delete(e, "TBP_AUDIT_RECORDS") }, "TBP_AUDIT_RECORDS requis"},
+		{"cle_journal_absente", func(e map[string]string) { delete(e, "TBP_AUDIT_RECORDS_KEY_FILE") }, "TBP_AUDIT_RECORDS_KEY_FILE requis"},
 		{"cells_file_absent", func(e map[string]string) { delete(e, "TBP_CELLS_FILE") }, "TBP_CELLS_FILE requis"},
 		{"broker_socket_absent", func(e map[string]string) { delete(e, "TBP_CELL_BROKER_SOCKET") }, "TBP_CELL_BROKER_SOCKET requis"},
 		{"tick_sous_la_borne", func(e map[string]string) { e["TBP_TICK_MS"] = "999" }, "hors bornes"},
@@ -422,14 +426,21 @@ func supervisordEnv(t *testing.T, cellsFile, brokerSock, consoleSock string) map
 	if _, err := rand.Read(salt); err != nil {
 		t.Fatalf("sel: %v", err)
 	}
+	auditDir := t.TempDir()
+	auditKey := filepath.Join(auditDir, "records.key")
+	if err := registry.GenerateRecordKey(auditKey); err != nil {
+		t.Fatalf("clé du journal: %v", err)
+	}
 	return map[string]string{
-		"TBP_MONITOR_CELL_ID":    "monitor-01",
-		"TBP_SALT":               hex.EncodeToString(salt),
-		"TBP_REGISTRY_DIR":       filepath.Join(t.TempDir(), "monitor"),
-		"TBP_CELLS_FILE":         cellsFile,
-		"TBP_CELL_BROKER_SOCKET": brokerSock,
-		"TBP_TICK_MS":            "1000",
-		"TBP_CONSOLE_SOCKET":     consoleSock,
+		"TBP_MONITOR_CELL_ID":        "monitor-01",
+		"TBP_SALT":                   hex.EncodeToString(salt),
+		"TBP_REGISTRY_DIR":           filepath.Join(t.TempDir(), "monitor"),
+		"TBP_AUDIT_RECORDS":          filepath.Join(auditDir, "records.jsonl"),
+		"TBP_AUDIT_RECORDS_KEY_FILE": auditKey,
+		"TBP_CELLS_FILE":             cellsFile,
+		"TBP_CELL_BROKER_SOCKET":     brokerSock,
+		"TBP_TICK_MS":                "1000",
+		"TBP_CONSOLE_SOCKET":         consoleSock,
 	}
 }
 
@@ -597,5 +608,55 @@ func TestArbitrationSourceSnapshotWithPolicyNoCrossRequestMismatch(t *testing.T)
 	// plus de PolicyID() séparée à appeler).
 	if gotA != policyY {
 		t.Fatalf("A après B: policy=%x, la policy de A a été altérée — %x attendu", gotA, policyY)
+	}
+}
+
+// #275 : l'alerte d'un moniteur réel (ici : la master n'a jamais ancré la cellule) laisse son clair dans le
+// journal d'enregistrements du démon — vérifiable avec `tbp-audit verify`.
+func TestSupervisordAlertsAreJournaled(t *testing.T) {
+	cell := newChainFixture(t, "cell-a")
+	cell.appendLeaf(t, registry.KindDecision, cell.cellID, "decision-0")
+	cell.waitCheckpoint(t, 1)
+	manifDir := t.TempDir()
+	writeGenesisManifest(t, cell, manifDir)
+	cell.waitCheckpoint(t, 2)
+	master := newChainFixture(t, "master")
+	master.appendLeaf(t, registry.KindAnchor, "autre-cellule", "anchor-0") // aucun ancrage de cell-a
+	master.waitCheckpoint(t, 1)
+	cellsFile := writeCellsFile(t, cell, manifDir, master)
+
+	sockDir := t.TempDir()
+	brokerSock := filepath.Join(sockDir, "broker.sock")
+	consoleSock := filepath.Join(sockDir, "supervision.sock")
+	fb := startFakeBrokerd(t, brokerSock)
+	defer fb.stop(t)
+	env := supervisordEnv(t, cellsFile, brokerSock, consoleSock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, mapGetenv(env)) }()
+	waitSocket(t, consoleSock)
+
+	key, err := registry.LoadRecordKey(env["TBP_AUDIT_RECORDS_KEY_FILE"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		recs, rerr := registry.ReadRecords(env["TBP_AUDIT_RECORDS"], key)
+		if rerr == nil && len(recs) > 0 {
+			if recs[0].VerifyHash() != nil || recs[0].Leaf.Kind != registry.KindSupervision || !strings.HasPrefix(string(recs[0].Record), "TBPS1") {
+				t.Fatalf("enregistrement d'alerte inattendu : %+v", recs[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("aucune alerte journalisée (err=%v)", rerr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }

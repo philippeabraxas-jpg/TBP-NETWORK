@@ -598,10 +598,19 @@ func runDaemons(s *suite, cfg config) {
 	}
 	brokerEnvFirst := append(append([]string{}, brokerEnv...), "TBP_PROVISIONING_TRANSITION_PROOF_FILE="+provProof)
 
+	// Journal d'enregistrements de supervisord (#275) : requis, comme celui de brokerd.
+	monitorAuditKey := filepath.Join(base, "supervisord-audit.key")
+	monitorAuditJournal := filepath.Join(base, "supervisord-audit-records.jsonl")
+	if err := registry.GenerateRecordKey(monitorAuditKey); err != nil {
+		s.fail(phaseDaemons, "clé du journal d'audit de supervisord", err)
+		return
+	}
 	supervisorEnv := append(os.Environ(),
 		"TBP_MONITOR_CELL_ID="+daemonsMonitorID,
 		"TBP_SALT="+hex.EncodeToString(monitorSalt),
 		"TBP_REGISTRY_DIR="+monitorDir,
+		"TBP_AUDIT_RECORDS="+monitorAuditJournal,
+		"TBP_AUDIT_RECORDS_KEY_FILE="+monitorAuditKey,
 		"TBP_CELLS_FILE="+cellsPath,
 		// Plan ADMIN (§95) : supervisord ne lit que GET /v1/supervision/*,
 		// jamais POST /v1/actions — brokerSock (plan de données) ne sert
@@ -939,6 +948,10 @@ func runDaemons(s *suite, cfg config) {
 	s.add(phaseDaemons, "console: /v1/indicators — compteurs broker live et cell-a saine (ancrée, sans chute)",
 		healthy && indV.Arbitration.Requests >= 2,
 		fmt.Sprintf("requests=%d cells=%+v", indV.Arbitration.Requests, indV.Cells))
+
+	// #275 : le journal du moniteur se lit, se déchiffre et chacun de ses enregistrements (aucun alerte
+	// attendue : cell-a est saine) est vérifié dans la chaîne du moniteur.
+	verifyAuditJournal(s, phaseDaemons, "supervisord", monitorDir, monitorAuditJournal, monitorAuditKey, 0)
 
 	// --- Témoins d'honnêteté : brokerd arrêté ⇒ 503 PAR ROUTE (§1) ----------
 	brokerd.stop()

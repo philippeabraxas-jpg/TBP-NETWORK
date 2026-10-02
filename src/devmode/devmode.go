@@ -106,7 +106,10 @@ func ActiveRecord(flags []string) []byte {
 // échappatoire : aucune feuille. Avec : une feuille KindTelemetry, et une
 // erreur si elle ne peut pas être écrite — un démarrage dev qui ne laisse pas
 // de trace est refusé (fail-closed, même doctrine que toute décision §4.1).
-func RecordActive(ctx context.Context, sink LeafSink, cellID string, salt []byte, flags []string, now func() time.Time) error {
+//
+// store (optionnel, #275/#271) reçoit le clair de la feuille AVANT son inscription :
+// journal refusé ⇒ aucune feuille ⇒ démarrage refusé. Nil ⇒ feuille nue (historique).
+func RecordActive(ctx context.Context, sink LeafSink, store *registry.RecordStore, cellID string, salt []byte, flags []string, now func() time.Time) error {
 	if len(flags) == 0 {
 		return nil
 	}
@@ -119,12 +122,7 @@ func RecordActive(ctx context.Context, sink LeafSink, cellID string, salt []byte
 	if now == nil {
 		now = time.Now
 	}
-	_, err := sink.Append(ctx, registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      cellID,
-		PayloadHash: registry.HashPayload(salt, ActiveRecord(flags)),
-		Timestamp:   now().UnixNano(),
-	})
+	_, err := registry.AppendLeaf(ctx, sink, store, registry.KindTelemetry, cellID, salt, ActiveRecord(flags), now().UnixNano())
 	if err != nil {
 		return fmt.Errorf("devmode: feuille des échappatoires dev actives (%s) impossible : %w — démarrage refusé", strings.Join(flags, ", "), err)
 	}

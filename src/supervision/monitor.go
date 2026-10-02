@@ -126,6 +126,11 @@ type MonitorOptions struct {
 	MaxAnchorLag time.Duration
 	// Sink : couture d'alarme vers T14. Nil toléré — la feuille, jamais.
 	Sink AlarmSink
+	// Journal reçoit le clair (« TBPS1 » + sel) de chaque feuille d'alerte AVANT son
+	// inscription (#275, #271 : tbp-audit verify). Optionnel ici (nil = feuille nue,
+	// historique) ; supervisord le renseigne toujours. Journal refusé ⇒ pas de feuille
+	// ⇒ pas d'alerte notifiée (même erreur de feuillage qu'un log en panne).
+	Journal *registry.RecordStore
 	// Now : horloge du moniteur. Nil ⇒ time.Now (dev).
 	Now func() time.Time
 	// Trigger : couture de déclenchement de bascule vers #30
@@ -158,6 +163,7 @@ type MonitorOptions struct {
 type Monitor struct {
 	cellID       string
 	log          *registry.CellLog
+	journal      *registry.RecordStore
 	sink         AlarmSink
 	now          func() time.Time
 	maxLag       time.Duration
@@ -204,6 +210,7 @@ func NewMonitor(ctx context.Context, opts MonitorOptions) (*Monitor, error) {
 	m := &Monitor{
 		cellID:      opts.MonitorCellID,
 		log:         opts.Log,
+		journal:     opts.Journal,
 		sink:        opts.Sink,
 		now:         opts.Now,
 		maxLag:      opts.MaxAnchorLag,
@@ -429,12 +436,7 @@ func (m *Monitor) raise(ctx context.Context, cellID string, event byte, verdict 
 		return Alert{}, fmt.Errorf("supervision: sel de feuille : %w", err)
 	}
 	leafHash := registry.HashPayload(salt, raw)
-	idx, err := m.log.Append(ctx, registry.Leaf{
-		Kind:        registry.KindSupervision,
-		CellID:      m.cellID,
-		PayloadHash: leafHash,
-		Timestamp:   m.now().UnixNano(),
-	})
+	idx, err := registry.AppendLeaf(ctx, m.log, m.journal, registry.KindSupervision, m.cellID, salt, raw, m.now().UnixNano())
 	if err != nil {
 		return Alert{}, fmt.Errorf("supervision: feuille d'alerte impossible : %w", err)
 	}

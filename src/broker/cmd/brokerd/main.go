@@ -608,7 +608,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	// Échappatoires dev actives (issue #208, R-13) : une feuille opposable, pas
 	// seulement un log. APRÈS le provisionnement, dont la garde se sert de la
 	// taille du journal pour distinguer un premier démarrage d'un témoin effacé.
-	if err := devmode.RecordActive(ctx, cellLog, cfg.cellID, cfg.salt, cfg.devFlags, nil); err != nil {
+	if err := devmode.RecordActive(ctx, cellLog, auditStore, cfg.cellID, cfg.salt, cfg.devFlags, nil); err != nil {
 		return err
 	}
 

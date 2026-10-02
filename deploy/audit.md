@@ -86,8 +86,12 @@ Wired so far:
 | `pepd` — measured-boot manifest (`TBPL2`) | `KindManifest` | same journal (shared) |
 | `brokerd` — epoch tracker (`TBPE1`), `pepd`'s async writer episode leaf (`TBAD1`) | `KindEpoch`, `KindTelemetry` | same journal (shared) |
 | Library producers with a `Journal` option, wired by the daemon that runs them: promotion controller (`TBPP1`), anchorer, backpressure stop leaf | `KindPromotion`, `KindAnchor`, `KindBackpressure` | `Journal` option (nil = bare leaf). The stop leaf and the episode leaf are written around the backpressure lock: a journal that refuses ⇒ the leaf is skipped (`+leaf-write-failed` in the alarm) and the lock holds. |
+| `supervisord` — monitor alerts (`TBPS1`, salt included) | `KindSupervision` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: no journal ⇒ `supervisord` does not start). A journal that refuses ⇒ no leaf ⇒ no alert is notified. |
+| `pepd` / `brokerd` — dev-escape-hatch flags (`TBDV1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ the start is refused |
+| `tmetrics` — translator measurement (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**), pointing at the journal of the service (pepd or brokerd) that owns the registry it appends to |
+| Library producers with a `Journal` option: translator degradation events (`TBTD1`), telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly), window aggregator, retention purge, anti-dribble detector | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | `Journal` option (nil = bare leaf) |
 
-Every other producer (supervisord, dev-mode flags, telemetry and translator
-metrics, …) still appends
-a bare leaf: its leaves have no journal entry and `tbp-audit` has nothing to say
-about them. Wiring them is tracked in #275, one producer at a time.
+Every producer of leaves in this repository now has a journal seam, and every
+daemon that writes leaves requires its journal. A library producer is bare only
+until its host wires `Journal` — nothing in-tree runs the telemetry or
+degradation producers inside a daemon yet.

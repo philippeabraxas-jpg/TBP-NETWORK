@@ -88,6 +88,9 @@ go build -o /usr/local/bin/supervisord ./src/supervision/cmd/supervisord
 #   TBP_MONITOR_CELL_ID=monitor-01
 #   TBP_SALT=<hex 32 car. — sel de la chaîne DU MONITEUR, généré ici>
 #   TBP_REGISTRY_DIR=/var/lib/tbp/supervision
+#   TBP_AUDIT_RECORDS=/var/lib/tbp/supervision-audit/records.jsonl  # #275 : REQUIS — clair chiffré de
+#     chaque feuille d'alerte (`tbp-audit verify`) ; sans journal supervisord ne démarre pas
+#   TBP_AUDIT_RECORDS_KEY_FILE=/etc/tbp/supervisord-records.key  # 0600, `tbp-audit keygen`
 #   TBP_CELLS_FILE=/etc/tbp/cells.json
 #   TBP_CELL_BROKER_SOCKET=/run/tbp/broker-admin.sock  # plan ADMIN (§95) :
 #     supervisord ne lit que GET /v1/supervision/*, jamais POST /v1/actions —

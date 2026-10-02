@@ -4,8 +4,10 @@ package devmode
 // laisser une feuille opposable dans le registre, pas seulement un log.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ func TestRecordActiveWritesAProvableTelemetryLeaf(t *testing.T) {
 	sink := &sinkStub{}
 	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
 	flags := []string{"TBP_OPA_INSECURE_TCP_DEV", "TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE"}
-	if err := RecordActive(context.Background(), sink, "cell-a", salt16, flags, now); err != nil {
+	if err := RecordActive(context.Background(), sink, nil, "cell-a", salt16, flags, now); err != nil {
 		t.Fatal(err)
 	}
 	if len(sink.leaves) != 1 {
@@ -53,7 +55,7 @@ func TestRecordActiveWritesAProvableTelemetryLeaf(t *testing.T) {
 
 func TestNoFlagsNoLeaf(t *testing.T) {
 	sink := &sinkStub{}
-	if err := RecordActive(context.Background(), sink, "cell-a", salt16, nil, nil); err != nil {
+	if err := RecordActive(context.Background(), sink, nil, "cell-a", salt16, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(sink.leaves) != 0 {
@@ -80,17 +82,50 @@ func TestActiveRecordIsCanonical(t *testing.T) {
 // Fail-closed : un démarrage dev qui ne peut pas laisser de trace est refusé.
 func TestRecordActiveFailsClosedWhenTheLeafCannotBeWritten(t *testing.T) {
 	sink := &sinkStub{err: errors.New("disque plein")}
-	err := RecordActive(context.Background(), sink, "cell-a", salt16, []string{"TBP_OPA_INSECURE_TCP_DEV"}, nil)
+	err := RecordActive(context.Background(), sink, nil, "cell-a", salt16, []string{"TBP_OPA_INSECURE_TCP_DEV"}, nil)
 	if err == nil {
 		t.Fatal("démarrage accepté alors que la feuille n'a pas pu être écrite")
 	}
-	if err := RecordActive(context.Background(), nil, "cell-a", salt16, []string{"X"}, nil); err == nil {
+	if err := RecordActive(context.Background(), nil, nil, "cell-a", salt16, []string{"X"}, nil); err == nil {
 		t.Fatal("couture feuilles absente acceptée")
 	}
-	if err := RecordActive(context.Background(), &sinkStub{}, "", salt16, []string{"X"}, nil); err == nil {
+	if err := RecordActive(context.Background(), &sinkStub{}, nil, "", salt16, []string{"X"}, nil); err == nil {
 		t.Fatal("cellID vide accepté")
 	}
-	if err := RecordActive(context.Background(), &sinkStub{}, "cell-a", []byte("court"), []string{"X"}, nil); err == nil {
+	if err := RecordActive(context.Background(), &sinkStub{}, nil, "cell-a", []byte("court"), []string{"X"}, nil); err == nil {
 		t.Fatal("sel court accepté")
+	}
+}
+
+// #275 : le clair de la feuille d'échappatoires dev est journalisé AVANT la feuille ; un journal qui refuse
+// ⇒ aucune feuille ⇒ démarrage refusé.
+func TestRecordActiveIsJournaled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.jsonl")
+	key := bytes.Repeat([]byte{6}, registry.RecordKeyLen)
+	j, err := registry.OpenRecordStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	sink := &sinkStub{}
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	flags := []string{"TBP_OPA_INSECURE_TCP_DEV"}
+	if err := RecordActive(context.Background(), sink, j, "cell-a", salt16, flags, now); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(path, key)
+	if err != nil || len(recs) != 1 || len(sink.leaves) != 1 {
+		t.Fatalf("journal %d enregistrements (err=%v), %d feuilles", len(recs), err, len(sink.leaves))
+	}
+	if recs[0].Leaf != sink.leaves[0] || recs[0].VerifyHash() != nil || !bytes.Equal(recs[0].Record, ActiveRecord(flags)) {
+		t.Fatalf("enregistrement inattendu : %+v", recs[0])
+	}
+
+	_ = j.Close()
+	if err := RecordActive(context.Background(), sink, j, "cell-a", salt16, flags, now); err == nil {
+		t.Fatal("démarrage dev accepté sans clair journalisé — fail-closed violé")
+	}
+	if len(sink.leaves) != 1 {
+		t.Fatalf("%d feuilles : une feuille a été inscrite sans clair journalisé", len(sink.leaves))
 	}
 }

@@ -12,6 +12,10 @@
 //     déjà exister : l'identité du registre appartient aux services de la
 //     cellule (pepd/brokerd) — tmetrics n'en crée JAMAIS une nouvelle (un
 //     registre à l'identité fraîche et silencieuse serait une fourche) ;
+//   - TBP_AUDIT_RECORDS + TBP_AUDIT_RECORDS_KEY_FILE requis (#275, #271) : le
+//     journal d'enregistrements du service dont le registre reçoit la feuille
+//     (celui de pepd ou de brokerd — `tbp-audit verify` lit un seul journal
+//     par registre) ; la feuille n'est inscrite que si son clair y est écrit ;
 //   - un rapport mal formé, incohérent ou d'une version inconnue est
 //     refusé — une mesure douteuse n'entre pas au registre.
 package main
@@ -61,6 +65,14 @@ func run(args []string) error {
 		return errors.New("TBP_REGISTRY_DIR requis (registre de la cellule)")
 	}
 
+	// Journal d'enregistrements (#275) : REQUIS — une mesure dont le clair n'est pas journalisé
+	// n'entre pas au registre. Même journal que le service qui détient ce registre.
+	journal, err := registry.OpenRecordStoreFiles(os.Getenv("TBP_AUDIT_RECORDS"), os.Getenv("TBP_AUDIT_RECORDS_KEY_FILE"))
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275) : %w", err)
+	}
+	defer journal.Close()
+
 	raw, err := os.ReadFile(*reportPath)
 	if err != nil {
 		return fmt.Errorf("rapport illisible : %w", err)
@@ -92,7 +104,7 @@ func run(args []string) error {
 	}
 	defer func() { _ = log.Close(context.Background()) }()
 
-	idx, err := translator.AppendMetricsLeaf(ctx, log, cellID, salt, report, time.Now())
+	idx, err := translator.AppendMetricsLeaf(ctx, log, journal, cellID, salt, report, time.Now())
 	if err != nil {
 		return fmt.Errorf("inscription : %w", err)
 	}

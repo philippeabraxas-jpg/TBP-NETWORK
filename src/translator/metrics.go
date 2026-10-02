@@ -172,7 +172,10 @@ type MetricsLeafSink interface {
 // événement de mesure, pas une décision §4.1). Hash-only : le registre ne
 // voit que sha256(sel ‖ record). Fail-closed : cellID et sel ≥ 16 octets
 // requis — une mesure non attribuée ou non scellée n'entre pas au registre.
-func AppendMetricsLeaf(ctx context.Context, leaves MetricsLeafSink, cellID string, salt []byte, report MetricsReport, at time.Time) (uint64, error) {
+//
+// store (optionnel, #275/#271) reçoit le clair du record AVANT la feuille : journal
+// refusé ⇒ aucune feuille. Nil ⇒ feuille nue (historique).
+func AppendMetricsLeaf(ctx context.Context, leaves MetricsLeafSink, store *registry.RecordStore, cellID string, salt []byte, report MetricsReport, at time.Time) (uint64, error) {
 	if cellID == "" {
 		return 0, ErrMetricsCellID
 	}
@@ -186,10 +189,5 @@ func AppendMetricsLeaf(ctx context.Context, leaves MetricsLeafSink, cellID strin
 	if err != nil {
 		return 0, err
 	}
-	return leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      cellID,
-		PayloadHash: registry.HashPayload(salt, record),
-		Timestamp:   at.UnixNano(),
-	})
+	return registry.AppendLeaf(ctx, leaves, store, registry.KindTelemetry, cellID, salt, record, at.UnixNano())
 }
