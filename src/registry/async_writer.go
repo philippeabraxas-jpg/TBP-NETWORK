@@ -79,6 +79,10 @@ type AsyncOptions struct {
 	// Salt est le sel de la feuille de rattrapage (§6.2, ≥ 16 octets) —
 	// il ne quitte JAMAIS la cellule. Requis.
 	Salt []byte
+	// Journal reçoit le clair de la feuille d'épisode AVANT son inscription (#275,
+	// #271). Optionnel ici (nil = feuille nue, historique). Les feuilles de
+	// décision passent par Append : leurs producteurs les journalisent eux-mêmes.
+	Journal *RecordStore
 	// Window est la fenêtre d'opposabilité : au-delà, coupure fail-closed.
 	// Zéro = DefaultOpposabilityWindow. Plancher : 4× l'intervalle de
 	// checkpoint du log sous-jacent (en dessous, la gigue normale de
@@ -123,6 +127,7 @@ type AsyncWriter struct {
 	log      *CellLog
 	cellID   string
 	salt     []byte
+	journal  *RecordStore
 	window   time.Duration
 	capacity int
 	onTrip   func(detail string)
@@ -195,6 +200,7 @@ func NewAsyncWriter(log *CellLog, opts AsyncOptions) (*AsyncWriter, error) {
 		log:         log,
 		cellID:      opts.CellID,
 		salt:        salt,
+		journal:     opts.Journal,
 		window:      window,
 		capacity:    capacity,
 		onTrip:      opts.OnTrip,
@@ -365,17 +371,13 @@ func (w *AsyncWriter) writeCatchup() {
 			tripAt.UTC().Format(time.RFC3339Nano),
 			w.now().UTC().Format(time.RFC3339Nano),
 			lag.Milliseconds())
-		leaf := Leaf{
-			Kind:        KindTelemetry,
-			CellID:      w.cellID,
-			PayloadHash: HashPayload(w.salt, []byte(payload)),
-			Timestamp:   w.now().UnixNano(),
+		// Échec (journal ou log) : l'absence de feuille est elle-même le symptôme
+		// (la coupure a été alarmée en temps réel) — jamais de boucle ici.
+		if leaf, err := SealLeaf(w.journal, KindTelemetry, w.cellID, w.salt, []byte(payload), w.now().UnixNano()); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_, _ = w.log.appendInternal(ctx, leaf)
+			cancel()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		// Échec : l'absence de feuille est elle-même le symptôme (la
-		// coupure a été alarmée en temps réel) — jamais de boucle ici.
-		_, _ = w.log.appendInternal(ctx, leaf)
-		cancel()
 	}
 
 	w.mu.Lock()

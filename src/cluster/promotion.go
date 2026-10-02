@@ -77,6 +77,9 @@ type PromotionConfig struct {
 	Salt []byte
 	// Leaves : chaque décision de promotion laisse une feuille (§4.1). Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271). Optionnel ici (nil = feuille nue, historique).
+	Journal *registry.RecordStore
 	// Source lit les ancres du master (bundle par époque, fenêtre saine).
 	// Requis — sans source, aucune promotion n'est possible.
 	Source MasterAnchorSource
@@ -90,13 +93,14 @@ type PromotionConfig struct {
 // PromotionController tranche les promotions miroir/canari. Sans état
 // mutable après construction — sûr pour un usage concurrent.
 type PromotionController struct {
-	cellID string
-	salt   []byte
-	leaves LeafSink
-	src    MasterAnchorSource
-	keys   map[string]ed25519.PublicKey
-	now    func() time.Time
-	mu     sync.Mutex
+	cellID  string
+	salt    []byte
+	leaves  LeafSink
+	journal *registry.RecordStore
+	src     MasterAnchorSource
+	keys    map[string]ed25519.PublicKey
+	now     func() time.Time
+	mu      sync.Mutex
 }
 
 // NewPromotionController construit le contrôleur — config complète exigée.
@@ -133,7 +137,7 @@ func NewPromotionController(cfg PromotionConfig) (*PromotionController, error) {
 		keys[id] = append(ed25519.PublicKey(nil), pub...)
 	}
 	return &PromotionController{
-		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves,
+		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves, journal: cfg.Journal,
 		src: cfg.Source, keys: keys, now: now,
 	}, nil
 }
@@ -244,11 +248,7 @@ func (c *PromotionController) leafLocked(ctx context.Context, verdict byte, cell
 	rec = append(rec, bundle[:]...)
 	rec = append(rec, byte(len(reason)))
 	rec = append(rec, reason...)
-	_, err := c.leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindPromotion,
-		CellID:      c.cellID,
-		PayloadHash: registry.HashPayload(c.salt, rec),
-		Timestamp:   c.now().UnixNano(),
-	})
+	// #275 : le clair est journalisé AVANT la feuille (journal refusé ⇒ pas de feuille).
+	_, err := registry.AppendLeaf(ctx, c.leaves, c.journal, registry.KindPromotion, c.cellID, c.salt, rec, c.now().UnixNano())
 	return err
 }

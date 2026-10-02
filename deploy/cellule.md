@@ -642,7 +642,7 @@ scope used to pass without any alarm.
   pattern, widening `keep_paths` or plugging a classifier between two starts is **refused** without a
   quorum proof bound to (attested state, target state), condition
   `provisioning-transition-anod|from=…|to=…` — the refusal prints it, and
-  `anod -print-provisioning-condition -cell-vkey cell_log.vkey` recomputes it on your workstation (#264). `anod` needs its own chain and
+  `anod -print-provisioning-condition -cell-vkey cell_log.vkey` recomputes it on your workstation (#264). `anod` needs its own chain, its own journal (`TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE`, #275: it does not start without them) and
   witness: `TBP_CELL_ID`, `TBP_SALT`, `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (outside the
   registry directory, which must already exist), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN`; no
   "dev disable" escape hatch exists for `anod`. Upgrading an existing `anod` takes one transition proof.

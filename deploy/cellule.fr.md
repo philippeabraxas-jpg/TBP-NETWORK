@@ -678,7 +678,7 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   du classifieur, délai, grâce, bornes) et `k` (`quorum-settings`). Retirer un motif, élargir
   `keep_paths` ou brancher un classifieur entre deux démarrages est **refusé** sans preuve de quorum liée
   à (état attesté, état cible), condition `provisioning-transition-anod|from=…|to=…` — le refus
-  l'affiche, et `anod -print-provisioning-condition -cell-vkey cell_log.vkey` la recalcule sur votre poste (#264). `anod` exige sa propre chaîne et son témoin : `TBP_CELL_ID`, `TBP_SALT`,
+  l'affiche, et `anod -print-provisioning-condition -cell-vkey cell_log.vkey` la recalcule sur votre poste (#264). `anod` exige sa propre chaîne, son propre journal (`TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE`, #275 : il ne démarre pas sans eux) et son témoin : `TBP_CELL_ID`, `TBP_SALT`,
   `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (hors du répertoire du registre, qui doit déjà
   exister), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN` ; il n'existe pas d'échappatoire « dev » pour le
   désactiver. Mettre à jour un `anod` existant exige une preuve de transition.

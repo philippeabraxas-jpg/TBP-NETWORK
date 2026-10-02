@@ -18,6 +18,7 @@ import (
 
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 type env map[string]string
@@ -65,6 +66,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := os.MkdirAll(filepath.Join(dir, "witness"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	auditKey := filepath.Join(dir, "audit.key")
+	if err := registry.GenerateRecordKey(auditKey); err != nil {
+		t.Fatal(err)
+	}
 	return &testEnv{issuer: issuer, dir: dir, ctl: []ed25519.PrivateKey{ctl1, ctl2}, env: env{
 		"TBP_ANO_SOCKET":                filepath.Join(dir, "ano.sock"),
 		"TBP_KEYRING_FILE":              krPath,
@@ -75,6 +80,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "witness", "anod-provisioning.json"),
 		"TBP_QUORUM_KEYRING_FILE":       qkPath,
 		"TBP_QUORUM_MIN":                "2",
+		"TBP_AUDIT_RECORDS":             filepath.Join(dir, "audit.jsonl"),
+		"TBP_AUDIT_RECORDS_KEY_FILE":    auditKey,
 	}}
 }
 

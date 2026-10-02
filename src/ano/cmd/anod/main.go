@@ -36,6 +36,9 @@
 //	TBP_REGISTRY_DIR          requis — journal PROPRE à anod (clé de cellule, feuilles de
 //	                          genèse / démarrage / transition / refus)
 //	TBP_PROVISIONING_WITNESS_FILE  requis — témoin signé, HORS de TBP_REGISTRY_DIR
+//	TBP_AUDIT_RECORDS         requis — journal chiffré du clair des feuilles d'anod (#275,
+//	                          #271 : `tbp-audit verify`)
+//	TBP_AUDIT_RECORDS_KEY_FILE  requis — sa clé (0600 ; `tbp-audit keygen`)
 //	TBP_QUORUM_KEYRING_FILE   requis — trousseau des contrôleurs (quorum), même format que
 //	                          TBP_KEYRING_FILE ; mesuré comme fichier d'AUTORITÉ
 //	TBP_QUORUM_MIN            requis — k : signatures distinctes d'une preuve de transition
@@ -72,6 +75,7 @@ import (
 	ano "github.com/philippeabraxas-jpg/TBP-NETWORK/src/ano"
 	svc "github.com/philippeabraxas-jpg/TBP-NETWORK/src/ano/svc"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 const (
@@ -102,6 +106,8 @@ type config struct {
 	salt              []byte
 	registryDir       string
 	witnessFile       string
+	auditRecords      string // journal chiffré du clair des feuilles (#275, #271)
+	auditKeyFile      string
 	quorumKeyringPath string
 	quorumKeyring     map[[16]byte]ed25519.PublicKey
 	quorumMin         int
@@ -253,7 +259,14 @@ func run(ctx context.Context, getenv func(string) string) error {
 			log.Printf("anod: fermeture du registre: %v", err)
 		}
 	}()
-	if err := setupProvisioning(ctx, cfg, binary, signer, verifier, cellLog); err != nil {
+	// Journal d'enregistrements (#275) : le clair de chaque feuille d'anod, vérifiable avec
+	// `tbp-audit verify`. REQUIS : un anod dont les feuilles ne seraient pas vérifiables ne démarre pas.
+	journal, err := registry.OpenRecordStoreFiles(cfg.auditRecords, cfg.auditKeyFile)
+	if err != nil {
+		return fmt.Errorf("journal d'audit (#275): %w", err)
+	}
+	defer journal.Close()
+	if err := setupProvisioning(ctx, cfg, binary, signer, verifier, cellLog, journal); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
 	}
 	opts := ano.Options{

@@ -3,6 +3,7 @@ package main
 // provisioning_test.go — mesure des trousseaux épinglés de pepd (issue #192).
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -610,5 +611,56 @@ func TestPepdProofBoundToStartRefusesAnotherAttestedState(t *testing.T) {
 	}
 	if err := pf.setup(t); err == nil {
 		t.Fatal("la preuve A→B a servi alors que l'attesté est C (liaison au départ absente)")
+	}
+}
+
+// #275 : les feuilles de provisionnement ET de démarrage mesuré de pepd laissent leur clair dans le journal.
+func TestPepdProvisioningAndMeasuredBootLeavesAreJournaled(t *testing.T) {
+	pf := newPrintFixture(t)
+	jpath := filepath.Join(t.TempDir(), "records.jsonl")
+	jkey := bytes.Repeat([]byte{4}, registry.RecordKeyLen)
+	j, err := registry.OpenRecordStore(jpath, jkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	signer, err := registry.LoadSigner(pf.regDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vkey, _ := os.ReadFile(filepath.Join(pf.regDir, "cell_log.vkey"))
+	verifier, err := registry.NewVerifier(string(vkey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setupProvisioning(pf.ctx, provisioningInputs{
+		cellID: pf.cellID, regDir: pf.regDir, salt: pf.salt,
+		keyringFile: pf.keyring, quorumKeyringFile: pf.quorumKeyring,
+		quorumKeyring: pf.measuredBootFixture.quorumKeyring, quorumMin: pf.quorumMin, topology: pf.topology,
+		journal: j,
+	}, signer, verifier, pf.cellLog, pf.getenv); err != nil {
+		t.Fatalf("provisionnement : %v", err)
+	}
+	if err := setupMeasuredBoot(pf.ctx, pf.cellID, pf.salt, signer, verifier, pf.cellLog, j, pf.measuredBootFixture.quorumKeyring, pf.quorumMin, pf.getenv); err != nil {
+		t.Fatalf("démarrage mesuré : %v", err)
+	}
+	recs, err := registry.ReadRecords(jpath, jkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prov, boot int
+	for _, r := range recs {
+		if r.VerifyHash() != nil {
+			t.Fatalf("hash du clair : %v", r.VerifyHash())
+		}
+		switch {
+		case strings.HasPrefix(string(r.Record), "TBPL3"):
+			prov++
+		case strings.HasPrefix(string(r.Record), "TBPL2"):
+			boot++
+		}
+	}
+	if prov != 1 || boot != 1 {
+		t.Fatalf("%d feuille(s) de provisionnement et %d de démarrage mesuré journalisées, attendu 1 et 1 (%d enregistrements)", prov, boot, len(recs))
 	}
 }

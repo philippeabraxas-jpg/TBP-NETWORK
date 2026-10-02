@@ -84,10 +84,12 @@ Câblés à ce jour :
 | `pepd` — audit de réécriture d'ano (`TBAN1`, #178) | `KindTelemetry` | même journal (partagé) |
 | `pepd` / `brokerd` — feuilles d'état et d'alarme : déclenchements et levées fail-closed (`TBFF1`), alarmes d'horloge (`TBPC1`), bascules de posture (`TBPM1`), alarmes de révision OPA (`TBPR1`), télémétrie dry-run (`TBPF2`) | `KindTelemetry` | même journal (partagé) |
 | `brokerd` — chaîne de décision (`TBPD1`), client OPA, contrats de plan (`TBPL1`/`TBPL2`, signature comprise), quorum classe W (`TBPQ1`) | `KindDecision`, `KindContract`, `KindQuorum` | son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : `brokerd` ne démarre pas sans eux). Même ordre fail-closed : journal refusé ⇒ aucune feuille ⇒ l'émission est refusée. |
+| `pepd` / `brokerd` / `anod` — garde de provisionnement (`TBPL3` : genèse, démarrage, transition, refus, ré-engagement) | `KindManifest` | même journal (partagé) ; `anod` a son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : `anod` ne démarre pas sans eux). Un journal qui refuse ⇒ aucune feuille ⇒ la garde refuse le démarrage. |
+| `pepd` — manifeste du démarrage mesuré (`TBPL2`) | `KindManifest` | même journal (partagé) |
+| `brokerd` — suivi d'époque (`TBPE1`), feuille d'épisode de l'écrivain asynchrone de `pepd` (`TBAD1`) | `KindEpoch`, `KindTelemetry` | même journal (partagé) |
+| Producteurs de bibliothèque à option `Journal`, câblés par le démon qui les fait tourner : contrôleur de promotion (`TBPP1`), ancreur, feuille d'arrêt du backpressure | `KindPromotion`, `KindAnchor`, `KindBackpressure` | option `Journal` (nil = feuille nue). La feuille d'arrêt et la feuille d'épisode s'écrivent autour du verrou de backpressure : un journal qui refuse ⇒ la feuille est omise (`+leaf-write-failed` dans l'alarme) et le verrou tient. |
 
-Tous les autres producteurs (supervisord, le suivi d'époque, la garde de
-provisionnement, les drapeaux dev, le manifeste, l'ancrage, les feuilles du
-backpressure et de l'écrivain asynchrone, la télémétrie et les métriques du
-traducteur, …) inscrivent encore une feuille nue : leurs
+Tous les autres producteurs (supervisord, les drapeaux dev, la télémétrie et
+les métriques du traducteur, …) inscrivent encore une feuille nue : leurs
 feuilles n'ont pas d'entrée de journal et `tbp-audit` n'a rien à en dire. Les
 câbler est suivi dans #275, un producteur à la fois.

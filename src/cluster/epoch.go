@@ -151,6 +151,10 @@ type TrackerConfig struct {
 	// Leaves est la couture registre : chaque décision de fencing laisse
 	// une feuille KindEpoch (§4.1). Requis.
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// brokerd le renseigne toujours.
+	Journal *registry.RecordStore
 	// Controllers est le manifest des clés publiques Ed25519 des
 	// contrôleurs (key_id → pubkey), distribué hors-bande à la genèse
 	// (T3) — la légitimité reste hors protocole (§3.2). Requis.
@@ -195,6 +199,7 @@ type Tracker struct {
 	cellID    string
 	salt      []byte
 	leaves    LeafSink
+	journal   *registry.RecordStore
 	ctrls     map[int]ed25519.PublicKey
 	quorum    int
 	members   map[string]bool
@@ -272,7 +277,7 @@ func NewTracker(cfg TrackerConfig) (*Tracker, error) {
 		ctrls[id] = append(ed25519.PublicKey(nil), pub...)
 	}
 	return &Tracker{
-		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves,
+		cellID: cfg.CellID, salt: salt, leaves: cfg.Leaves, journal: cfg.Journal,
 		ctrls: ctrls, quorum: cfg.Quorum, members: members,
 		maxAutoHr: maxAuto, minTTL: minTTL, maxTTL: maxTTL,
 		now: now, onAlarm: cfg.OnAlarm,
@@ -594,11 +599,7 @@ func (t *Tracker) leafLocked(ctx context.Context, event byte, n int, authority, 
 	rec = append(rec, authority...)
 	rec = append(rec, byte(len(reason)))
 	rec = append(rec, reason...)
-	_, err := t.leaves.Append(ctx, registry.Leaf{
-		Kind:        registry.KindEpoch,
-		CellID:      t.cellID,
-		PayloadHash: registry.HashPayload(t.salt, rec),
-		Timestamp:   t.now().UnixNano(),
-	})
+	// #275 : le clair est journalisé AVANT la feuille (journal refusé ⇒ pas de feuille).
+	_, err := registry.AppendLeaf(ctx, t.leaves, t.journal, registry.KindEpoch, t.cellID, t.salt, rec, t.now().UnixNano())
 	return err
 }

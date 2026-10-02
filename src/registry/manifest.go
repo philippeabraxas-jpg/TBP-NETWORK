@@ -238,6 +238,9 @@ type ManifestOptions struct {
 	Verifier note.Verifier
 	// Leaves reçoit la feuille KindManifest de chaque événement (§4.1).
 	Leaves LeafAppender
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271). Optionnel ici (nil = feuille nue, historique) ; pepd le renseigne.
+	Journal *RecordStore
 	// Salt est le sel des feuilles (§6.2) : ≥ 16 octets, reste chez le
 	// producteur.
 	Salt []byte
@@ -258,12 +261,13 @@ type ManifestOptions struct {
 // persistance de la chaîne est à l'appelant (les artefacts sont publiés,
 // D70 : ils ne sont pas un secret, leur intégrité est la signature).
 type Manifester struct {
-	cellID string
-	signer note.Signer
-	leaves LeafAppender
-	salt   []byte
-	onTrip func(reason string)
-	now    func() time.Time
+	cellID  string
+	signer  note.Signer
+	leaves  LeafAppender
+	journal *RecordStore
+	salt    []byte
+	onTrip  func(reason string)
+	now     func() time.Time
 
 	mu          sync.Mutex
 	initialized bool
@@ -292,12 +296,13 @@ func NewManifester(opts ManifestOptions) (*Manifester, error) {
 	salt := make([]byte, len(opts.Salt))
 	copy(salt, opts.Salt)
 	m := &Manifester{
-		cellID: opts.CellID,
-		signer: opts.Signer,
-		leaves: opts.Leaves,
-		salt:   salt,
-		onTrip: opts.OnTrip,
-		now:    opts.Now,
+		cellID:  opts.CellID,
+		signer:  opts.Signer,
+		leaves:  opts.Leaves,
+		journal: opts.Journal,
+		salt:    salt,
+		onTrip:  opts.OnTrip,
+		now:     opts.Now,
 	}
 	if opts.Last != nil {
 		rec, err := ParseManifestRecord(opts.Last.Record)
@@ -428,12 +433,7 @@ func (m *Manifester) writeLeafLocked(ctx context.Context, event byte, manifestHa
 	payload = append(payload, manifestHash[:]...)
 	payload = append(payload, verdict, byte(len(reason)))
 	payload = append(payload, reason...)
-	_, err := m.leaves.Append(ctx, Leaf{
-		Kind:        KindManifest,
-		CellID:      m.cellID,
-		PayloadHash: HashPayload(m.salt, payload),
-		Timestamp:   m.clock().UnixNano(),
-	})
+	_, err := AppendLeaf(ctx, m.leaves, m.journal, KindManifest, m.cellID, m.salt, payload, m.clock().UnixNano())
 	return err
 }
 

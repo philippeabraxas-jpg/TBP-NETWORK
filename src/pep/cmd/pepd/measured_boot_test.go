@@ -192,7 +192,7 @@ func (fx *measuredBootFixture) run(t *testing.T) error {
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
-	return setupMeasuredBoot(fx.ctx, fx.cellID, fx.salt, signer, verifier, fx.cellLog, fx.quorumKeyring, fx.quorumMin, fx.getenv)
+	return setupMeasuredBoot(fx.ctx, fx.cellID, fx.salt, signer, verifier, fx.cellLog, nil, fx.quorumKeyring, fx.quorumMin, fx.getenv)
 }
 
 // TestSetupMeasuredBootRequiredByDefault : revue #112 — measured boot est

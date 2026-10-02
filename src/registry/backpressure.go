@@ -203,6 +203,10 @@ type MonitorOptions struct {
 	Sampler UsageSampler
 	// Fs mesure l'espace libre hôte (défaut StatfsStats — injectable).
 	Fs FsStats
+	// Journal reçoit le clair de la feuille d'arrêt AVANT son inscription (#275,
+	// #271). Optionnel ici (nil = feuille nue, historique). S'il refuse, la feuille
+	// n'est pas écrite (« +leaf-write-failed » dans l'alarme) : le verrouillage tient.
+	Journal *RecordStore
 	// OnTrip est appelé UNE fois à l'engagement — couture vers le module
 	// fail-closed unique (T14) : c'est ici que le broker cessera d'émettre
 	// dans le même chemin de décision que les autres conditions. Nil en
@@ -236,6 +240,7 @@ type Monitor struct {
 	onAlarm   func(Alarm)
 	drain     func(ctx context.Context) error
 	salt      []byte // sel des feuilles KindBackpressure — ne quitte pas la cellule
+	journal   *RecordStore
 
 	engaged atomic.Bool
 	closed  atomic.Bool
@@ -283,7 +288,7 @@ func NewMonitor(opts MonitorOptions) (*Monitor, error) {
 		dir: opts.Dir, cellID: opts.CellID,
 		quota: opts.QuotaBytes, threshold: threshold, hostFloor: opts.HostFloorBytes,
 		interval: interval, sampler: sampler, fs: fsStats,
-		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, drain: opts.Drain, salt: salt,
+		onTrip: opts.OnTrip, onAlarm: opts.OnAlarm, drain: opts.Drain, salt: salt, journal: opts.Journal,
 	}, nil
 }
 
@@ -411,13 +416,11 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		payload := fmt.Sprintf(`{"reason":%q,"cellID":%q,"usedBytes":%d,"quotaBytes":%d,"at":%q}`,
 			alarm.Reason, alarm.CellID, alarm.UsedBytes, alarm.QuotaBytes,
 			alarm.At.Format(time.RFC3339Nano))
-		leaf := Leaf{
-			Kind:        KindBackpressure,
-			CellID:      m.cellID,
-			PayloadHash: HashPayload(m.salt, []byte(payload)),
-			Timestamp:   alarm.At.UnixNano(),
+		leaf, err := SealLeaf(m.journal, KindBackpressure, m.cellID, m.salt, []byte(payload), alarm.At.UnixNano())
+		if err == nil {
+			_, err = log.appendInternal(ioCtx, leaf)
 		}
-		if _, err := log.appendInternal(ioCtx, leaf); err != nil {
+		if err != nil {
 			// La feuille d'arrêt n'a pas pu être écrite (p.ex. disque
 			// plein) : on verrouille quand même — l'absence de feuille
 			// est elle-même un symptôme classe W, remonté par l'alarme.
