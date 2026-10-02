@@ -46,6 +46,7 @@ Uid:	4242	4242	4242	4242
 Gid:	4242	4242	4242	4242
 NoNewPrivs:	1
 Seccomp:	2
+Seccomp_filters:	1
 CapInh:	0000000000000000
 CapPrm:	0000000000000000
 CapEff:	0000000000000000
@@ -61,6 +62,20 @@ EOF
 	echo 'net:[4026531992]' > "$d/netns_init"
 }
 
+# wait_comm <pid> <nom> : attend que le processus ait fait son exec (comm = nom). Sans cela, l'audit lit /proc d'un
+# setpriv ENCORE root et plein de capabilities (course préexistante : les assertions « CapEff vide » passaient
+# ou échouaient selon l'ordonnancement).
+wait_comm() {
+	local i
+	for i in $(seq 1 100); do
+		[ "$(cat "/proc/$1/comm" 2>/dev/null)" = "$2" ] && return 0
+		sleep 0.05
+	done
+	echo "FAIL le processus $1 n'a pas atteint l'exec de '$2' (comm='$(cat "/proc/$1/comm" 2>/dev/null)')"
+	FAIL=$((FAIL + 1))
+	return 1
+}
+
 run_audit() { # run_audit <args...> — pose RC et OUT sans casser set -e
 	set +e
 	OUT=$(bash "$AUDIT" "$@" 2>&1)
@@ -73,6 +88,9 @@ echo "== fixtures : conforme puis mutations (non-vacuité de chaque assertion) =
 mkfixture "$W/base"
 run_audit --fixture "$W/base" --uid 4242
 check "fixture conforme acceptée" 0 "$OUT"
+# Revue tierce 4.8 : « Seccomp = 2 » ne dit pas QUEL filtre — l'audit hors unit le rapporte au lieu de le prétendre
+check "fixture : l'origine du filtre seccomp n'est PAS prétendue établie" 0 "$OUT" "origine du filtre seccomp NON établie"
+check "fixture : le nombre de filtres attachés est rapporté" 0 "$OUT" "1 filtre(s) attaché(s)"
 
 # Mutation : root
 sed 's/^Uid:.*/Uid:\t0\t0\t0\t0/' "$W/base/status" > "$W/base/status.root"
@@ -164,13 +182,25 @@ esac
 # Processus setpriv : non-root, caps vidées, no_new_privs — tout doit passer
 # SAUF Seccomp (=0 : setpriv ne pose pas de filtre). Preuve que l'assertion
 # seccomp est indépendante des autres et détecte l'absence réelle de filtre.
+#
+# Dans un CONTENEUR (revue tierce 4.8), le runtime pose déjà un filtre seccomp que setpriv hérite : le processus
+# est alors « Seccomp: 2 » sans que personne ne l'ait voulu, et « l'absence de filtre » ne peut pas être éprouvée.
+# Le test le DÉTECTE (état ambiant lu dans /proc/self/status) et saute cette seule assertion, dite à voix haute —
+# au lieu d'échouer pour une raison qui n'est pas un défaut de l'audit.
 if command -v setpriv >/dev/null && [ "$(id -u)" = "0" ]; then
+	AMBIENT_SECCOMP=$(awk '$1 == "Seccomp:" {print $2}' /proc/self/status)
 	setpriv --reuid=65534 --regid=65534 --clear-groups --no-new-privs \
 		--inh-caps=-all --ambient-caps=-all --bounding-set=-all sleep 60 &
 	SP=$!
+	wait_comm $SP sleep || true
 	run_audit --pid $SP --uid 65534 --user nobody
 	kill $SP 2>/dev/null || true
-	check "setpriv : confinement partiel reconnu, seccomp absent détecté" 1 "$OUT" "Seccomp"
+	if [ "$AMBIENT_SECCOMP" = "2" ]; then
+		echo "skip setpriv/seccomp : filtre seccomp hérité de l'environnement (conteneur) — l'absence de filtre ne peut pas être éprouvée ici ; l'audit rapporte l'origine non établie :"
+		check "setpriv (filtre hérité) : le filtre est vu, mais son ORIGINE n'est pas prétendue établie" 0 "$OUT" "origine du filtre seccomp NON établie"
+	else
+		check "setpriv : confinement partiel reconnu, seccomp absent détecté" 1 "$OUT" "Seccomp"
+	fi
 	case "$OUT" in
 	*"FAIL CapEff"*) echo "FAIL test setpriv : CapEff aurait dû passer"; FAIL=$((FAIL + 1)) ;;
 	*) echo "ok   setpriv : CapEff vide confirmée en réel"; PASS=$((PASS + 1)) ;;
@@ -182,6 +212,77 @@ if command -v setpriv >/dev/null && [ "$(id -u)" = "0" ]; then
 else
 	echo "skip setpriv (non-root ou setpriv absent) — fixtures seules"
 fi
+
+echo "== origine du filtre seccomp : unit systemd simulée (systemctl de substitution dans le PATH) =="
+
+# systemctl de substitution : MainPID et SystemCallFilter pilotés par l'environnement du test. Il ne simule QUE
+# les requêtes `show -p <prop> --value <unit>` que l'audit émet.
+mkdir -p "$W/bin"
+cat > "$W/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = show ] || exit 1
+prop=$3
+case "$prop" in
+Id) echo "tbp-translator.service" ;;
+MainPID) echo "${STUB_MAINPID:-0}" ;;
+SystemCallFilter) printf '%s\n' "${STUB_SCF-@system-service}" ;;
+ProtectSystem) echo strict ;;
+ProtectHome) echo yes ;;
+PrivateTmp) echo yes ;;
+NoNewPrivileges) echo yes ;;
+SystemCallArchitectures) echo native ;;
+CapabilityBoundingSet) echo "" ;;
+RestrictAddressFamilies) echo "AF_UNIX AF_INET AF_INET6" ;;
+MemoryDenyWriteExecute) echo yes ;;
+*) echo "" ;;
+esac
+STUB
+chmod +x "$W/bin/systemctl"
+
+# un processus réellement filtré (Seccomp: 2) : python3 pose un filtre « tout autoriser » via prctl, puis dort. C'est
+# lui que l'on audite — l'avertissement d'origine ne se lit que sur un processus qui a un filtre.
+python3 - <<'PY' &
+import ctypes, struct, time
+libc = ctypes.CDLL(None, use_errno=True)
+assert libc.prctl(38, 1, 0, 0, 0) == 0                       # PR_SET_NO_NEW_PRIVS
+buf = ctypes.create_string_buffer(struct.pack("HBBI", 0x06, 0, 0, 0x7fff0000))  # BPF_RET | SECCOMP_RET_ALLOW
+class Prog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.c_void_p)]
+prog = Prog(1, ctypes.addressof(buf))
+assert libc.prctl(22, 2, ctypes.byref(prog)) == 0             # PR_SET_SECCOMP, SECCOMP_MODE_FILTER
+time.sleep(60)
+PY
+TARGET=$!
+for _ in $(seq 1 100); do [ "$(awk '$1 == "Seccomp:" {print $2}' /proc/$TARGET/status 2>/dev/null)" = "2" ] && break; sleep 0.05; done
+[ "$(awk '$1 == "Seccomp:" {print $2}' /proc/$TARGET/status 2>/dev/null)" = "2" ] \
+	|| { echo "FAIL le processus de test n'a pas de filtre seccomp (prctl refusé ?)"; FAIL=$((FAIL + 1)); }
+audit_unit() { # audit_unit <MainPID> <SystemCallFilter> — le processus audité est TARGET
+	set +e
+	OUT=$(PATH="$W/bin:$PATH" STUB_MAINPID="$1" STUB_SCF="$2" bash "$AUDIT" --pid $TARGET --uid "$(id -u)" --user "$(id -un)" 2>&1)
+	RC=$?
+	set -e
+}
+
+# unit conforme : le processus EST le MainPID et l'unit déclare le filtre → origine établie, pas d'avertissement
+audit_unit "$TARGET" "@system-service"
+check "unit : SystemCallFilter déclaré (@system-service) vu" 1 "$OUT" "OK   SystemCallFilter déclaré"
+case "$OUT" in
+*"origine du filtre seccomp NON établie"*) echo "FAIL unit conforme : l'origine aurait dû être établie"; FAIL=$((FAIL + 1)) ;;
+*) echo "ok   unit conforme : l'origine du filtre est établie (MainPID + SystemCallFilter)"; PASS=$((PASS + 1)) ;;
+esac
+
+# mutation : l'unit ne déclare AUCUN filtre → échec (le « Seccomp = 2 » ne serait pas celui du traducteur)
+audit_unit "$TARGET" ""
+check "unit sans SystemCallFilter : échec" 1 "$OUT" "SystemCallFilter vide"
+
+# mutation : le processus audité n'est PAS le MainPID de l'unit → l'origine n'est pas établie
+audit_unit "1" "@system-service"
+check "processus ≠ MainPID de l'unit : origine non établie" 1 "$OUT" "origine du filtre seccomp NON établie"
+
+# mutation : filtre déclaré mais autre profil → avertissement, l'origine reste établie par le MainPID
+audit_unit "$TARGET" "@raw-io"
+check "SystemCallFilter d'un autre profil : avertissement" 1 "$OUT" "ne mentionne pas @system-service"
+kill $TARGET 2>/dev/null || true
 
 echo "test_audit_confinement — $PASS ok, $FAIL échec(s)"
 [ "$FAIL" -eq 0 ]

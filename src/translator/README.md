@@ -45,7 +45,19 @@ model or the prompts themselves:
   fixture plus one mutation per assertion (every assertion must be able to
   fail — non-vacuity), live checks against `/proc` (unconfined process
   rejected; `setpriv` partially-confined process recognized, missing
-  seccomp filter detected). No systemd, no vLLM required.
+  seccomp filter detected). No systemd, no vLLM required. Run by
+  `deploy/selftest/selftest.sh` (so by the `selftest` CI job).
+- **What the seccomp line proves, and what it does not** (third-party review,
+  4.8). `Seccomp: 2` in `/proc/<pid>/status` is true of *any* filtered process:
+  inside a container, the runtime's filter satisfies it whether or not the
+  translator's profile is applied. The audit therefore establishes the filter's
+  **origin** only for the systemd unit — the audited process is the unit's
+  `MainPID` **and** the unit declares `SystemCallFilter` (an empty one is a
+  violation). Anywhere else (`--pid`, `--fixture`, a container) it prints the
+  warning *"origine du filtre seccomp NON établie"* instead of claiming the
+  translator is confined by *its* profile; check the applied profile
+  (`seccomp-translator.json`) separately there. In a container the test skips
+  only the "no filter" assertion (the ambient filter is inherited) and says so.
 
 ## Documented exceptions (never silent)
 

@@ -6,7 +6,10 @@
 # Vérifié ici (preuves lues dans /proc et systemd) :
 #   - processus non-root dédié (Uid réel/effectif = utilisateur attendu) ;
 #   - capabilities effectives VIDES (CapEff == 0) ;
-#   - no_new_privs actif ; seccomp en mode filtre (Seccomp == 2) ;
+#   - no_new_privs actif ; seccomp en mode filtre (Seccomp == 2) — ce qui prouve QU'UN filtre est actif, pas que c'est
+#     CELUI du traducteur : dans un conteneur, un filtre hérité du runtime suffirait. L'ORIGINE du filtre n'est établie
+#     que sur l'unit systemd (le processus est le MainPID de l'unit ET l'unit déclare SystemCallFilter) ; sinon l'audit
+#     le RAPPORTE en avertissement au lieu de le prétendre (revue tierce du 2 octobre, 4.8) ;
 #   - propriétés systemd de l'unit (ProtectSystem, familles d'adresses, …)
 #     quand systemd est disponible ;
 #   - dépendance réseau HONNÊTE : si le processus partage le netns de l'hôte,
@@ -39,6 +42,8 @@ FIXTURE=""
 UID_EXPECTED=""
 FAILS=0
 WARNS=0
+# 1 quand l'ORIGINE du filtre seccomp est établie (unit systemd : MainPID == processus audité ET SystemCallFilter déclaré)
+SECCOMP_ORIGIN=0
 
 usage() {
 	sed -n '2,30p' "$0"
@@ -120,8 +125,9 @@ fi
 # --- 4. seccomp en mode filtre ----------------------------------------------
 
 seccomp=$(field Seccomp) || true
+nfilters=$(field Seccomp_filters) || true # noyau ≥ 5.9 ; absent sinon
 case "$seccomp" in
-2) ok "Seccomp = 2 (mode filtre strict)" ;;
+2) ok "Seccomp = 2 (mode filtre strict${nfilters:+, $nfilters filtre(s) attaché(s)})" ;;
 1) ko "Seccomp = 1 (mode strict legacy, pas le filtre attendu)" ;;
 *) ko "Seccomp = '$seccomp' — attendu 2 (seccomp strict, §4.5)" ;;
 esac
@@ -168,6 +174,19 @@ if [ -z "$FIXTURE" ] && command -v systemctl >/dev/null && systemd_usable; then
 		ok "RestrictAddressFamilies='$fam'" ;;
 	*) ko "RestrictAddressFamilies='$fam' — restriction absente ou illisible" ;;
 	esac
+	# le filtre seccomp de l'UNIT : sans lui déclaré, un « Seccomp = 2 » lu plus haut ne dit rien du traducteur
+	scf=$(show SystemCallFilter)
+	if [ -z "$scf" ]; then
+		ko "SystemCallFilter vide — l'unit ne déclare aucun filtre d'appels système (le « Seccomp = 2 » lu plus haut ne serait pas celui du traducteur)"
+	else
+		case "$scf" in
+		*"system-service"*) ok "SystemCallFilter déclaré (@system-service)" ;;
+		*) warn "SystemCallFilter='$scf' — ne mentionne pas @system-service : profil différent de celui livré (tbp-translator.service) ?" ;;
+		esac
+		# l'origine n'est établie que si le processus audité EST le processus principal de l'unit
+		main=$(show MainPID)
+		if [ -n "$PID" ] && [ "$main" = "$PID" ]; then SECCOMP_ORIGIN=1; fi
+	fi
 	mdwe=$(show MemoryDenyWriteExecute)
 	if [ "$mdwe" = "yes" ]; then
 		ok "MemoryDenyWriteExecute=yes (W^X, rendu possible par --enforce-eager)"
@@ -178,6 +197,12 @@ elif [ -n "$FIXTURE" ]; then
 	echo "  (fixture : propriétés systemd non vérifiées — par construction)"
 else
 	warn "systemctl absent ou non fonctionnel (pas de systemd en PID 1) : propriétés d'unit non vérifiées (seules les preuves /proc le sont)"
+fi
+
+# Honnêteté sur l'origine du filtre (revue tierce 4.8) : « Seccomp = 2 » est vrai de TOUT processus filtré — dans un
+# conteneur, le filtre du runtime suffit à le satisfaire sans que le profil du traducteur soit appliqué.
+if [ "$seccomp" = "2" ] && [ "$SECCOMP_ORIGIN" != "1" ]; then
+	warn "origine du filtre seccomp NON établie : Seccomp = 2 prouve qu'un filtre est actif, pas que c'est celui du traducteur (filtre hérité d'un runtime de conteneur ou d'un parent, ou audit hors unit systemd) — auditer l'unit (--unit) ou vérifier le profil appliqué (seccomp-translator.json) séparément"
 fi
 
 # --- 6. netns et routes — honnêteté sur l'égress ----------------------------
