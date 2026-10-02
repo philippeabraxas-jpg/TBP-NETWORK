@@ -177,20 +177,16 @@ func TestDryRunDenyLeafIsJournaled(t *testing.T) {
 	if _, reason := g.Execute(context.Background(), [16]byte{1}, "transfer", "account/42"); reason != ReasonDryRunFailed {
 		t.Fatalf("reason=%q", reason)
 	}
-	// feuilles : télémétrie (hors périmètre, feuille nue) + refus (journalisé)
+	// feuilles : télémétrie + refus, TOUTES DEUX journalisées (la télémétrie depuis la
+	// suite de #275 : journal_state_test.go)
 	kinds := sinkKinds(sink)
 	if len(kinds) != 2 || kinds[1] != registry.KindDecision {
 		t.Fatalf("feuilles=%v", kinds)
 	}
-	recs, err := registry.ReadRecords(path, key)
-	if err != nil || len(recs) != 1 {
-		t.Fatalf("journal: %d enregistrements, err=%v, veut 1 (la feuille de refus)", len(recs), err)
-	}
-	sink.mu.Lock()
-	want := sink.leaves[1]
-	sink.mu.Unlock()
-	if recs[0].Leaf != want || recs[0].VerifyHash() != nil || !bytes.HasPrefix(recs[0].Record, []byte("TBPD1")) {
-		t.Fatalf("enregistrement de refus inattendu: %+v", recs[0])
+	assertJournaled(t, path, key, sink, "TB")
+	recs, _ := registry.ReadRecords(path, key)
+	if len(recs) != 2 || !bytes.HasPrefix(recs[1].Record, []byte("TBPD1")) {
+		t.Fatalf("enregistrement de refus inattendu: %+v", recs)
 	}
 }
 

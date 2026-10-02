@@ -124,6 +124,10 @@ type OPARevisionWatcherOptions struct {
 	// Requis (une dérive de révision non tracée serait une dérive
 	// silencieuse).
 	Leaves LeafSink
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275,
+	// #271 : tbp-audit verify). Optionnel ici (nil = feuille nue, historique) ;
+	// pepd et brokerd le renseignent toujours.
+	Journal *registry.RecordStore
 	// OnTrip est la couture d'alarme vers T14 (fail-closed unique) : tout
 	// écart ou vérification impossible y est signalé. Nil ⇒ pas d'alarme
 	// (le déni fail-closed T14 existant ne se déclenche alors pas pour
@@ -145,6 +149,7 @@ type OPARevisionWatcher struct {
 	cellID   string
 	salt     []byte
 	leaves   LeafSink
+	journal  *registry.RecordStore
 	onTrip   func(reason string)
 	now      func() time.Time
 
@@ -205,6 +210,7 @@ func NewOPARevisionWatcher(opts OPARevisionWatcherOptions) (*OPARevisionWatcher,
 		cellID:   opts.CellID,
 		salt:     salt,
 		leaves:   opts.Leaves,
+		journal:  opts.Journal,
 		onTrip:   opts.OnTrip,
 		now:      now,
 	}, nil
@@ -357,13 +363,7 @@ func (w *OPARevisionWatcher) exitLocked() {
 // writeLeafLocked inscrit la feuille (KindTelemetry : une alarme n'est
 // pas une décision). Hash-only : le registre ne voit que l'engagement.
 func (w *OPARevisionWatcher) writeLeafLocked(reason string, priority byte) {
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      w.cellID,
-		PayloadHash: registry.HashPayload(w.salt, opaRevisionAlarmRecord(reason, priority)),
-		Timestamp:   w.now().UnixNano(),
-	}
-	if _, err := w.leaves.Append(context.Background(), leaf); err != nil && w.onTrip != nil {
+	if _, err := appendLeaf(context.Background(), w.leaves, w.journal, registry.KindTelemetry, w.cellID, w.salt, opaRevisionAlarmRecord(reason, priority), w.now().UnixNano()); err != nil && w.onTrip != nil {
 		w.onTrip(ReasonLeafWriteFailed)
 	}
 }

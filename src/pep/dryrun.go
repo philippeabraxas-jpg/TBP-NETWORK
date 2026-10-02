@@ -385,13 +385,7 @@ func (g *DryRunGate) writeTelemetryLeaf(jti [16]byte, available bool, digest [32
 	}
 	record = append(record, digest[:]...)
 	record = binary.BigEndian.AppendUint64(record, uint64(elapsed.Microseconds()))
-	leaf := registry.Leaf{
-		Kind:        registry.KindTelemetry,
-		CellID:      g.cellID,
-		PayloadHash: registry.HashPayload(g.salt, record),
-		Timestamp:   g.now().UnixNano(),
-	}
-	if _, err := g.leaves.Append(context.Background(), leaf); err != nil && g.onAlarm != nil {
+	if _, err := appendLeaf(context.Background(), g.leaves, g.journal, registry.KindTelemetry, g.cellID, g.salt, record, g.now().UnixNano()); err != nil && g.onAlarm != nil {
 		g.onAlarm(ReasonLeafWriteFailed)
 	}
 }

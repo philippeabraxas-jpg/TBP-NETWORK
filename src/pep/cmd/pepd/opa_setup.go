@@ -92,6 +92,7 @@ func setupOPA(ctx context.Context, cellID string, salt []byte, policyID [32]byte
 		CellID:     cellID,
 		Salt:       salt,
 		Leaves:     cellLog,
+		Journal:    journal,
 		OnTrip:     onTrip,
 	})
 	if err != nil {
