@@ -115,9 +115,10 @@ Wired so far:
 | `supervisord` — monitor alerts (`TBPS1`, salt included) | `KindSupervision` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: no journal ⇒ `supervisord` does not start). A journal that refuses ⇒ no leaf ⇒ no alert is notified. |
 | `pepd` / `brokerd` — dev-escape-hatch flags (`TBDV1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ the start is refused |
 | `tmetrics` — translator measurement (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**), pointing at the journal of the service (pepd or brokerd) that owns the registry it appends to |
-| Library producers with a `Journal` option: translator degradation events (`TBTD1`), telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly), window aggregator, retention purge, anti-dribble detector | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | `Journal` option (nil = bare leaf) |
+| `pepd` — passport telemetry pipeline, **opt-in** `TBP_TELEMETRY=1` (#275): window aggregator (`TBAG1`, one leaf per sealed window, empty ones included), anti-dribble detector (`TBAD1`), retention purge (`TBRP1`) | `KindTelemetry`, `KindTelemetryAlert`, `KindRetentionPurge` | same journal (shared); a journal that refuses ⇒ no leaf and the `leaf-write-failed` alarm, never silence |
+| Library producers with a `Journal` option, not yet run inside a daemon: translator degradation events (`TBTD1`), telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly) | `KindTelemetry` | `Journal` option (nil = bare leaf) |
 
 Every producer of leaves in this repository now has a journal seam, and every
 daemon that writes leaves requires its journal. A library producer is bare only
-until its host wires `Journal` — nothing in-tree runs the telemetry or
-degradation producers inside a daemon yet.
+until its host wires `Journal` — `pepd` runs the telemetry pipeline (opt-in);
+nothing in-tree runs the translator degradation producer inside a daemon yet.

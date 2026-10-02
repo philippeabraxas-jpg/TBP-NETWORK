@@ -115,10 +115,11 @@ Câblés à ce jour :
 | `supervisord` — alertes du moniteur (`TBPS1`, sel compris) | `KindSupervision` | son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : sans journal `supervisord` ne démarre pas). Un journal qui refuse ⇒ aucune feuille ⇒ aucune alerte notifiée. |
 | `pepd` / `brokerd` — drapeaux d'échappatoires dev (`TBDV1`) | `KindTelemetry` | même journal (partagé) ; un journal qui refuse ⇒ le démarrage est refusé |
 | `tmetrics` — mesure du traducteur (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis**), qui désignent le journal du service (pepd ou brokerd) propriétaire du registre où il inscrit |
-| Producteurs de bibliothèque à option `Journal` : événements de dégradation du traducteur (`TBTD1`), puits de feuilles de l'exporteur de télémétrie (`TBTM1`, un `fsync` par record — à brancher en connaissance de cause), agrégateur de fenêtres, purge de rétention, détecteur anti-dribble | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | option `Journal` (nil = feuille nue) |
+| `pepd` — pipeline de télémétrie de passeport, **opt-in** `TBP_TELEMETRY=1` (#275) : agrégateur à fenêtres (`TBAG1`, une feuille par fenêtre scellée, vides comprises), détecteur anti-dribble (`TBAD1`), purge de rétention (`TBRP1`) | `KindTelemetry`, `KindTelemetryAlert`, `KindRetentionPurge` | même journal (partagé) ; un journal qui refuse ⇒ pas de feuille et alarme `leaf-write-failed`, jamais un silence |
+| Producteurs de bibliothèque à option `Journal`, pas encore exécutés dans un démon : événements de dégradation du traducteur (`TBTD1`), puits de feuilles de l'exporteur de télémétrie (`TBTM1`, un `fsync` par record — à brancher en connaissance de cause) | `KindTelemetry` | option `Journal` (nil = feuille nue) |
 
 Tout producteur de feuilles de ce dépôt a désormais une couture de journal, et
 tout démon qui écrit des feuilles exige son journal. Un producteur de
-bibliothèque n'est nu que tant que son hôte ne branche pas `Journal` : rien
-dans le dépôt ne fait encore tourner les producteurs de télémétrie ou de
-dégradation dans un démon.
+bibliothèque n'est nu que tant que son hôte ne branche pas `Journal` : `pepd`
+fait tourner le pipeline de télémétrie (opt-in) ; rien dans le dépôt ne fait
+encore tourner le producteur de dégradation du traducteur dans un démon.

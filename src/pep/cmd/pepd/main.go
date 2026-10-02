@@ -149,6 +149,10 @@
 //	                   journal chiffré du clair des feuilles de décision (et
 //	                   d'audit d'ano) et sa clé (0600, `tbp-audit keygen`),
 //	                   à vérifier avec `tbp-audit verify`.
+//	TBP_TELEMETRY      optionnel (§4.1-bis, #275) — « 1 » fait tourner la
+//	                   télémétrie anti-dribble (métadonnées de passeport
+//	                   seulement) : TBP_TELEMETRY_INTERVAL_MS, _WINDOW_S,
+//	                   _COLLECTOR. Voir telemetry.go.
 //
 // Doctrine §5.3 : le démon démarre en mode monitor au PREMIER déploiement
 // (jamais closed). Revue de sécurité #93 (attaque par rétrogradation) : à
@@ -444,6 +448,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Télémétrie anti-dribble (§4.1-bis, #275) : OPT-IN (TBP_TELEMETRY=1). Les feuilles (agrégat, purge,
+	// alerte) laissent leur clair dans le journal d'audit ; l'arrêt scelle la fenêtre en cours AVANT la
+	// fermeture du registre (ce defer, enregistré après celui du registre, s'exécute avant lui).
+	telCfg, err := telemetryFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	startTelemetry, stopTelemetry, err := setupTelemetry(telCfg, cellID, salt, cellLog, auditStore, ledger)
+	if err != nil {
+		return err
+	}
+	startTelemetry(ctx)
+	defer stopTelemetry()
 	watchdog, err := pep.NewClockWatchdog(pep.ClockOptions{
 		LocalIssuer: cellID, // en dégradé : seuls les jetons locaux-signés passent
 		CellID:      cellID,

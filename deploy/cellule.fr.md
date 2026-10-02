@@ -267,6 +267,21 @@ service.
 #                                  # "sync" = ancien chemin synchrone
 #   TBP_DURABILITY_WINDOW_MS=1000  # fenêtre d'opposabilité (défaut 1 s ;
 #                                  # plancher 4 × intervalle de checkpoint)
+#   TBP_TELEMETRY=1                # optionnel, OPT-IN (spec §4.1-bis, #275) :
+#                                  # télémétrie anti-dribble DANS pepd —
+#                                  # MÉTADONNÉES de sessions passeport seulement
+#                                  # (compteurs de quota monotones, jamais le
+#                                  # contenu d'un flux) → une feuille d'agrégat
+#                                  # TBAG1 par fenêtre scellée, une feuille TBAD1
+#                                  # par alerte, une TBRP1 par purge de rétention ;
+#                                  # le clair de chaque feuille va d'abord au
+#                                  # journal. Detect, pas prevent. Tout
+#                                  # TBP_TELEMETRY_* sans =1 est refusé.
+#   TBP_TELEMETRY_INTERVAL_MS=10000  # cadence d'export, [1000, 3600000]
+#   TBP_TELEMETRY_WINDOW_S=60      # fenêtre d'agrégation, [1, 3600]
+#   TBP_TELEMETRY_COLLECTOR=127.0.0.1:4739  # collecteur IPFIX local (UDP),
+#                                  # optionnel ; absent = pas d'envoi fil, les
+#                                  # feuilles restent produites
 #   TBP_OPA_REVISION_CHECK_INTERVAL_MS=10000  # optionnel (revue de sécurité
 #                                  # #92, A5) — fréquence de vérification que
 #                                  # la révision qu'OPA sert RÉELLEMENT

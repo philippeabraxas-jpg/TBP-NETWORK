@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -341,6 +342,10 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		"TBP_OPA_AUTOCLEAR_PROBES=2",
 		"TBP_OPA_AUTOCLEAR_INTERVAL_MS=300",
 		"TBP_OPA_REVISION_CHECK_INTERVAL_MS=500",
+		// Télémétrie anti-dribble (§4.1-bis, #275) : exercée de bout en bout (fenêtres d'une seconde).
+		"TBP_TELEMETRY=1",
+		"TBP_TELEMETRY_INTERVAL_MS=1000",
+		"TBP_TELEMETRY_WINDOW_S=1",
 		// T38/#71 : explicite même si async-bounded est le défaut — le
 		// selftest éping le modèle de durabilité qu'il exerce.
 		"TBP_DURABILITY=async-bounded",
@@ -628,6 +633,45 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		after[registry.KindDecision] >= 6, fmt.Sprintf("KindDecision=%d", after[registry.KindDecision]))
 	s.add(ph, "registre: bascule de posture tracée (KindTelemetry ≥ 1)",
 		after[registry.KindTelemetry] >= 1, fmt.Sprintf("KindTelemetry=%d", after[registry.KindTelemetry]))
+
+	// --- Télémétrie anti-dribble (§4.1-bis, #275) : un passeport consommé laisse, une fenêtre plus tard,
+	// une feuille d'agrégat « TBAG1 » dont le clair est dans le journal — des MÉTADONNÉES (compteurs), pas
+	// le contenu d'un flux. Le décompte se fait par /v1/passport/consume (le service qui exécute l'action).
+	{
+		now := time.Now().Unix()
+		jti := make([]byte, 16)
+		_, _ = rand.Read(jti)
+		tokPass, perr := mintToken(issuer, mintClaims{
+			iss: "selftest-dev", sub: "agent-1", exp: now + 45, iat: now, jti: jti, policyID: policyID[:],
+			action: "read", resource: "doc-1", class: 1, epoch: 0, version: 1, kid: kid,
+			quota: map[int]any{1: "10.99.99.7", 2: "send", 3: 1 << 20, 4: 3600},
+		})
+		if perr != nil {
+			s.fail(ph, "télémétrie: menthe d'un jeton à passeport", perr)
+			return
+		}
+		_, pe, perr := evaluate(pepdURL, tokPass, "read", "doc-1")
+		s.add(ph, "télémétrie: un jeton à passeport est admis (allow + passeport ouvert)",
+			perr == nil && pe.Allow, fmt.Sprintf("allow=%v reason=%s", pe.Allow, pe.Reason))
+		tel, telKey := 0, ""
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) && tel == 0 {
+			_, _, _ = postJSON(pepdURL+"/v1/passport/consume", map[string]any{"token": base64.StdEncoding.EncodeToString(tokPass), "n": 100})
+			time.Sleep(500 * time.Millisecond)
+			if k, kerr := registry.LoadRecordKey(auditKeyPath); kerr == nil {
+				telKey = "clé lue"
+				if recs, rerr := registry.ReadRecords(auditJournalPath, k); rerr == nil {
+					for _, r := range recs {
+						if bytes.HasPrefix(r.Record, []byte("TBAG1")) && r.VerifyHash() == nil {
+							tel++
+						}
+					}
+				}
+			}
+		}
+		s.add(ph, "télémétrie: un passeport consommé laisse une feuille d'agrégat TBAG1 dont le clair est journalisé",
+			tel > 0, fmt.Sprintf("%d agrégat(s) journalisé(s) %s", tel, telKey))
+	}
 
 	// --- Issue #208 (R-13) : les échappatoires dev actives laissent une feuille ---
 	// Ce pepd tourne avec TBP_OPA_INSECURE_TCP_DEV et
