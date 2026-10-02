@@ -123,6 +123,7 @@ func TestVerifyRequiresTrustedKey(t *testing.T) {
 		t.Fatalf("-log sans clé publique : code %d %s", code, errs)
 	}
 	_, otherV, _ := registry.GenerateCellKey("tbp/registry/autre")
+	// couverture par défaut : le log est illisible sous cette clé, mais les enregistrements déjà rejetés font un échec (1), pas un usage (2)
 	if code, out, _ := f.verify("-log", f.logDir, "-vkey", otherV); code != 1 || !strings.Contains(out, "REJETÉ") {
 		t.Fatalf("clé publique d'un autre log : code %d\n%s", code, out)
 	}
@@ -187,12 +188,83 @@ func TestCoverageListsLeavesWithoutAJournalEntry(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "index=2 kind=3") || !strings.Contains(out, "SANS-CLAIR") || !strings.Contains(out, "3 feuille(s) dans le log, 1 sans entrée de journal") {
 		t.Fatalf("feuille nue non listée : code %d\n%s%s", code, out, errs)
 	}
-	// sans -coverage, verify ne la voit pas : le journal est intact (c'est la raison d'être du mode)
-	if code, out, errs := f.verify("-log", f.logDir, "-vkey", f.vkey); code != 0 {
-		t.Fatalf("verify sans -coverage : code %d\n%s%s", code, out, errs)
+	// la couverture est le DÉFAUT avec -log : sans le drapeau, la feuille nue est vue quand même
+	if code, out, _ := f.verify("-log", f.logDir, "-vkey", f.vkey); code != 1 || !strings.Contains(out, "SANS-CLAIR") {
+		t.Fatalf("verify avec -log seul doit vérifier la couverture : code %d\n%s", code, out)
+	}
+	// -no-coverage la désactive EXPLICITEMENT, et le dit : « 0 échec » ne dit pas « journal complet »
+	if code, out, errs := f.verify("-log", f.logDir, "-vkey", f.vkey, "-no-coverage"); code != 0 || strings.Contains(out, "SANS-CLAIR") ||
+		!strings.Contains(errs, "couverture NON vérifiée") {
+		t.Fatalf("-no-coverage : code %d\n%s%s", code, out, errs)
 	}
 	// -coverage exige -log
 	if code, _, errs := f.verify("-coverage"); code != 2 || !strings.Contains(errs, "-coverage exige -log") {
 		t.Fatalf("-coverage sans -log : code %d %s", code, errs)
+	}
+}
+
+// Revue tierce du 2 octobre, 4.5 : une entrée EFFACÉE du journal passait avec « 0 échec » tant que la couverture
+// n'était pas demandée. Désormais -log la vérifie par défaut.
+func TestDeletedJournalEntryIsDetectedByDefault(t *testing.T) {
+	f := newFixture(t)
+	// le journal de 2 entrées : on efface la seconde
+	raw, err := os.ReadFile(f.records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("journal de %d lignes, 2 attendues", len(lines))
+	}
+	if err := os.WriteFile(f.records, append(lines[0], '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	var out, errs string
+	for i := 0; i < 100; i++ { // le checkpoint signé suit les feuilles avec un léger retard
+		code, out, errs = f.verify("-log", f.logDir, "-vkey", f.vkey)
+		if strings.Contains(out, "2 feuille(s) dans le log") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if code != 1 || !strings.Contains(out, "SANS-CLAIR") || !strings.Contains(out, "2 feuille(s) dans le log, 1 sans entrée de journal") {
+		t.Fatalf("entrée effacée non détectée : code %d\n%s%s", code, out, errs)
+	}
+	// l'ancien comportement reste possible, mais explicite et signalé
+	if code, _, errs := f.verify("-log", f.logDir, "-vkey", f.vkey, "-no-coverage"); code != 0 || !strings.Contains(errs, "couverture NON vérifiée") {
+		t.Fatalf("-no-coverage : code %d %s", code, errs)
+	}
+}
+
+func TestCoverageFlagsAndWarnings(t *testing.T) {
+	f := newFixture(t)
+	// les deux drapeaux s'excluent
+	if code, _, errs := f.verify("-log", f.logDir, "-vkey", f.vkey, "-coverage", "-no-coverage"); code != 2 || !strings.Contains(errs, "s'excluent") {
+		t.Fatalf("-coverage -no-coverage : code %d %s", code, errs)
+	}
+	// hash seul (sans -log) : l'avertissement dit ce qui n'est PAS vérifié
+	if code, _, errs := f.verify(); code != 0 || !strings.Contains(errs, "seule la correspondance hash") {
+		t.Fatalf("sans -log : code %d %s", code, errs)
+	}
+	// -index : vérification ciblée, pas de couverture (et le dit) ; -coverage la rétablit
+	var out, errs string
+	var code int
+	for i := 0; i < 100; i++ {
+		code, out, errs = f.verify("-log", f.logDir, "-vkey", f.vkey, "-index", "0")
+		if code == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if code != 0 || strings.Contains(out, "feuille(s) dans le log") || !strings.Contains(errs, "couverture NON vérifiée") {
+		t.Fatalf("-index : code %d\n%s%s", code, out, errs)
+	}
+	if code, out, errs := f.verify("-log", f.logDir, "-vkey", f.vkey, "-index", "0", "-coverage"); code != 0 || !strings.Contains(out, "feuille(s) dans le log") || strings.Contains(errs, "NON vérifiée") {
+		t.Fatalf("-index -coverage : code %d\n%s%s", code, out, errs)
+	}
+	// couverture complète, sans avertissement
+	if code, out, errs := f.verify("-log", f.logDir, "-vkey", f.vkey); code != 0 || !strings.Contains(out, "0 sans entrée de journal") || errs != "" {
+		t.Fatalf("complet : code %d\n%s%s", code, out, errs)
 	}
 }

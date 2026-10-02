@@ -8,12 +8,15 @@
 //	tbp-audit keygen -out records.key
 //	tbp-audit verify -records records.jsonl -key records.key \
 //	    [-log /var/lib/tbp/registry -vkey-file cell_log.pub | -vkey <clé note>] \
-//	    [-index N] [-reveal] [-coverage]
+//	    [-index N] [-reveal] [-no-coverage]
 //
-// -coverage (exige -log) fait la vérification INVERSE : il relit toutes les feuilles du log (checkpoint
-// signé vérifié) et liste celles qui n'ont AUCUNE entrée dans le journal — feuilles inscrites sans clair
-// (journal refusé en disque plein : feuille d'arrêt du backpressure, feuille d'épisode de durabilité) ou
-// antérieures au journal. Sans lui, un enregistrement orphelin est vu, une feuille sans clair ne l'est pas.
+// Avec -log, la vérification INVERSE (couverture) est faite PAR DÉFAUT : verify relit toutes les feuilles du log
+// (checkpoint signé vérifié) et liste celles qui n'ont AUCUNE entrée dans le journal — feuilles inscrites sans clair
+// (journal refusé en disque plein : feuille d'arrêt du backpressure, feuille d'épisode de durabilité), antérieures au
+// journal, OU dont l'entrée a été EFFACÉE du journal. Sans elle, un enregistrement orphelin est vu, une entrée
+// effacée ne l'est pas (revue tierce du 2 octobre, 4.5) : « 0 échec » ne voulait alors pas dire « journal complet ».
+// -no-coverage la désactive explicitement (un avertissement le dit) ; -index N, vérification ciblée, ne la fait pas
+// non plus sauf -coverage ; -coverage reste accepté (redondant avec -log, seul avec -index il change quelque chose).
 //
 // Sans -log, seule la correspondance (sel ‖ record) ↔ hash de la feuille est
 // contrôlée (« hash »). Avec -log, la feuille doit en plus figurer dans le log
@@ -60,7 +63,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage : tbp-audit keygen -out FICHIER | tbp-audit verify -records FICHIER -key FICHIER [-log RÉP (-vkey CLÉ | -vkey-file FICHIER)] [-index N] [-reveal] [-coverage]")
+	fmt.Fprintln(w, "usage : tbp-audit keygen -out FICHIER | tbp-audit verify -records FICHIER -key FICHIER [-log RÉP (-vkey CLÉ | -vkey-file FICHIER)] [-index N] [-reveal] [-coverage | -no-coverage]")
 }
 
 func cmdKeygen(args []string, stdout, stderr io.Writer) int {
@@ -89,7 +92,8 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 	vkeyFile := fs.String("vkey-file", "", "fichier contenant la clé publique du log")
 	index := fs.Int64("index", -1, "ne vérifier que l'enregistrement dont la feuille est à cet index (exige -log)")
 	reveal := fs.Bool("reveal", false, "afficher le clair des enregistrements (base64)")
-	coverage := fs.Bool("coverage", false, "lister les feuilles du log SANS entrée de journal (exige -log)")
+	coverage := fs.Bool("coverage", false, "couverture explicite (exige -log) ; déjà le défaut avec -log, utile avec -index")
+	noCoverage := fs.Bool("no-coverage", false, "ne PAS vérifier la couverture (une entrée effacée du journal ne sera pas vue)")
 	if fs.Parse(args) != nil || *records == "" || *keyFile == "" {
 		usage(stderr)
 		return 2
@@ -102,6 +106,12 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "-coverage exige -log")
 		return 2
 	}
+	if *coverage && *noCoverage {
+		fmt.Fprintln(stderr, "-coverage et -no-coverage s'excluent")
+		return 2
+	}
+	// Couverture par défaut dès qu'un log est fourni ; -index est une vérification ciblée (sauf -coverage explicite).
+	runCoverage := *logDir != "" && !*noCoverage && (*index < 0 || *coverage)
 	key, err := registry.LoadRecordKey(*keyFile)
 	if err != nil {
 		fmt.Fprintln(stderr, "clé :", err)
@@ -138,6 +148,13 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "vkey :", err)
 			return 2
 		}
+	}
+
+	switch {
+	case *logDir == "":
+		fmt.Fprintln(stderr, "avertissement : sans -log, seule la correspondance hash est vérifiée — ni l'inclusion dans le log signé ni la couverture (une entrée effacée du journal ne serait pas vue)")
+	case !runCoverage:
+		fmt.Fprintln(stderr, "avertissement : couverture NON vérifiée (-no-coverage ou -index) — une entrée effacée du journal ne serait pas vue ; « 0 échec » ne dit pas « journal complet »")
 	}
 
 	ctx := context.Background()
@@ -181,10 +198,13 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "%d enregistrement(s) examiné(s), %d échec(s)\n", shown, failed)
-	if *coverage {
+	if runCoverage {
 		uncovered, total, err := uncoveredLeaves(ctx, *logDir, v, recs)
 		if err != nil {
 			fmt.Fprintln(stderr, "coverage :", err)
+			if failed > 0 { // des enregistrements déjà rejetés : c'est un échec de vérification, pas un usage erroné
+				return 1
+			}
 			return 2
 		}
 		for _, u := range uncovered {
