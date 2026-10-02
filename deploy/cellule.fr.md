@@ -960,6 +960,46 @@ refus — réessayer avec un recul, jamais en boucle serrée. Transférer la fil
 second TBP quand le premier est compromis ou tombé n'est **pas** dans ce
 changement (reporté : à concevoir).
 
+### Le chien de garde : qui redémarre OPA (`opawatchdog`)
+
+`src/supervision/cmd/opawatchdog` est le superviseur qui agit sur ce signal. Il interroge
+`/v1/supervision/opa` sur les sockets d'administration listés et, seulement quand **toutes
+les sources lisibles** disent `stalled` pendant `TBP_OPAWD_CONFIRM` relevés consécutifs
+(défaut 3, un par seconde), exécute exactement `systemctl --no-ask-password restart
+tbp-opa.service` — rien d'autre, sans shell, environnement vide. `overloaded` ne redémarre
+jamais OPA (il répond ; un redémarrage jetterait le travail en cours et repartirait à
+froid). Une source illisible n'est jamais lue comme « bloqué » ; sans source lisible, il ne
+fait rien et journalise `blind`.
+
+```bash
+go build -o /usr/local/bin/opawatchdog ./src/supervision/cmd/opawatchdog
+useradd --system --no-create-home --shell /usr/sbin/nologin tbp-opa-watchdog
+install -m 0644 src/supervision/tbp-opa-watchdog.service /etc/systemd/system/
+install -m 0644 src/supervision/tbp-opa-watchdog.rules /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules
+# /etc/tbp/opa-watchdog.env (0600) :
+#   TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
+#   TBP_OPAWD_DRY_RUN=1          # d'abord : journalise la décision, ne redémarre rien
+systemctl daemon-reload && systemctl enable --now tbp-opa-watchdog
+journalctl -u tbp-opa-watchdog -f
+```
+
+Bornes (toutes fatales au démarrage si illisibles ou hors plage) : `TBP_OPAWD_COOLDOWN_S`
+(défaut 30) de repos après chaque tentative, et `TBP_OPAWD_MAX_PER_HOUR` (défaut 3)
+tentatives par heure glissante — **les redémarrages échoués comptent**, donc un
+redémarrage refusé ne peut pas boucler. Budget épuisé et OPA toujours bloqué : le journal
+dit `event=ESCALADE`, un humain décide. Ce budget borne aussi les dégâts si une source de
+statut était compromise et réclamait des redémarrages à volonté. La règle polkit donne à cet
+utilisateur le verbe `restart` sur cette seule unité, et rien de plus ; le nom d'unité doit
+être le même dans `TBP_OPAWD_UNIT` et dans la règle.
+
+Après un redémarrage, OPA est à froid (les premières requêtes peuvent être lentes, voir
+`tests/opa_latency`) et le watcher de révision re-vérifie le bundle épinglé avant que les
+conditions de la cellule se lèvent — un redémarrage ne contourne jamais la vérification de
+révision. Limites honnêtes : la décision de redémarrer est journalisée (journald), pas
+encore écrite en feuille de registre ; l'unité et la règle polkit sont vérifiées par des
+tests de cohérence mais pas exécutées sous un vrai systemd ici (le selftest exerce le vrai
+OPA, le vrai brokerd et le vrai chien de garde avec un `systemctl` de substitution).
+
 ## Les preuves de quorum de classe W sont à usage unique (issue #206)
 
 Une action de classe W porte une preuve de quorum k-of-n liée à (action,

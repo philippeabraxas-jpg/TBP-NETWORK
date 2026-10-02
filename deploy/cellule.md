@@ -903,6 +903,43 @@ curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/supervision/o
 never in a tight loop. Handing the queue to a second TBP when the first is
 compromised or down is **not** part of this change (deferred: design later).
 
+### The watchdog: who restarts OPA (`opawatchdog`)
+
+`src/supervision/cmd/opawatchdog` is the supervisor that acts on that signal. It polls
+`/v1/supervision/opa` on the admin sockets you list and, only when **every readable
+source** says `stalled` for `TBP_OPAWD_CONFIRM` consecutive polls (default 3, every
+second), runs exactly `systemctl --no-ask-password restart tbp-opa.service` — nothing
+else, no shell, empty environment. `overloaded` never restarts OPA (it is answering; a
+restart would drop the work in flight and start cold). An unreadable source is never read
+as "stalled"; with no readable source it does nothing and logs `blind`.
+
+```bash
+go build -o /usr/local/bin/opawatchdog ./src/supervision/cmd/opawatchdog
+useradd --system --no-create-home --shell /usr/sbin/nologin tbp-opa-watchdog
+install -m 0644 src/supervision/tbp-opa-watchdog.service /etc/systemd/system/
+install -m 0644 src/supervision/tbp-opa-watchdog.rules /etc/polkit-1/rules.d/50-tbp-opa-watchdog.rules
+# /etc/tbp/opa-watchdog.env (0600):
+#   TBP_OPAWD_SOURCES=pepd=/run/tbp/pepd-admin.sock,brokerd=/run/tbp/brokerd-admin.sock
+#   TBP_OPAWD_DRY_RUN=1          # first: log the decision, restart nothing
+systemctl daemon-reload && systemctl enable --now tbp-opa-watchdog
+journalctl -u tbp-opa-watchdog -f
+```
+
+Bounds (all fail-closed at startup if unreadable or out of range): `TBP_OPAWD_COOLDOWN_S`
+(default 30) of rest after every attempt, and `TBP_OPAWD_MAX_PER_HOUR` (default 3)
+attempts per sliding hour — **failed restarts count**, so a refused restart cannot loop.
+When the budget is spent and OPA is still stalled, the log says `event=ESCALADE`: a human
+decides. The budget is also what bounds the damage if a status source were compromised and
+asked for restarts at will. The polkit rule grants this user the `restart` verb on this one
+unit and nothing more; the unit name must match `TBP_OPAWD_UNIT` and the rule.
+
+After a restart OPA is cold (first requests may be slow, see `tests/opa_latency`) and the
+revision watcher re-verifies the pinned bundle before the cell's conditions clear — a
+restart never bypasses the revision check. Honest limits: the restart decision is logged
+to the journal, not yet written as a registry leaf; the unit and the polkit rule are
+verified by tests for consistency but not run under a real systemd here (the selftest
+exercises the real OPA, brokerd and watchdog with a stand-in `systemctl`).
+
 ## Class W quorum proofs are single-use (issue #206)
 
 A class-W action carries a k-of-n quorum proof bound to (action, resource,
