@@ -121,6 +121,22 @@ refusé (400) sans toucher à l'époque servie ; en mode mono-cellule (#97,
 aucun tracker), l'appel est refusé honnêtement (409) plutôt que de simuler
 un bail inexistant.
 
+## Ancres de la cellule miroir (§7.4)
+
+```sh
+./genesis anchors -m 2 -n 3 -epoch 7 -bundle <hash du bundle ancré, hex 32 octets> \
+    -from 2026-10-03T00:00:00Z -to 2026-10-04T00:00:00Z -out out
+#   -prev <fichier>   reprend les ancres déjà signées (le fichier entier est
+#                     re-signé) ; une époque déjà présente est refusée
+```
+
+Signe à m-of-n, avec les clés de contrôleurs restées dans le HSM, le fichier
+`out/mirror-anchors.json` : par époque, le hash du bundle ancré et la fenêtre
+saine (≤ 7 jours) DÉFINIE ici, jamais mesurée par le canari. C'est ce que lit
+brokerd (`TBP_MIRROR_ANCHORS_FILE`, `deploy/cellule.md`), qui le relit et le
+revérifie à chaque lecture. Le programme signe sur demande : QUOI ancrer et QUAND
+reste procédural.
+
 ## Dépendances
 
 - Go ≥ 1.23, CGO

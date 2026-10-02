@@ -105,6 +105,8 @@ func main() {
 		err = cmdSign(os.Args[2:])
 	case "anchor":
 		err = cmdAnchor(os.Args[2:])
+	case "anchors":
+		err = cmdAnchors(os.Args[2:])
 	case "verify":
 		err = cmdVerify(os.Args[2:])
 	case "renew":
@@ -125,6 +127,8 @@ func usage() {
   keygen  -n 3 -module <libsofthsm2.so> -pin <pin> -out <dir>
   sign    -m 2 -n 3 -authority <cellule> -module ... -pin ... -out <dir>
   anchor  -out <dir>
+  anchors -m 2 -n 3 -epoch <N> -bundle <hex 32 octets> -from <RFC3339> -to <RFC3339>
+          [-prev <fichier>] -module ... -pin ... -out <dir>
   verify  -m 2 -out <dir>
   renew   -m 2 -n 3 [-authority <cellule>] [-ttl 60] [-prev <fichier>]
           -module ... -pin ... -out <dir>
@@ -559,6 +563,110 @@ func cmdAnchor(args []string) error {
 		return err
 	}
 	fmt.Printf("ancrage écrit → %s\n", filepath.Join(*out, "anchor_epoch0.txt"))
+	fmt.Println("⚠ " + softHSMWarning)
+	return nil
+}
+
+// AnchorEntry / AnchorPayload / AnchorFile : le fichier d'ancres de la cellule miroir (§7.4, src/cluster/anchors.go).
+// Struct à champs fixes dans CET ordre ⇒ sérialisation JSON déterministe : la forme canonique signée est le
+// payload seul, « kind » comprise (séparation de domaine d'avec le jeton d'époque).
+type AnchorEntry struct {
+	Epoch       uint64 `json:"epoch"`
+	BundleHash  string `json:"bundle_hash"`  // hex, 32 octets
+	WindowStart string `json:"window_start"` // RFC3339 UTC
+	WindowEnd   string `json:"window_end"`   // RFC3339 UTC, exclusive
+}
+
+type AnchorPayload struct {
+	Kind    string        `json:"kind"`
+	Anchors []AnchorEntry `json:"anchors"`
+}
+
+type AnchorFile struct {
+	Payload    AnchorPayload `json:"payload"`
+	Signatures []Signature   `json:"signatures"`
+	Warning    string        `json:"warning,omitempty"`
+}
+
+const anchorsKind = "tbp-anchors-v1"
+
+// cmdAnchors : signe, à m-of-n par les contrôleurs de la genèse, une ancre de la cellule miroir (§7.4) : le hash
+// du bundle ancré d'une époque et la fenêtre saine DÉFINIE ICI (jamais mesurée par le canari). Avec -prev, les
+// ancres déjà signées sont reprises (le fichier entier est re-signé : un fichier = un payload = un quorum) ;
+// une époque déjà présente est refusée. Ce programme signe sur demande : QUOI ancrer et QUAND reste procédural.
+// À déposer là où pointe TBP_MIRROR_ANCHORS_FILE (brokerd relit et revérifie à chaque lecture).
+func cmdAnchors(args []string) error {
+	fs, module, pin, out := newFlagSet()
+	m := fs.Int("m", 2, "quorum (m de m-of-n) — même trousseau que la genèse")
+	n := fs.Int("n", 3, "nombre total de contrôleurs")
+	epoch := fs.Uint64("epoch", 0, "époque ancrée")
+	bundle := fs.String("bundle", "", "hash du bundle de règles ancré pour cette époque (hex, 32 octets)")
+	from := fs.String("from", "", "début de la fenêtre saine (RFC3339)")
+	to := fs.String("to", "", "fin de la fenêtre saine (RFC3339, exclusive ; ≤ 7 jours après le début)")
+	prev := fs.String("prev", "", "fichier d'ancres précédent dont reprendre les entrées")
+	fs.Parse(args)
+	if *m < 1 || *m > *n {
+		return fmt.Errorf("quorum invalide : m=%d, n=%d", *m, *n)
+	}
+	if raw, err := hex.DecodeString(*bundle); err != nil || len(raw) != 32 {
+		return fmt.Errorf("-bundle : hex de 32 octets requis")
+	}
+	start, err1 := time.Parse(time.RFC3339, *from)
+	end, err2 := time.Parse(time.RFC3339, *to)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("-from et -to : RFC3339 requis")
+	}
+	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
+		return fmt.Errorf("fenêtre incohérente : -to doit suivre -from, d'au plus 7 jours")
+	}
+	payload := AnchorPayload{Kind: anchorsKind}
+	if *prev != "" {
+		data, err := os.ReadFile(*prev)
+		if err != nil {
+			return fmt.Errorf("fichier d'ancres précédent illisible : %w", err)
+		}
+		var pf AnchorFile
+		if err := json.Unmarshal(data, &pf); err != nil {
+			return fmt.Errorf("fichier d'ancres précédent illisible : %w", err)
+		}
+		payload.Anchors = append(payload.Anchors, pf.Payload.Anchors...)
+	}
+	for _, a := range payload.Anchors {
+		if a.Epoch == *epoch {
+			return fmt.Errorf("l'époque %d est déjà ancrée dans %s", *epoch, *prev)
+		}
+	}
+	payload.Anchors = append(payload.Anchors, AnchorEntry{
+		Epoch: *epoch, BundleHash: strings.ToLower(*bundle),
+		WindowStart: start.UTC().Format(time.RFC3339), WindowEnd: end.UTC().Format(time.RFC3339),
+	})
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	h, err := openHSM(*module, *pin)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	af := AnchorFile{Payload: payload, Warning: softHSMWarning}
+	for i := 1; i <= *m; i++ {
+		sig, err := h.sign(i, canonical)
+		if err != nil {
+			return err
+		}
+		af.Signatures = append(af.Signatures, Signature{KeyID: i, Sig: hex.EncodeToString(sig)})
+		fmt.Printf("signature %d/%d : contrôleur %d (clé restée dans le HSM)\n", i, *m, i)
+	}
+	data, err := json.MarshalIndent(af, "", "  ")
+	if err != nil {
+		return err
+	}
+	outFile := filepath.Join(*out, "mirror-anchors.json")
+	if err := os.WriteFile(outFile, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("ancre de l'époque %d signée (%d-of-%d) → %s\n", *epoch, *m, *n, outFile)
 	fmt.Println("⚠ " + softHSMWarning)
 	return nil
 }

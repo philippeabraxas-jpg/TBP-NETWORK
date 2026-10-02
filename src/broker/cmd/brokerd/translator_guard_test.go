@@ -187,7 +187,7 @@ func TestTranslatorGuardDegradedStructuredIsDefaultDeny(t *testing.T) {
 	var mu sync.Mutex
 	cfg := translatorGuardConfig{enabled: true, probeURL: down.URL + "/h", interval: time.Hour, timeout: time.Second}
 	tr, start, err := setupTranslatorGuard(cfg, broker.StructuredTranslator{}, "cell-a", make([]byte, 16), &sinkLeaves{}, nil,
-		func(r string) { mu.Lock(); alarms = append(alarms, r); mu.Unlock() })
+		func(r string) { mu.Lock(); alarms = append(alarms, r); mu.Unlock() }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestTranslatorGuardDegradedStructuredIsDefaultDeny(t *testing.T) {
 // TestBrokerdWithoutGuardIsUnchanged : garde absente ⇒ comportement historique (pas de sonde, admission directe).
 func TestBrokerdWithoutGuardIsUnchanged(t *testing.T) {
 	cfg := translatorGuardConfig{}
-	tr, start, err := setupTranslatorGuard(cfg, nil, "cell-a", make([]byte, 16), nil, nil, nil)
+	tr, start, err := setupTranslatorGuard(cfg, nil, "cell-a", make([]byte, 16), nil, nil, nil, nil, nil)
 	if err != nil || tr != nil {
 		t.Fatalf("garde désactivée : le traducteur doit passer tel quel (%v, %v)", tr, err)
 	}

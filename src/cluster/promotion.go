@@ -27,6 +27,7 @@ import (
 	"time"
 
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
 
 // Erreurs de promotion — codes machine stables.
@@ -152,7 +153,9 @@ func (c *PromotionController) Promote(ctx context.Context, receiptJSON []byte) e
 	defer c.mu.Unlock()
 
 	var sr SignedReceipt
-	if err := json.Unmarshal(receiptJSON, &sr); err != nil {
+	// décodage STRICT (#289) : clé en double, champ inconnu ou contenu après l'objet ⇒ refus — la signature
+	// couvre la forme canonique re-sérialisée, pas les octets reçus ; « dernier gagne » ferait signer un autre document.
+	if err := strictjson.Decode(receiptJSON, &sr); err != nil {
 		return c.refuseLocked(ctx, "", 0, [32]byte{}, "malformed-receipt")
 	}
 	r := sr.Receipt

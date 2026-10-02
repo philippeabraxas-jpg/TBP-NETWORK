@@ -135,13 +135,19 @@ required, no redirect, no proxy). The controller boots degraded; a synchronous
 probe establishes the state before the broker serves, then the supervision loop
 re-probes — never the decision path. Every refusal is a healthy
 `translation-failed` with no detail for the agent (the translator's health is not
-an oracle). Mirror cell and human arbitration are **not** wired: degraded ⇒
-default-deny, for structured input too. Each request refused while degraded leaves
+an oracle). The **mirror cell** (§7.4) is wired, opt-in (`TBP_MIRROR_ANCHORS_FILE` +
+`TBP_MIRROR_CELL_KEYS_FILE`, see `deploy/cellule.md`): while degraded, a
+**critical** system (agent class F, I or W in the agent registry) gets its
+*structured* input admitted on the deterministic path — OPA, quorum, plan and
+contracts still apply unchanged — if a valid promotion receipt covers the cell's
+current epoch inside the anchored healthy window (`cluster.FileAnchorSource`,
+signed k-of-n by the genesis controllers, `genesis anchors`). Human arbitration is
+**not** wired: standard systems are default-deny. Each request refused while degraded leaves
 a `TBTD1` leaf and an alarm (deduplication is the monitor's job, §4.5).
 
 ## Not implemented here
 
 - A natural-language translator: `brokerd` still accepts only `structured`, so the
   guard here gates the structured path on the probe of a translator service.
-- A `MirrorCell` (§7.4) and an `Arbitration` (human queue) implementation for a
-  daemon — the controller supports them, nothing in-tree provides them yet.
+- An `Arbitration` (human queue) implementation for a daemon — the controller
+  supports it, nothing in-tree provides it yet.

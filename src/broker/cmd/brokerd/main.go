@@ -72,6 +72,8 @@
 //	                        dégradation (T25, §4.5) devant le traducteur ; avec
 //	                        TBP_TRANSLATOR_PROBE_URL (requis), _PROBE_INTERVAL_MS,
 //	                        _PROBE_TIMEOUT_MS — voir translator_guard.go
+//	TBP_MIRROR_ANCHORS_FILE + TBP_MIRROR_CELL_KEYS_FILE  optionnels, ENSEMBLE et
+//	                        avec la garde : cellule miroir (§7.4) — voir mirror.go
 //	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
 //	jamais les deux, jamais aucun (revue de sécurité #90, point 5) :
 //	TBP_ISSUER_SEED_FILE    seed Ed25519 de l'émetteur, hex 64, fichier
@@ -211,6 +213,7 @@ import (
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
+	translator "github.com/philippeabraxas-jpg/TBP-NETWORK/src/translator"
 )
 
 // defaultBrokerSocket est l'écoute par défaut du plan de DONNÉES
@@ -300,6 +303,7 @@ type config struct {
 	provProofFile    string
 	provExtra        []registry.ProvisioningFile
 	translatorGuard  translatorGuardConfig // contrôleur de dégradation (opt-in, T25)
+	mirror           mirrorConfig          // cellule miroir (§7.4, opt-in, avec la garde)
 	envelopeEndpoint string                // "" = enveloppe non câblée (doctrine existante)
 	socketPath       string                // plan de données : POST /v1/actions
 	adminSocketPath  string                // plan d'administration (revue #95) : GET /v1/supervision/*
@@ -385,6 +389,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		return nil, fmt.Errorf("TBP_TRANSLATOR=%q refusé — seul \"structured\" est assemblé en v1 (traducteur langage naturel : T24/T25)", tr)
 	}
 	guardCfg, err := translatorGuardFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	mirrorCfg, err := mirrorFromEnv(getenv, guardCfg.enabled)
 	if err != nil {
 		return nil, err
 	}
@@ -516,6 +524,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		opaInsecureTCPDev:    opaInsecureTCPDev,
 		opaRevisionInterval:  opaRevisionInterval,
 		translatorGuard:      guardCfg,
+		mirror:               mirrorCfg,
 		issuerSeedFile:       issuerSeedFile,
 		issuerPKCS11Module:   pkcs11Module,
 		issuerPKCS11Token:    pkcs11Token,
@@ -839,8 +848,19 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 
 	// Dégradation contrôlée du traducteur (T25, §4.5) : opt-in. Le contrôleur démarre dégradé ;
 	// startTranslatorGuard (ci-dessous) établit l'état par une sonde synchrone avant de servir.
+	// Cellule miroir (§7.4) : opt-in, seulement avec la garde. mirror reste un nil EXPLICITE sans miroir
+	// (un *mirrorGate nil dans l'interface serait non-nil).
+	var mirror *mirrorGate
+	var mirrorCell translator.MirrorCell
+	if cfg.mirror.enabled {
+		mirror, err = newMirrorGate(cfg.mirror, cfg.cellID, cfg.salt, cellLog, auditStore, controllers, cfg.quorumMin, epochs, nil)
+		if err != nil {
+			return fmt.Errorf("cellule miroir : %w", err)
+		}
+		mirrorCell = mirror
+	}
 	brkTranslator, startTranslatorGuard, err := setupTranslatorGuard(cfg.translatorGuard, broker.StructuredTranslator{},
-		cfg.cellID, cfg.salt, cellLog, auditStore, onTrip)
+		cfg.cellID, cfg.salt, cellLog, auditStore, onTrip, mirrorCell, systemClassOf(agentRegistry))
 	if err != nil {
 		return err
 	}
@@ -1052,6 +1072,38 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	})
+	// Cellule miroir (§7.4) : lecture du statut et promotion par reçu signé. Sur le socket ADMIN : l'accès au
+	// socket EST le contrôle d'accès ; le reçu est de toute façon vérifié (signature de la cellule miroir
+	// contre les clés mesurées, bundle = ancre signée par le quorum, fenêtre ancrée). Sans miroir configuré :
+	// refus honnête (404 sur le statut, 409 sur la promotion), pas un 200 qui simulerait un miroir.
+	adminMux.HandleFunc("GET /v1/supervision/mirror", func(w http.ResponseWriter, _ *http.Request) {
+		if mirror == nil {
+			http.Error(w, `{"error":"cellule miroir non configurée"}`, http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, mirror.Status())
+	})
+	adminMux.HandleFunc("POST /v1/supervision/mirror/promote", func(w http.ResponseWriter, r *http.Request) {
+		if mirror == nil {
+			http.Error(w, `{"error":"cellule miroir non configurée"}`, http.StatusConflict)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxMirrorBodyBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"corps illisible"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxMirrorBodyBytes {
+			http.Error(w, `{"error":"corps trop volumineux"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		st, err := mirror.Promote(r.Context(), body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, st)
 	})
 	// POST /v1/epoch/renew (issue #126) : renouvellement du bail d'époque
 	// pour un déploiement multi-cellules déjà en service. N'ajoute AUCUNE

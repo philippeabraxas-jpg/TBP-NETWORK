@@ -414,6 +414,33 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # listens on loopback), no redirect followed
 #   TBP_TRANSLATOR_PROBE_INTERVAL_MS=5000  # [500, 60000]
 #   TBP_TRANSLATOR_PROBE_TIMEOUT_MS=2000   # [100, 10000]
+#   TBP_MIRROR_ANCHORS_FILE=/etc/tbp/mirror-anchors.json  # optional, OPT-IN
+#                                  # (spec §7.4, #275), BOTH mirror files together
+#                                  # and only with the guard: mirror cell for
+#                                  # CRITICAL systems (classes F, I, W) while the
+#                                  # translator is degraded. Signed k-of-n by the
+#                                  # genesis controllers (`genesis anchors`, see
+#                                  # scripts/genesis/README.md): per epoch, the
+#                                  # anchored bundle hash and the healthy window
+#                                  # (DEFINED there, never measured by the
+#                                  # canary). Re-read and re-verified at every
+#                                  # read; NOT a measured provisioning file
+#                                  # (it changes every window and carries its own
+#                                  # quorum signature).
+#   TBP_MIRROR_CELL_KEYS_FILE=/etc/tbp/mirror-cell-keys.json  # {"cell-b":
+#                                  # "<Ed25519 pubkey hex>"} — root of trust of
+#                                  # the promotion receipts; MEASURED
+#                                  # (provisioning name "mirror-cell-keys").
+#                                  # This cell cannot be its own mirror. A
+#                                  # promotion is an operator act on the ADMIN
+#                                  # plane: POST /v1/supervision/mirror/promote
+#                                  # with the mirror cell's signed receipt; GET
+#                                  # /v1/supervision/mirror reads the status.
+#                                  # Available = a valid promotion covers the
+#                                  # CURRENT epoch and the anchored window has
+#                                  # not ended. Failover only lifts the
+#                                  # translator admission: OPA, quorum, plan and
+#                                  # contracts apply unchanged.
 #   # --- custody DEV (lab/CI only) — security review #113: unlike the
 #   # two OPA dev flags above, this one used to be accepted with NO
 #   # dedicated flag at all; refused at startup now unless

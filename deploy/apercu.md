@@ -164,7 +164,7 @@ brokerd/supervisord daemons), fail-closed, JSON report in
 - `brokerd` v1 only accepts the `structured` translator: the natural
   language / human escalation path is not wired (the degradation
   controller is delivered, tested and runs in `brokerd` as an opt-in
-  guard — without mirror cell or arbitration: degraded ⇒ default-deny).
+  guard; mirror-cell failover for critical systems is opt-in, human arbitration is not wired: otherwise degraded ⇒ default-deny).
 - Inter-domain is deferred by the spec itself (§13, issue #33).
 - The registry's bounded-async durability (T38) is delivered (PR #78,
   merged).
