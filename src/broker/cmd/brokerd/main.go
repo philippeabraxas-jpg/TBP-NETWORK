@@ -68,6 +68,10 @@
 //	                        démarrage
 //	TBP_TRANSLATOR          "structured" — seule valeur admise en v1
 //	                        (le traducteur langage naturel est T24/T25)
+//	TBP_TRANSLATOR_GUARD    optionnel, OPT-IN : « 1 » interpose le contrôleur de
+//	                        dégradation (T25, §4.5) devant le traducteur ; avec
+//	                        TBP_TRANSLATOR_PROBE_URL (requis), _PROBE_INTERVAL_MS,
+//	                        _PROBE_TIMEOUT_MS — voir translator_guard.go
 //	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
 //	jamais les deux, jamais aucun (revue de sécurité #90, point 5) :
 //	TBP_ISSUER_SEED_FILE    seed Ed25519 de l'émetteur, hex 64, fichier
@@ -295,9 +299,10 @@ type config struct {
 	provDisabled     bool
 	provProofFile    string
 	provExtra        []registry.ProvisioningFile
-	envelopeEndpoint string // "" = enveloppe non câblée (doctrine existante)
-	socketPath       string // plan de données : POST /v1/actions
-	adminSocketPath  string // plan d'administration (revue #95) : GET /v1/supervision/*
+	translatorGuard  translatorGuardConfig // contrôleur de dégradation (opt-in, T25)
+	envelopeEndpoint string                // "" = enveloppe non câblée (doctrine existante)
+	socketPath       string                // plan de données : POST /v1/actions
+	adminSocketPath  string                // plan d'administration (revue #95) : GET /v1/supervision/*
 	// Transport réseau du plan de données (revue de sécurité #124) :
 	// optionnel — "" ⇒ Unix uniquement (comportement historique, valeur
 	// par défaut). Si netListenAddr est non vide, les trois champs TLS
@@ -378,6 +383,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 	}
 	if tr := getenv("TBP_TRANSLATOR"); tr != "structured" {
 		return nil, fmt.Errorf("TBP_TRANSLATOR=%q refusé — seul \"structured\" est assemblé en v1 (traducteur langage naturel : T24/T25)", tr)
+	}
+	guardCfg, err := translatorGuardFromEnv(getenv)
+	if err != nil {
+		return nil, err
 	}
 	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes —
 	// jamais les deux (ambiguïté de custody), jamais aucun (fail-closed).
@@ -506,6 +515,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		opaExpectedUID:       opaExpectedUID,
 		opaInsecureTCPDev:    opaInsecureTCPDev,
 		opaRevisionInterval:  opaRevisionInterval,
+		translatorGuard:      guardCfg,
 		issuerSeedFile:       issuerSeedFile,
 		issuerPKCS11Module:   pkcs11Module,
 		issuerPKCS11Token:    pkcs11Token,
@@ -827,13 +837,21 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	}
 	go opaRevisionWatcher.Run(ctx)
 
+	// Dégradation contrôlée du traducteur (T25, §4.5) : opt-in. Le contrôleur démarre dégradé ;
+	// startTranslatorGuard (ci-dessous) établit l'état par une sonde synchrone avant de servir.
+	brkTranslator, startTranslatorGuard, err := setupTranslatorGuard(cfg.translatorGuard, broker.StructuredTranslator{},
+		cfg.cellID, cfg.salt, cellLog, auditStore, onTrip)
+	if err != nil {
+		return err
+	}
+
 	brk, err := broker.NewBroker(broker.BrokerOptions{
 		CellID:     cfg.cellID,
 		Salt:       cfg.salt,
 		Leaves:     cellLog,
 		Journal:    auditStore,
 		OPA:        opaClient,
-		Translator: broker.StructuredTranslator{},
+		Translator: brkTranslator,
 		Issuer:     issuer,
 		Epochs:     epochs,
 		Registry:   agentRegistry,
@@ -851,6 +869,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err != nil {
 		return err
 	}
+	startTranslatorGuard(ctx)
 
 	// Mux du plan de DONNÉES (D109) : uniquement la porte d'actions du
 	// serveur broker — l'agent qui atteint ce socket n'a aucune route de

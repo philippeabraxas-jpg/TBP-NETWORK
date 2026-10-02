@@ -115,9 +115,10 @@ Wired so far:
 | `supervisord` — monitor alerts (`TBPS1`, salt included) | `KindSupervision` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: no journal ⇒ `supervisord` does not start). A journal that refuses ⇒ no leaf ⇒ no alert is notified. |
 | `pepd` / `brokerd` — dev-escape-hatch flags (`TBDV1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ the start is refused |
 | `tmetrics` — translator measurement (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**), pointing at the journal of the service (pepd or brokerd) that owns the registry it appends to |
-| Library producers with a `Journal` option: translator degradation events (`TBTD1`), telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly), window aggregator, retention purge, anti-dribble detector | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | `Journal` option (nil = bare leaf) |
+| `brokerd` — translator degradation guard, **opt-in** `TBP_TRANSLATOR_GUARD=1` (#275): down / recovered episodes and every refusal while degraded (`TBTD1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ no leaf and the `translator-leaf-write-failed` alarm, the failure direction stays deny |
+| Library producers with a `Journal` option: telemetry exporter sink (`TBTM1`, one `fsync` per record — wire it knowingly), window aggregator, retention purge, anti-dribble detector | `KindTelemetry`, `KindRetentionPurge`, `KindTelemetryAlert` | `Journal` option (nil = bare leaf) |
 
 Every producer of leaves in this repository now has a journal seam, and every
 daemon that writes leaves requires its journal. A library producer is bare only
-until its host wires `Journal` — nothing in-tree runs the telemetry or
-degradation producers inside a daemon yet.
+until its host wires `Journal` — nothing in-tree runs the telemetry
+producers inside a daemon yet; `brokerd` runs the degradation controller (opt-in).
