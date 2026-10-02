@@ -280,6 +280,7 @@ type config struct {
 	opaInsecureTCPDev   bool
 	opaRevisionInterval time.Duration // 0 ⇒ défaut du watcher (§92.A5)
 	opaTuning           pep.OPATuning // file bornée devant OPA + détection de blocage (TBP_OPA_MAX_INFLIGHT…)
+	posture             []byte        // interrupteurs de sécurité engagés dans le témoin (security-posture, revue tierce 4.6)
 	// Custody de l'émetteur (§12) : EXACTEMENT un des deux mécanismes.
 	// issuerSeedFile ("" ⇒ HSM) : seed Ed25519 DEV, fichier 0600 — labo/CI
 	// uniquement. Les quatre champs issuerPKCS11* ("" ⇒ dev), tous requis
@@ -537,6 +538,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		opaInsecureTCPDev:    opaInsecureTCPDev,
 		opaRevisionInterval:  opaRevisionInterval,
 		opaTuning:            opaTuning,
+		posture:              brokerdPosture(opaTuning, guardCfg, arbCfg, getenv("TBP_TRANSLATOR")),
 		translatorGuard:      guardCfg,
 		mirror:               mirrorCfg,
 		arbitration:          arbCfg,

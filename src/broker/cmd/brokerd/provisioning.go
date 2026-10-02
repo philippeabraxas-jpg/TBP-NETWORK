@@ -85,7 +85,21 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 		topology = "multi"
 	}
 	files = append(files, registry.ProvisioningFile{Name: "quorum-settings", Content: pep.QuorumSettings(cfg.quorumMin, topology)})
+	// la POSTURE : les interrupteurs de sécurité (arbitrage, garde du traducteur, file d'admission OPA…) — une dérive
+	// diverge comme TBP_QUORUM_MIN (revue tierce, 4.6)
+	files = append(files, registry.ProvisioningFile{Name: pep.ProvisioningPostureName, Content: cfg.posture})
 	return append(files, cfg.provExtra...)
+}
+
+// brokerdPosture : les interrupteurs de sécurité de brokerd, dérivés de valeurs DÉJÀ validées par loadConfig (les mêmes
+// que celles qui configurent le démon). Pas les réglages fins (TTL, tailles, durées).
+func brokerdPosture(tuning pep.OPATuning, guard translatorGuardConfig, arb arbitrationConfig, translator string) []byte {
+	p := pep.Posture{}
+	p["arbitration"] = pep.OnOff(arb.enabled) // active : ouvre un chemin d'admission d'une demande dégradée sur signature d'opérateur
+	p["translator-guard"] = pep.OnOff(guard.enabled)
+	p["translator"] = translator
+	p.OPAPosture(tuning)
+	return p.Bytes()
 }
 
 // printProvisioningCondition recalcule la condition de transition à signer (#264) : même configuration

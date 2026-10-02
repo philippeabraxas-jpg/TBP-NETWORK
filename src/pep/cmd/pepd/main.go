@@ -308,11 +308,15 @@ func run() error {
 	// Mesure des trousseaux épinglés (issue #192) : AVANT le démarrage mesuré,
 	// dont la genèse écrit des feuilles (la taille du journal distingue ici un
 	// premier démarrage d'un témoin effacé).
+	posture, err := pepdPosture(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("provisionnement: posture de sécurité: %w", err)
+	}
 	if err := setupProvisioning(ctx, provisioningInputs{
 		cellID: cellID, regDir: regDir, salt: salt,
 		keyringFile: os.Getenv("TBP_KEYRING_FILE"), quorumKeyringFile: os.Getenv("TBP_QUORUM_KEYRING_FILE"),
 		quorumKeyring: quorumKeyring, quorumMin: quorumMin, topology: topologyName(multiTopology),
-		journal: auditStore,
+		posture: posture, journal: auditStore,
 	}, signer, verifier, cellLog, os.Getenv); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
 	}

@@ -632,6 +632,109 @@ func TestBrokerdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
 	}
 }
 
+// --- interrupteurs de sécurité attestés (revue tierce du 2 octobre, 4.6) ------------------
+
+// Couper la file d'admission d'OPA, la détection de blocage, ou activer l'arbitrage / la garde du traducteur
+// entre deux démarrages changeait la posture sans divergence. Engagés dans le témoin, ils divergent comme k (#224).
+func TestBrokerdSecuritySwitchesAreAttestedAndGoverned(t *testing.T) {
+	for name, edit := range map[string]func(env map[string]string){
+		"file d'admission coupée":     func(e map[string]string) { e["TBP_OPA_MAX_INFLIGHT"] = "0" },
+		"détection de blocage coupée": func(e map[string]string) { e["TBP_OPA_STALL_WINDOW_MS"] = "0" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			sock := filepath.Join(t.TempDir(), "broker.sock")
+			fx := newRunFixture(t, sock)
+			fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("premier démarrage : %v", err)
+			}
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("redémarrage à posture identique refusé : %v", err)
+			}
+			proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+			fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+			edit(fx.env)
+			if err := boot(t, fx, sock); err == nil {
+				t.Fatal("posture changée par l'environnement acceptée sans preuve")
+			}
+			signProof(t, fx, proof, conditionProvisioningTransition, 1) // k attesté = 2
+			if err := boot(t, fx, sock); err == nil {
+				t.Fatal("posture changée AUTORISÉE par une seule signature")
+			}
+			signProof(t, fx, proof, conditionProvisioningTransition, 2)
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("transition signée par le quorum refusée : %v", err)
+			}
+			delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("nouvelle posture non retenue : %v", err)
+			}
+		})
+	}
+}
+
+// Les VALEURS de réglage fin ne sont pas la posture (choix d'arbitrage : interrupteurs seulement).
+func TestBrokerdTuningValuesAreNotAttested(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatal(err)
+	}
+	fx.env["TBP_OPA_MAX_QUEUE"] = "64"
+	fx.env["TBP_OPA_SUBJECT_SHARE"] = "50"
+	fx.env["TBP_OPA_MAX_INFLIGHT"] = "4"
+	fx.env["TBP_OPA_STALL_WINDOW_MS"] = "9000"
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("un réglage fin (valeurs) a divergé alors qu'il n'est pas un interrupteur : %v", err)
+	}
+}
+
+func TestBrokerdPostureIsDerivedFromValidatedConfig(t *testing.T) {
+	cfg, err := loadConfig(mapGetenv(validConfigEnv()), statPresent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"arbitration=off\n", "translator-guard=off\n", "translator=structured\n", "opa-admission=on\n", "opa-stall-detection=on\n"} {
+		if !strings.Contains(string(cfg.posture), want) {
+			t.Errorf("posture par défaut sans %q :\n%s", want, cfg.posture)
+		}
+	}
+	// la posture entre dans les fichiers mesurés (donc dans le condensé du témoin et le recalcul hors machine #264)
+	found := false
+	for _, f := range provisioningFiles(cfg) {
+		if f.Name == pep.ProvisioningPostureName && string(f.Content) == string(cfg.posture) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("security-posture absente des fichiers mesurés")
+	}
+	// chaque interrupteur la change
+	guard := map[string]string{"TBP_TRANSLATOR_GUARD": "1", "TBP_TRANSLATOR_PROBE_URL": "http://127.0.0.1:9/health"}
+	for name, c := range map[string]struct {
+		kv   map[string]string
+		want string
+	}{
+		"garde":     {guard, "translator-guard=on\n"},
+		"arbitrage": {map[string]string{"TBP_TRANSLATOR_GUARD": "1", "TBP_TRANSLATOR_PROBE_URL": "http://127.0.0.1:9/health", "TBP_ARBITRATION": "1"}, "arbitration=on\n"},
+		"file":      {map[string]string{"TBP_OPA_MAX_INFLIGHT": "0"}, "opa-admission=off\n"},
+		"blocage":   {map[string]string{"TBP_OPA_STALL_WINDOW_MS": "0"}, "opa-stall-detection=off\n"},
+	} {
+		env := validConfigEnv()
+		for k, v := range c.kv {
+			env[k] = v
+		}
+		c2, err := loadConfig(mapGetenv(env), statPresent)
+		if err != nil {
+			t.Fatalf("%s : %v", name, err)
+		}
+		if string(c2.posture) == string(cfg.posture) || !strings.Contains(string(c2.posture), c.want) {
+			t.Errorf("%s : la posture doit changer et porter %q :\n%s", name, c.want, c2.posture)
+		}
+	}
+}
+
 // Issue #236 : la preuve de transition est liée à l'état de départ ET à l'état cible.
 // Une rotation légitime est signée ; la preuve reste en place ; un état différent
 // (agent ajouté hors-bande) ne doit pas être ré-engagé par elle, ni l'état précédent

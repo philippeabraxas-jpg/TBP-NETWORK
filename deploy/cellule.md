@@ -731,7 +731,17 @@ scope used to pass without any alarm.
   **scale settings** (`quorum-settings`: `TBP_QUORUM_MIN` and the topology, #224): lowering k by
   editing the environment is a divergence, and the change is authorised by the k that was attested.
   Adopting this on a cell that already ran takes one transition proof (the new entry changes the
-  digest). Both accept
+  digest). Both also attest the **security switches** (`security-posture`, third-party review 4.6):
+  what is *on*, not how it is tuned. `pepd`: `ano-proxy` (is `TBP_PROXY_ANO_SOCKET` set — removing it
+  disables anonymisation), `opa` (not disabled for dev), `opa-trip-after` (raising it weakens the T14
+  latch), `opa-autoclear`, `opa-admission` and `opa-stall-detection` (the bounded OPA queue and the
+  stall signal are on), `telemetry`, `durability`. `brokerd`: `arbitration`, `translator-guard`,
+  `translator`, `opa-admission`, `opa-stall-detection`. Changing any of them by editing the environment
+  is a divergence, authorised by the k that was attested. **Tuning values are not attested**
+  (queue size, per-subject share, windows, TTLs): an operator adjusts them without a quorum proof.
+  **Upgrading:** the first start after this change refuses on `security-posture` (a new entry); run
+  `<daemon> -print-provisioning-condition` and have the controllers sign it once, like any other
+  transition. Both accept
   `TBP_PROVISIONING_EXTRA_FILES`. **`anod` measures itself** (#272): it restarts independently of
   `pepd`, so the daemon that decides what leaves the cell cannot be left to someone else's start-up
   check. `anod` attests its **rules file** (`ano-rules`), issuer keyring, controller keyring
