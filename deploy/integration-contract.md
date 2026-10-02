@@ -71,3 +71,54 @@ impersonation, it does not prevent it. Run OPA under its own account, with the s
 directory ownership set so that only `pepd` and OPA share it (see [cellule.md](cellule.md)), and
 count on measured boot (#112) and the provisioning witness (#192) for what an attacker with that
 account could change.
+
+## 5. The exact request bodies, and how the agent learns them (#289)
+
+Every JSON body the cell reads from an agent, a proxy or an operator is decoded **strictly**
+(`src/strictjson`). The decoder refuses what the standard Go decoder would accept silently and
+what a proxy, a WAF, a log or a review tool would read differently:
+
+- a **duplicate key**, at any depth (the standard decoder keeps the last one);
+- a key that is not **exactly** a documented field name — unknown fields, but also a different
+  case (`"ACTION"` is not `"action"`);
+- **content after** the document (`{…} {…}`);
+- **invalid UTF-8**.
+
+A legitimate client sends only the documented fields, with their exact case, in one document.
+
+| Endpoint (plane) | Body — exact field names |
+|---|---|
+| `POST /v1/actions` (`brokerd`, data) | `subject`, `intent` — both strings |
+| …`intent` in structured mode (a JSON document **inside** that string, decoded strictly too) | `action`, `resource` (both required); optional `class` (0–3), `object_seal` (hex, 32 bytes), `quota` {`resource`, `operation`, `volume_max`, `window_s`}, `quorum_proof` (hex), `plan_binding` (hex) |
+| `POST /v1/evaluate` (`pepd`, data) | `token` (base64), `action`, `resource`; optional `object_seal` (hex) |
+| `POST /v1/passport/consume` (`pepd`, data) | `token` (base64), `n` |
+| `POST /v1/mode` (`pepd`, admin) | `mode`, `expiry` (Unix seconds), `signatures` [{`key_id`, `signature`}] — the shape `quorumproof` writes |
+| `POST /v1/failclosed/clear` (`pepd`, admin) | `condition`; for class W also `expiry`, `signatures` |
+
+The other bodies (`plan/submit`, `plan/approve`, `plan/revoke`, the provisioning registries) were
+already strict (#241, #274).
+
+**How the agent is told the right structure.** There is no schema endpoint: this table is the
+contract. What the agent gets at run time is a **machine-readable reason** that says what to
+fix, never the content of its request:
+
+```json
+{"allow":false,"reason":"request-invalid",
+ "detail":{"code":"unknown-field","key":"Subject","accepted":["intent","subject"]}}
+```
+
+- Malformed **body** → HTTP 400; `reason` `request-invalid` (`brokerd`) or `"error":"corps JSON
+  illisible"` (`pepd`), with `detail`.
+- Malformed **intent** (the JSON inside `intent`) → HTTP 200, `allow:false`, `reason`
+  `translation-failed`, with `detail`.
+- `detail.code` is one of `duplicate-key`, `unknown-field` (unknown **or** wrong case; `accepted`
+  lists the exact names valid at that place, `path` locates a nested object), `trailing-content`,
+  `invalid-utf8`, `syntax`, `type`, and for the structured intent `missing-field` (`action` or
+  `resource` absent) and `out-of-range` (`class`). `key` is the offending **name**, truncated
+  to 64 bytes; no value of the request is ever echoed.
+- A **decision** refusal (OPA, quorum, plan, envelope…) carries no `detail`: it would be an oracle
+  on the policy. Only the *form* of the request is explained.
+
+An integration that sits between an LLM agent and the cell should hand `detail` back to the agent
+verbatim: it is written so that the agent can correct its next request (`accepted` is the list
+of names it may use there).

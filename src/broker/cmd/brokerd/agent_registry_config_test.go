@@ -122,28 +122,3 @@ func TestLoadAgentRegistryRefusesDuplicateKeys(t *testing.T) {
 		t.Fatalf("clés identiques dans des objets distincts refusées à tort : %v", err)
 	}
 }
-
-func TestDuplicateJSONKeyDetector(t *testing.T) {
-	cases := []struct {
-		in   string
-		key  string
-		want bool
-	}{
-		{`{}`, "", false},
-		{`{"a":1,"b":2}`, "", false},
-		{`{"a":1,"a":2}`, "a", true},
-		{`{"a":{"x":1},"b":{"x":2}}`, "", false},
-		{`{"a":{"x":1,"x":2}}`, "x", true},
-		{`{"a":[{"x":1},{"x":2}],"b":[1,2,3]}`, "", false},
-		{`{"a":[{"x":1,"x":2}]}`, "x", true},
-		{`{"a":[1,2],"a":3}`, "a", true},
-		{`{"a":"b","b":"a"}`, "", false}, // une valeur chaîne n'est pas une clé
-		{`[{"a":1},{"a":1}]`, "", false},
-	}
-	for _, c := range cases {
-		k, got := duplicateJSONKey([]byte(c.in))
-		if got != c.want || k != c.key {
-			t.Fatalf("%s : (%q,%v), veut (%q,%v)", c.in, k, got, c.key, c.want)
-		}
-	}
-}

@@ -71,3 +71,54 @@ ne l'empêche pas. Faire tourner OPA sous son propre compte, avec le mode de la 
 répertoire réglés pour que seuls `pepd` et OPA la partagent (voir [cellule.fr.md](cellule.fr.md)), et
 compter sur le démarrage mesuré (#112) et le témoin de provisionnement (#192) pour ce qu'un attaquant
 disposant de ce compte pourrait changer.
+
+## 5. Les corps de requête exacts, et comment l'agent les apprend (#289)
+
+Tout corps JSON que la cellule lit d'un agent, d'un proxy ou d'un opérateur est décodé
+**strictement** (`src/strictjson`). Le décodeur refuse ce que le décodeur standard de Go accepte
+en silence et qu'un proxy, un WAF, un journal ou un outil de revue lirait autrement :
+
+- une **clé en double**, à n'importe quelle profondeur (le décodeur standard garde la dernière) ;
+- une clé qui n'est pas **exactement** un nom de champ documenté — champ inconnu, mais aussi
+  casse différente (`"ACTION"` n'est pas `"action"`) ;
+- du **contenu après** le document (`{…} {…}`) ;
+- de l'**UTF-8 invalide**.
+
+Un client légitime n'envoie que les champs documentés, avec leur casse exacte, en un seul document.
+
+| Endpoint (plan) | Corps — noms de champs exacts |
+|---|---|
+| `POST /v1/actions` (`brokerd`, données) | `subject`, `intent` — deux chaînes |
+| …`intent` en mode structuré (un document JSON **dans** cette chaîne, décodé strictement lui aussi) | `action`, `resource` (obligatoires) ; optionnels `class` (0–3), `object_seal` (hex, 32 octets), `quota` {`resource`, `operation`, `volume_max`, `window_s`}, `quorum_proof` (hex), `plan_binding` (hex) |
+| `POST /v1/evaluate` (`pepd`, données) | `token` (base64), `action`, `resource` ; optionnel `object_seal` (hex) |
+| `POST /v1/passport/consume` (`pepd`, données) | `token` (base64), `n` |
+| `POST /v1/mode` (`pepd`, admin) | `mode`, `expiry` (secondes Unix), `signatures` [{`key_id`, `signature`}] — la forme qu'écrit `quorumproof` |
+| `POST /v1/failclosed/clear` (`pepd`, admin) | `condition` ; en classe W aussi `expiry`, `signatures` |
+
+Les autres corps (`plan/submit`, `plan/approve`, `plan/revoke`, les registres de provisionnement)
+étaient déjà stricts (#241, #274).
+
+**Comment l'agent apprend la bonne structure.** Il n'y a pas d'endpoint de schéma : ce tableau est
+le contrat. Ce que l'agent reçoit à l'exécution, c'est une **raison lisible par une machine** qui
+dit quoi corriger, jamais le contenu de sa demande :
+
+```json
+{"allow":false,"reason":"request-invalid",
+ "detail":{"code":"unknown-field","key":"Subject","accepted":["intent","subject"]}}
+```
+
+- **Corps** mal formé → HTTP 400 ; `reason` `request-invalid` (`brokerd`) ou `"error":"corps JSON
+  illisible"` (`pepd`), avec `detail`.
+- **Intention** mal formée (le JSON dans `intent`) → HTTP 200, `allow:false`, `reason`
+  `translation-failed`, avec `detail`.
+- `detail.code` vaut `duplicate-key`, `unknown-field` (inconnu **ou** casse inexacte ; `accepted`
+  liste les noms exacts valides à cet endroit, `path` situe un objet imbriqué), `trailing-content`,
+  `invalid-utf8`, `syntax`, `type`, et pour l'intention structurée `missing-field` (`action` ou
+  `resource` absent) et `out-of-range` (`class`). `key` est le **nom** fautif, tronqué à 64
+  octets ; aucune valeur de la demande n'est jamais renvoyée.
+- Un refus de **décision** (OPA, quorum, plan, enveloppe…) ne porte aucun `detail` : ce serait un
+  oracle sur la politique. Seule la *forme* de la demande est expliquée.
+
+Une intégration placée entre un agent LLM et la cellule doit rendre `detail` tel quel à l'agent :
+il est écrit pour que l'agent corrige sa demande suivante (`accepted` est la liste des noms qu'il
+peut employer à cet endroit).

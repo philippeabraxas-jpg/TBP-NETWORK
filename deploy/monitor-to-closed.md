@@ -76,11 +76,14 @@ public keys; the rollback window (step 4) is decided.
 # QuorumMessage("mode-closed", expiry) = "TBPQ1" ‖ len(condition) u16 BE
 # ‖ condition ‖ expiry u64 BE (pep.QuorumMessage). A body that only
 # DECLARES names ("signers": [...], the pre-#89 wire format) is no
-# longer even a valid field — it is silently ignored and the request is
-# refused for lack of any signature:
+# longer even a valid field — the body is decoded strictly (#289), so it
+# is refused as soon as it is read: 400 with {"detail":{"code":
+# "unknown-field","key":"signers","accepted":[…]}}, and the posture does
+# not move:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
-# expected: 403 (no signatures at all). One valid signature (k=2) MUST
+# expected: 400 (unknown field). A body in the right shape with no
+# signature gets 403, and one valid signature (k=2) MUST
 # also fail — see deploy/selftest/mono.go's mono phase for the full
 # worked example (signCtrl helper) that produces real per-controller
 # signatures and exercises 1-signature-403 → 2-signature-200:

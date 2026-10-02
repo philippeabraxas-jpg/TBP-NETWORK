@@ -342,10 +342,19 @@ func TestListenerConsumeForgedProofRejected(t *testing.T) {
 	// Attaque historique exacte : jti nu, aucun jeton signé présenté.
 	legacyBody, _ := json.Marshal(map[string]any{"jti": hex.EncodeToString(testJTI[:]), "n": 1})
 	status, data := postJSON(t, f.srv.URL+"/v1/passport/consume", legacyBody)
-	var legacy ConsumeResponse
+	// Depuis #289 le corps est décodé STRICTEMENT : le champ « jti » n'existe plus sur le fil, il est
+	// refusé dès le décodage (400, unknown-field) — avant même la preuve de possession (403, plus bas).
+	var legacy struct {
+		Detail struct{ Code, Key string } `json:"detail"`
+	}
 	_ = json.Unmarshal(data, &legacy)
+	if status != http.StatusBadRequest || legacy.Detail.Code != "unknown-field" || legacy.Detail.Key != "jti" {
+		t.Fatalf("jti nu (attaque #90.3 historique) : status=%d detail=%+v, veut 400 unknown-field « jti »", status, legacy.Detail)
+	}
+	// Le même corps SANS le champ historique (aucun jeton) : refusé par la preuve de possession.
+	status, _ = postJSON(t, f.srv.URL+"/v1/passport/consume", []byte(`{"n":1}`))
 	if status != http.StatusForbidden {
-		t.Fatalf("jti nu (attaque #90.3 historique) : status=%d, veut 403 (aucun champ token ⇒ preuve de possession vide)", status)
+		t.Fatalf("aucun champ token : status=%d, veut 403 (preuve de possession vide)", status)
 	}
 
 	// Octets aléatoires en Token : pas un COSE_Sign1 valide — possession

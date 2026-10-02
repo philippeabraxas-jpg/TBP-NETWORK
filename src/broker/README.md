@@ -99,6 +99,9 @@ Ce package construit (issue [#59](https://github.com/philippeabraxas-jpg/TBP-NET
 - Le `jti` est aléatoire par construction (§4 du schéma) : le profil de
   déterminisme §11.3 porte sur les **verdicts et raisons**, pas sur les
   identifiants.
+- Corps et intention décodés STRICTEMENT (#289) : clé en double, champ inconnu ou de casse inexacte,
+  contenu après l'objet, UTF-8 invalide ⇒ refus, avec un `detail` lisible (code stable, clé fautive,
+  noms acceptés) — voir `deploy/integration-contract.md` §5.
 - Raisons stables, machine-readable : `request-invalid`,
   `epoch-unavailable` (faute, alarmée), `translation-failed`, `opa-*`
   (T11), `quorum-required`, `quorum-insufficient` (§7.5 — le gate trace en

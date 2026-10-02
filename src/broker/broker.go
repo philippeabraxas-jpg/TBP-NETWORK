@@ -23,7 +23,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -32,6 +31,7 @@ import (
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
 
 // maxIntentBytes borne l'intention déclarée par l'agent (le CONTENU métier
@@ -211,15 +211,47 @@ func rejectSmugglingUnicode(strs ...string) error {
 	return nil
 }
 
+// refusalError est un refus de traduction qui sait dire à l'agent ce qui ne va pas (#289).
+type refusalError struct {
+	detail strictjson.Detail
+	msg    string
+}
+
+func (e *refusalError) Error() string { return e.msg }
+
+// refusalDetailOf rend le détail destiné à l'agent, s'il y en a un (erreur de forme du document JSON,
+// champ obligatoire absent, valeur hors bornes) ; nil pour toute autre cause.
+func refusalDetailOf(err error) *strictjson.Detail {
+	if se, ok := strictjson.As(err); ok {
+		d := se.Detail
+		return &d
+	}
+	var re *refusalError
+	if errors.As(err, &re) {
+		d := re.detail
+		return &d
+	}
+	return nil
+}
+
 // Translate parse l'intention structurée. Tout écart de forme est une
-// erreur (« je ne sais pas traduire ») — le broker refuse.
+// erreur (« je ne sais pas traduire ») — le broker refuse. Le décodage est STRICT (#289) : clé en
+// double, champ inconnu ou de casse inexacte, contenu après l'objet, UTF-8 invalide ⇒ refus, avec le
+// détail que l'agent peut lire pour corriger sa demande.
 func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Translation, error) {
 	var s structuredIntent
-	if err := json.Unmarshal([]byte(intent), &s); err != nil {
+	if err := strictjson.Decode([]byte(intent), &s); err != nil {
 		return Translation{}, fmt.Errorf("broker: intention structurée illisible : %w", err)
 	}
 	if s.Action == "" || s.Resource == "" {
-		return Translation{}, errors.New("broker: intention structurée sans action ou resource")
+		key := "action"
+		if s.Action != "" {
+			key = "resource"
+		}
+		return Translation{}, &refusalError{
+			detail: strictjson.Detail{Code: "missing-field", Key: key},
+			msg:    "broker: intention structurée sans action ou resource",
+		}
 	}
 	if err := rejectSmugglingUnicode(s.Action, s.Resource); err != nil {
 		return Translation{}, err
@@ -227,7 +259,10 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 	tr := Translation{Action: s.Action, Resource: s.Resource}
 	if s.Class != nil {
 		if *s.Class > uint8(pep.ClassOut) {
-			return Translation{}, errors.New("broker: classe hors [0..3] (§5.3)")
+			return Translation{}, &refusalError{
+				detail: strictjson.Detail{Code: "out-of-range", Key: "class"},
+				msg:    "broker: classe hors [0..3] (§5.3)",
+			}
 		}
 		c := pep.Class(*s.Class)
 		tr.Class = &c
@@ -281,8 +316,12 @@ func (StructuredTranslator) Translate(_ context.Context, _, intent string) (Tran
 // (si allow), et les mesures par étape — l'intrant du harnais de friction
 // T27 (§9.1) et des métriques de supervision T34.
 type Result struct {
-	Allow   bool
-	Reason  string   // code machine stable ("ok", "translation-failed", "opa-deny", …)
+	Allow  bool
+	Reason string // code machine stable ("ok", "translation-failed", "opa-deny", …)
+	// Detail dit à l'agent POURQUOI sa demande n'a pas été comprise (#289) : code stable, nom de la
+	// clé fautive (borné) et noms exacts acceptés — jamais le contenu de la demande. Absent pour un
+	// refus de décision (OPA, quorum…). Jamais écrit dans une feuille.
+	Detail  *strictjson.Detail
 	Token   []byte   // fil CWT/COSE_Sign1, présent si Allow
 	JTI     [16]byte // identifiant porté par la feuille et le jeton (§4.3)
 	Elapsed time.Duration
@@ -581,7 +620,9 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 		b.mu.Lock()
 		b.stats.TranslationFailures++
 		b.mu.Unlock()
-		return b.deny(ctx, jti, ReasonTranslationFailed, nil)
+		res := b.deny(ctx, jti, ReasonTranslationFailed, nil)
+		res.Detail = refusalDetailOf(err)
+		return res
 	}
 
 	// Étape 4bis — résolution du skill invoqué (catalogue de conformité

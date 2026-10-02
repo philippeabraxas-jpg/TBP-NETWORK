@@ -474,9 +474,16 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
 	}
 
-	legacy, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-1"}})
+	// Depuis #289 le corps est décodé strictement : le champ « signers » n'existe plus sur le fil, il est
+	// refusé dès la lecture (400, unknown-field) — la posture ne bouge pas ; le corps de la BONNE forme
+	// mais sans aucune signature est, lui, refusé par le vérificateur de quorum (403).
+	legacy, legacyBody, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{"mode": "closed", "signers": []string{"op-1", "op-1"}})
 	s.add(ph, "témoin #89: attaque historique (signers déclarés, sans signature) → refusée",
-		legacy == http.StatusForbidden, fmt.Sprintf("status=%d", legacy))
+		legacy == http.StatusBadRequest && strings.Contains(string(legacyBody), `"unknown-field"`) && strings.Contains(string(legacyBody), `"signers"`),
+		fmt.Sprintf("status=%d body=%s", legacy, strings.TrimSpace(string(legacyBody))))
+	unsigned, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{"mode": "closed", "expiry": expiry.Unix(), "signatures": []map[string]string{}})
+	s.add(ph, "témoin #89: bonne forme, aucune signature → 403 (le vérificateur de quorum, pas le décodeur)",
+		unsigned == http.StatusForbidden, fmt.Sprintf("status=%d", unsigned))
 
 	if prof.quorumMin >= 2 {
 		status, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{

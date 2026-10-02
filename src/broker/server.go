@@ -43,12 +43,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
 
 // Défauts du serveur.
@@ -81,6 +83,23 @@ type actionResponseJSON struct {
 	Reason string `json:"reason"`
 	Token  string `json:"token,omitempty"` // fil CWT/COSE_Sign1, hex — présent si allow
 	JTI    string `json:"jti"`             // hex — identifiant des feuilles (§4.3)
+	// Detail : pourquoi la demande n'a pas été comprise (#289) — code stable, clé fautive, noms exacts
+	// acceptés. Jamais le contenu de la demande.
+	Detail *strictjson.Detail `json:"detail,omitempty"`
+}
+
+// requestRefusedJSON est le refus 400 d'un corps de demande mal formé : pas de jti (aucune identité
+// résolue, aucune feuille), mais le détail qui dit à l'agent quoi corriger.
+type requestRefusedJSON struct {
+	Allow  bool               `json:"allow"`
+	Reason string             `json:"reason"`
+	Detail *strictjson.Detail `json:"detail,omitempty"`
+}
+
+func writeRequestRefused(w http.ResponseWriter, d *strictjson.Detail) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(requestRefusedJSON{Allow: false, Reason: ReasonRequestInvalid, Detail: d})
 }
 
 // Server est la porte HTTP du broker. Sans état mutable après construction.
@@ -139,11 +158,22 @@ func peerCertCN(r *http.Request) string {
 // décision. Jamais de contenu métier dans les logs ni les feuilles (§6.2).
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBody)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeRequestRefused(w, &strictjson.Detail{Code: "body-unreadable"})
+		return
+	}
+	// Décodage STRICT (#289, suite de #241/#274) : clé en double, champ inconnu ou de casse inexacte,
+	// contenu après l'objet, UTF-8 invalide ⇒ 400 sans effet (ni jeton ni feuille), avec le détail
+	// que l'agent peut lire. Aucun champ de contrebande, aucun « dernier gagne » (§1).
 	var req actionRequestJSON
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields() // fail-closed : aucun champ de contrebande (§1)
-	if err := dec.Decode(&req); err != nil {
-		http.Error(w, `{"allow":false,"reason":"request-invalid"}`, http.StatusBadRequest)
+	if err := strictjson.Decode(body, &req); err != nil {
+		var d *strictjson.Detail
+		if se, ok := strictjson.As(err); ok {
+			dd := se.Detail
+			d = &dd
+		}
+		writeRequestRefused(w, d)
 		return
 	}
 
@@ -153,6 +183,7 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		Allow:  res.Allow,
 		Reason: res.Reason,
 		JTI:    hex.EncodeToString(res.JTI[:]),
+		Detail: res.Detail,
 	}
 	if res.Allow {
 		resp.Token = hex.EncodeToString(res.Token)

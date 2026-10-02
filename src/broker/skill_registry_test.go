@@ -228,8 +228,15 @@ func TestBrokerPassesSkillFactsToOPA(t *testing.T) {
 	}
 
 	b := build(StaticSkillRegistry{"wire.transfer": {Provenance: "v", RiskTier: TierCritical, Scope: []string{"acct-1", "acct-2"}}})
-	// L'intention tente de se déclarer « low » : sans effet, seul le registre compte.
-	res := b.HandleAction(context.Background(), "agent-1", `{"action":"wire.transfer","resource":"acct-1","risk_tier":"low"}`)
+	// L'intention tente de se déclarer « low » : depuis #289 le champ de contrebande est REFUSÉ (il
+	// n'est plus ignoré en silence), et le refus dit à l'agent quoi corriger.
+	smuggled := b.HandleAction(context.Background(), "agent-1", `{"action":"wire.transfer","resource":"acct-1","risk_tier":"low"}`)
+	if smuggled.Allow || smuggled.Reason != ReasonTranslationFailed || smuggled.Detail == nil ||
+		smuggled.Detail.Code != "unknown-field" || smuggled.Detail.Key != "risk_tier" {
+		t.Fatalf("champ risk_tier accepté ou refus sans détail : allow=%v reason=%q detail=%+v", smuggled.Allow, smuggled.Reason, smuggled.Detail)
+	}
+	// Seul le registre compte : l'intention propre passe, et OPA voit le niveau du registre.
+	res := b.HandleAction(context.Background(), "agent-1", `{"action":"wire.transfer","resource":"acct-1"}`)
 	if !res.Allow {
 		t.Fatalf("refusé : %q", res.Reason)
 	}
