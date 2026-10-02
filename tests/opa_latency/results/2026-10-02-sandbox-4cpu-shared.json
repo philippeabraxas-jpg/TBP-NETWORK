@@ -1,0 +1,299 @@
+{
+  "at": "2026-10-02T14:48:23Z",
+  "goos": "linux",
+  "goarch": "amd64",
+  "num_cpu": 4,
+  "opa_version": "1.20.2",
+  "budget_ms": 5,
+  "transports": {
+    "tcp": {
+      "cold": {
+        "trials": 20,
+        "first_request": {
+          "n": 20,
+          "p50_ms": 3.07641,
+          "p90_ms": 4.18045,
+          "p99_ms": 5.650628,
+          "p99_9_ms": 5.650628,
+          "max_ms": 6.312379,
+          "over_budget": 2,
+          "over_budget_pct": 10,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 20,
+          "p50_ms": 1.542157,
+          "p90_ms": 2.162063,
+          "p99_ms": 2.529415,
+          "p99_9_ms": 2.529415,
+          "max_ms": 4.241503,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "first_request_verdicts": {
+          "ok": 19,
+          "opa-timeout": 1
+        }
+      },
+      "idle": {
+        "idle_gap_s": 4,
+        "after_idle": {
+          "n": 4,
+          "p50_ms": 1.77512,
+          "p90_ms": 1.912741,
+          "p99_ms": 1.912741,
+          "p99_9_ms": 1.912741,
+          "max_ms": 2.017228,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {
+          "ok": 4
+        }
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 0.984991,
+            "p90_ms": 1.41259,
+            "p99_ms": 2.785068,
+            "p99_9_ms": 3.984322,
+            "max_ms": 6.764098,
+            "over_budget": 1,
+            "over_budget_pct": 0.025,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3998,
+            "opa-timeout": 2
+          },
+          "client_timeout_pct": 0.05
+        },
+        {
+          "concurrency": 2,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 0.938813,
+            "p90_ms": 1.69772,
+            "p99_ms": 3.426721,
+            "p99_9_ms": 5.480254,
+            "max_ms": 10.956871,
+            "over_budget": 9,
+            "over_budget_pct": 0.225,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3999,
+            "opa-timeout": 1
+          },
+          "client_timeout_pct": 0.025
+        },
+        {
+          "concurrency": 4,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.137946,
+            "p90_ms": 2.600194,
+            "p99_ms": 5.144248,
+            "p99_9_ms": 7.889544,
+            "max_ms": 13.51499,
+            "over_budget": 49,
+            "over_budget_pct": 1.225,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3956,
+            "opa-timeout": 44
+          },
+          "client_timeout_pct": 1.1
+        },
+        {
+          "concurrency": 8,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 2.191706,
+            "p90_ms": 5.978121,
+            "p99_ms": 11.451265,
+            "p99_9_ms": 15.117015,
+            "max_ms": 20.63268,
+            "over_budget": 613,
+            "over_budget_pct": 15.325,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3441,
+            "opa-timeout": 559
+          },
+          "client_timeout_pct": 13.975
+        },
+        {
+          "concurrency": 16,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 3.821153,
+            "p90_ms": 10.964665,
+            "p99_ms": 18.644769,
+            "p99_9_ms": 25.024571,
+            "max_ms": 27.773988,
+            "over_budget": 1503,
+            "over_budget_pct": 37.575,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 736,
+            "opa-timeout": 3264
+          },
+          "client_timeout_pct": 81.6
+        }
+      ]
+    },
+    "unix": {
+      "cold": {
+        "trials": 20,
+        "first_request": {
+          "n": 20,
+          "p50_ms": 2.573716,
+          "p90_ms": 3.980093,
+          "p99_ms": 4.172907,
+          "p99_9_ms": 4.172907,
+          "max_ms": 5.523918,
+          "over_budget": 1,
+          "over_budget_pct": 5,
+          "failures": 0
+        },
+        "second_request": {
+          "n": 20,
+          "p50_ms": 1.341435,
+          "p90_ms": 1.765021,
+          "p99_ms": 2.249143,
+          "p99_9_ms": 2.249143,
+          "max_ms": 2.25104,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "first_request_verdicts": {
+          "ok": 20
+        }
+      },
+      "idle": {
+        "idle_gap_s": 4,
+        "after_idle": {
+          "n": 4,
+          "p50_ms": 1.854055,
+          "p90_ms": 2.028981,
+          "p99_ms": 2.028981,
+          "p99_9_ms": 2.028981,
+          "max_ms": 2.097404,
+          "over_budget": 0,
+          "over_budget_pct": 0,
+          "failures": 0
+        },
+        "verdicts": {
+          "ok": 4
+        }
+      },
+      "steady": [
+        {
+          "concurrency": 1,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.125804,
+            "p90_ms": 1.562516,
+            "p99_ms": 3.224107,
+            "p99_9_ms": 6.861392,
+            "max_ms": 27.78855,
+            "over_budget": 7,
+            "over_budget_pct": 0.175,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3995,
+            "opa-timeout": 5
+          },
+          "client_timeout_pct": 0.125
+        },
+        {
+          "concurrency": 2,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.073488,
+            "p90_ms": 1.939645,
+            "p99_ms": 3.753188,
+            "p99_9_ms": 5.574915,
+            "max_ms": 6.42446,
+            "over_budget": 8,
+            "over_budget_pct": 0.2,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3996,
+            "opa-timeout": 4
+          },
+          "client_timeout_pct": 0.1
+        },
+        {
+          "concurrency": 4,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.342745,
+            "p90_ms": 3.180823,
+            "p99_ms": 6.482414,
+            "p99_9_ms": 10.655512,
+            "max_ms": 12.753898,
+            "over_budget": 106,
+            "over_budget_pct": 2.65,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3942,
+            "opa-timeout": 58
+          },
+          "client_timeout_pct": 1.45
+        },
+        {
+          "concurrency": 8,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 1.882626,
+            "p90_ms": 5.346735,
+            "p99_ms": 9.395709,
+            "p99_9_ms": 14.477373,
+            "max_ms": 15.80037,
+            "over_budget": 450,
+            "over_budget_pct": 11.25,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 3421,
+            "opa-timeout": 579
+          },
+          "client_timeout_pct": 14.475
+        },
+        {
+          "concurrency": 16,
+          "raw_latency": {
+            "n": 4000,
+            "p50_ms": 3.632594,
+            "p90_ms": 10.613854,
+            "p99_ms": 17.402974,
+            "p99_9_ms": 24.345274,
+            "max_ms": 36.856922,
+            "over_budget": 1414,
+            "over_budget_pct": 35.35,
+            "failures": 0
+          },
+          "client_verdicts": {
+            "ok": 653,
+            "opa-timeout": 3347
+          },
+          "client_timeout_pct": 83.675
+        }
+      ]
+    }
+  }
+}
