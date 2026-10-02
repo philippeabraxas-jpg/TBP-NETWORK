@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -468,9 +469,12 @@ func (nopSink) Append(context.Context, registry.Leaf) (uint64, error) { return 1
 
 const planJSON = `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""},{"action":"write","resource":"doc-2","params_hex":"0a0b"}]}`
 
+// writePlan écrit le plan dans un fichier PROPRE à ce corps : les variantes d'un même test ne
+// doivent jamais écraser le plan de référence (l'ordre d'itération d'une map est aléatoire).
 func writePlan(t *testing.T, dir, body string) string {
 	t.Helper()
-	p := filepath.Join(dir, "plan.json")
+	sum := sha256.Sum256([]byte(body))
+	p := filepath.Join(dir, "plan-"+hex.EncodeToString(sum[:6])+".json")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
