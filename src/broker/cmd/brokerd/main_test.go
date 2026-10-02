@@ -1025,3 +1025,46 @@ func TestLoadConfigOPATuning(t *testing.T) {
 		t.Fatalf("erreur=%v, veut refus sur part hors bornes", err)
 	}
 }
+
+// Revue tierce du 2 octobre, 4.4 : le doublon se juge sur la clé DÉCODÉE. « AA… » et « aa… » sont la même clé.
+func TestLoadOperatorKeysRefusesTheSameKeyInTwoCases(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "ops.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	lo := strings.Repeat("ab", 32)
+	if keys, err := loadOperatorKeys(write(`["` + lo + `","` + strings.Repeat("cd", 32) + `"]`)); err != nil || len(keys) != 2 {
+		t.Fatalf("liste valide refusée : %v", err)
+	}
+	for name, body := range map[string]string{
+		"même clé, casse différente": `["` + lo + `","` + strings.ToUpper(lo) + `"]`,
+		"même clé, texte identique":  `["` + lo + `","` + lo + `"]`,
+		"objet au lieu d'une liste":  `{"a":"` + lo + `"}`,
+		"contenu final":              `["` + lo + `"] []`,
+		"vide":                       `[]`,
+	} {
+		if _, err := loadOperatorKeys(write(body)); err == nil {
+			t.Errorf("%s : accepté", name)
+		}
+	}
+}
+
+// La même clé de contrôleur sous deux key_id ferait compter UNE signature DEUX fois dans le quorum.
+func TestParseGenesisControllersRefusesTheSameKeyTwice(t *testing.T) {
+	a, b := strings.Repeat("11", 32), strings.Repeat("22", 32)
+	if c, err := parseGenesisControllers([]byte(`{"pubkeys":["` + a + `","` + b + `"],"token_label":"x"}`)); err != nil || len(c) != 2 {
+		t.Fatalf("manifeste valide (avec les autres champs de scripts/genesis) refusé : %v", err)
+	}
+	for name, body := range map[string]string{
+		"même clé":              `{"pubkeys":["` + a + `","` + b + `","` + a + `"]}`,
+		"même clé, autre casse": `{"pubkeys":["` + a + `","` + strings.ToUpper(strings.Repeat("ab", 32)) + `","` + strings.Repeat("ab", 32) + `"]}`,
+	} {
+		if _, err := parseGenesisControllers([]byte(body)); err == nil {
+			t.Errorf("%s : accepté", name)
+		}
+	}
+}
