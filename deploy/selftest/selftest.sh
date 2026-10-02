@@ -14,7 +14,9 @@
 #      deploy/selftest/out/selftest-report.json (gitignoré) ;
 #   2. vérification formelle des guides (D96/D99) par check_steps.py ;
 #   3. tests unitaires du vérificateur (non-vacuité : mutations prises) ;
-#   4. test du script d'isolation réseau (#186) contre de vrais écouteurs locaux.
+#   4. test du script d'isolation réseau (#186) contre de vrais écouteurs locaux ;
+#   5. test de l'audit de confinement du traducteur (T24, revue tierce 4.8) : fixtures, processus réels, origine du
+#      filtre seccomp — il ne tournait dans aucun workflow de CI.
 #
 # Code de sortie : 1 dès qu'un contrôle échoue.
 
@@ -27,10 +29,10 @@ command -v go  >/dev/null 2>&1 || { echo "erreur: binaire 'go' introuvable — S
 command -v opa >/dev/null 2>&1 || { echo "erreur: binaire 'opa' introuvable — STOP" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "erreur: binaire 'python3' introuvable — STOP" >&2; exit 1; }
 
-echo "== 1/4 selftest Go (mono + scale1 + scale2 + fencing + daemons) =="
+echo "== 1/5 selftest Go (mono + scale1 + scale2 + fencing + daemons) =="
 go run ./deploy/selftest -phase all "$@"
 
-echo "== 2/4 vérification formelle des guides (D96/D99) =="
+echo "== 2/5 vérification formelle des guides (D96/D99) =="
 python3 deploy/selftest/check_steps.py \
     deploy/README.md \
     deploy/router-debian.md \
@@ -41,10 +43,13 @@ python3 deploy/selftest/check_steps.py \
     deploy/superviseur.md \
     deploy/monitor-to-closed.md
 
-echo "== 3/4 non-vacuité du vérificateur =="
+echo "== 3/5 non-vacuité du vérificateur =="
 (cd deploy/selftest && python3 test_check_steps.py)
 
-echo "== 4/4 vérification d'isolation réseau (#186) : le script est éprouvé par mutation =="
+echo "== 4/5 vérification d'isolation réseau (#186) : le script est éprouvé par mutation =="
 bash deploy/test_verify_network_isolation.sh
+
+echo "== 5/5 audit de confinement du traducteur (T24) : chaque assertion est éprouvée par mutation de fixture =="
+bash src/translator/test_audit_confinement.sh
 
 echo "selftest.sh: tout est vert"
