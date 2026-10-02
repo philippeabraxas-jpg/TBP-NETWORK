@@ -259,6 +259,19 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # "sync" = former synchronous path
 #   TBP_DURABILITY_WINDOW_MS=1000  # opposability window (default 1 s;
 #                                  # floor 4 × checkpoint interval)
+#   TBP_TELEMETRY=1                # optional, OPT-IN (spec §4.1-bis, #275):
+#                                  # anti-dribble telemetry INSIDE pepd — passport
+#                                  # session METADATA only (monotone quota
+#                                  # counters, never a flow's content) → one
+#                                  # TBAG1 aggregate leaf per sealed window, a
+#                                  # TBAD1 leaf per alert, a TBRP1 leaf per
+#                                  # retention purge; each leaf's cleartext goes
+#                                  # to the journal FIRST. Detect, not prevent.
+#                                  # Any TBP_TELEMETRY_* without =1 is refused.
+#   TBP_TELEMETRY_INTERVAL_MS=10000  # export cadence, [1000, 3600000]
+#   TBP_TELEMETRY_WINDOW_S=60      # aggregation window, [1, 3600]
+#   TBP_TELEMETRY_COLLECTOR=127.0.0.1:4739  # optional local IPFIX collector
+#                                  # (UDP); absent = no wire send, leaves stay
 #   TBP_OPA_REVISION_CHECK_INTERVAL_MS=10000  # optional (security review
 #                                  # #92, A5) — how often the revision OPA
 #                                  # ACTUALLY serves is checked against

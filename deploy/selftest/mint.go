@@ -31,6 +31,8 @@ type mintClaims struct {
 	epoch    int
 	version  int
 	kid      []byte
+	// quota : le vecteur de passeport (claim −7, §4.1-bis) — nil ⇒ pas de passeport.
+	quota map[int]any
 }
 
 var mintCanonicalEnc, _ = cbor.CanonicalEncOptions().EncMode()
@@ -38,7 +40,7 @@ var mintCanonicalEnc, _ = cbor.CanonicalEncOptions().EncMode()
 // mintToken produit un jeton COSE_Sign1 signé Ed25519 (§12). Le kid doit
 // correspondre au trousseau du validateur, la policy à son PolicyID épinglé.
 func mintToken(priv ed25519.PrivateKey, c mintClaims) ([]byte, error) {
-	payload, err := mintCanonicalEnc.Marshal(map[int]any{
+	claims := map[int]any{
 		1:  c.iss,
 		2:  c.sub,
 		4:  c.exp,
@@ -50,7 +52,11 @@ func mintToken(priv ed25519.PrivateKey, c mintClaims) ([]byte, error) {
 		-4: c.class,
 		-6: c.epoch,
 		-9: c.version,
-	})
+	}
+	if c.quota != nil {
+		claims[-7] = c.quota
+	}
+	payload, err := mintCanonicalEnc.Marshal(claims)
 	if err != nil {
 		return nil, fmt.Errorf("payload cbor: %w", err)
 	}
