@@ -74,6 +74,8 @@
 //	                        _PROBE_TIMEOUT_MS — voir translator_guard.go
 //	TBP_MIRROR_ANCHORS_FILE + TBP_MIRROR_CELL_KEYS_FILE  optionnels, ENSEMBLE et
 //	                        avec la garde : cellule miroir (§7.4) — voir mirror.go
+//	TBP_ARBITRATION         optionnel, OPT-IN, avec la garde : arbitrage humain
+//	                        des demandes dégradées (§4.5) — voir arbitration.go
 //	Custody de l'émetteur (§12) — EXACTEMENT un des deux mécanismes,
 //	jamais les deux, jamais aucun (revue de sécurité #90, point 5) :
 //	TBP_ISSUER_SEED_FILE    seed Ed25519 de l'émetteur, hex 64, fichier
@@ -207,6 +209,7 @@ import (
 
 	"golang.org/x/mod/sumdb/note"
 
+	arbiter "github.com/philippeabraxas-jpg/TBP-NETWORK/src/arbiter"
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
@@ -304,6 +307,7 @@ type config struct {
 	provExtra        []registry.ProvisioningFile
 	translatorGuard  translatorGuardConfig // contrôleur de dégradation (opt-in, T25)
 	mirror           mirrorConfig          // cellule miroir (§7.4, opt-in, avec la garde)
+	arbitration      arbitrationConfig     // arbitrage humain (§4.5, opt-in, avec la garde)
 	envelopeEndpoint string                // "" = enveloppe non câblée (doctrine existante)
 	socketPath       string                // plan de données : POST /v1/actions
 	adminSocketPath  string                // plan d'administration (revue #95) : GET /v1/supervision/*
@@ -393,6 +397,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		return nil, err
 	}
 	mirrorCfg, err := mirrorFromEnv(getenv, guardCfg.enabled)
+	if err != nil {
+		return nil, err
+	}
+	arbCfg, err := arbitrationFromEnv(getenv, guardCfg.enabled)
 	if err != nil {
 		return nil, err
 	}
@@ -525,6 +533,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		opaRevisionInterval:  opaRevisionInterval,
 		translatorGuard:      guardCfg,
 		mirror:               mirrorCfg,
+		arbitration:          arbCfg,
 		issuerSeedFile:       issuerSeedFile,
 		issuerPKCS11Module:   pkcs11Module,
 		issuerPKCS11Token:    pkcs11Token,
@@ -859,8 +868,20 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 		mirrorCell = mirror
 	}
+	// Arbitrage humain (§4.5) : opt-in, seulement avec la garde ; trousseau d'opérateurs = celui du store de contrats.
+	var arbQueue *arbiter.Queue
+	if cfg.arbitration.enabled {
+		arbQueue, err = arbiter.NewQueue(arbiter.Options{
+			CellID: cfg.cellID, Salt: cfg.salt, Leaves: cellLog, Journal: auditStore, OperatorKeys: operatorKeys,
+			PresenceTTL: cfg.arbitration.presenceTTL, EntryTTL: cfg.arbitration.entryTTL, MaxEntries: cfg.arbitration.maxPending,
+			OnAlarm: onTrip,
+		})
+		if err != nil {
+			return fmt.Errorf("arbitrage humain : %w", err)
+		}
+	}
 	brkTranslator, startTranslatorGuard, err := setupTranslatorGuard(cfg.translatorGuard, broker.StructuredTranslator{},
-		cfg.cellID, cfg.salt, cellLog, auditStore, onTrip, mirrorCell, systemClassOf(agentRegistry))
+		cfg.cellID, cfg.salt, cellLog, auditStore, onTrip, mirrorCell, systemClassOf(agentRegistry), arbQueue)
 	if err != nil {
 		return err
 	}
@@ -1072,6 +1093,91 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	})
+	// Arbitrage humain des demandes dégradées (§4.5) : présence, file (jamais l'intention) et décision, signées par
+	// un opérateur du trousseau épinglé. Sans arbitrage configuré : refus honnête (404 / 409).
+	adminMux.HandleFunc("GET /v1/supervision/degraded", func(w http.ResponseWriter, r *http.Request) {
+		if arbQueue == nil {
+			http.Error(w, `{"error":"arbitrage humain non configuré"}`, http.StatusNotFound)
+			return
+		}
+		view := arbStatusView{Reachable: arbQueue.Reachable(r.Context()), Pending: []arbEntryView{}}
+		for _, e := range arbQueue.Snapshot() {
+			view.Pending = append(view.Pending, arbEntryView{
+				ID: hex.EncodeToString(e.ID[:]), Subject: e.Subject, Status: e.Status,
+				CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339), ExpiresAt: e.ExpiresAt.UTC().Format(time.RFC3339),
+			})
+		}
+		writeJSON(w, http.StatusOK, view)
+	})
+	adminMux.HandleFunc("POST /v1/supervision/degraded/presence", func(w http.ResponseWriter, r *http.Request) {
+		if arbQueue == nil {
+			http.Error(w, `{"error":"arbitrage humain non configuré"}`, http.StatusConflict)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPlanApproveBytes+1))
+		if err != nil || len(body) > maxPlanApproveBytes {
+			http.Error(w, `{"error":"corps illisible ou trop volumineux"}`, http.StatusBadRequest)
+			return
+		}
+		var req arbPresenceRequest
+		if err := decodeStrictJSON(body, &req); err != nil {
+			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
+			return
+		}
+		sig, err := hex.DecodeString(req.Signature)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+			return
+		}
+		if err := arbQueue.Heartbeat(r.Context(), req.At, sig); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"reachable": arbQueue.Reachable(r.Context())})
+	})
+	adminMux.HandleFunc("POST /v1/supervision/degraded/decide", func(w http.ResponseWriter, r *http.Request) {
+		if arbQueue == nil {
+			http.Error(w, `{"error":"arbitrage humain non configuré"}`, http.StatusConflict)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxPlanApproveBytes+1))
+		if err != nil || len(body) > maxPlanApproveBytes {
+			http.Error(w, `{"error":"corps illisible ou trop volumineux"}`, http.StatusBadRequest)
+			return
+		}
+		var req arbDecideRequest
+		if err := decodeStrictJSON(body, &req); err != nil {
+			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
+			return
+		}
+		idb, err := hex.DecodeString(req.ID)
+		if err != nil || len(idb) != 32 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id invalide (32 octets hex)"})
+			return
+		}
+		var id [32]byte
+		copy(id[:], idb)
+		var verdict arbiter.Verdict
+		switch req.Verdict {
+		case "approve":
+			verdict = arbiter.VerdictApprove
+		case "refuse":
+			verdict = arbiter.VerdictRefuse
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": `verdict invalide ("approve" ou "refuse")`})
+			return
+		}
+		sig, err := hex.DecodeString(req.Signature)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+			return
+		}
+		if err := arbQueue.Decide(r.Context(), id, verdict, req.ExpiresAt, sig); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": req.Verdict})
 	})
 	// Cellule miroir (§7.4) : lecture du statut et promotion par reçu signé. Sur le socket ADMIN : l'accès au
 	// socket EST le contrôle d'accès ; le reçu est de toute façon vérifié (signature de la cellule miroir

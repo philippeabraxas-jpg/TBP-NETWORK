@@ -62,6 +62,8 @@ const (
 	ReasonSkillScopeViolation   = "skill-scope-violation"   // action connue, ressource hors du périmètre déclaré du skill
 	ReasonEpochUnavailable      = "epoch-unavailable"
 	ReasonTranslationFailed     = "translation-failed"
+	ReasonArbitrationPending    = "arbitration-pending" // traducteur dégradé, demande mise en file d'arbitrage HUMAIN — verdict différé, PAS un refus définitif (§4.5)
+	ReasonArbitrationRefused    = "arbitration-refused" // l'arbitre humain a refusé cette demande
 	ReasonQuorumRequired        = "quorum-required"
 	ReasonQuorumInsufficient    = "quorum-insufficient"
 	ReasonPlanBindingRequired   = "plan-binding-required" // classe F/I/W sans binding de plan (#177) — la composition non bornée par un plan échappait à ContractStore
@@ -321,10 +323,13 @@ type Result struct {
 	// Detail dit à l'agent POURQUOI sa demande n'a pas été comprise (#289) : code stable, nom de la
 	// clé fautive (borné) et noms exacts acceptés — jamais le contenu de la demande. Absent pour un
 	// refus de décision (OPA, quorum…). Jamais écrit dans une feuille.
-	Detail  *strictjson.Detail
-	Token   []byte   // fil CWT/COSE_Sign1, présent si Allow
-	JTI     [16]byte // identifiant porté par la feuille et le jeton (§4.3)
-	Elapsed time.Duration
+	Detail *strictjson.Detail
+	// ArbitrationID : pour ReasonArbitrationPending, l'identifiant de la demande en file — le hash que l'arbitre
+	// signera (recalculable par l'agent à partir de sa propre demande), jamais l'intention.
+	ArbitrationID string
+	Token         []byte   // fil CWT/COSE_Sign1, présent si Allow
+	JTI           [16]byte // identifiant porté par la feuille et le jeton (§4.3)
+	Elapsed       time.Duration
 
 	// LeafWritten/LeafErr rendent compte de la feuille écrite par le
 	// broker lui-même (refus post-allow : enveloppe, émission). Pour un
@@ -617,6 +622,17 @@ func (b *Broker) HandleAction(ctx context.Context, subject, intent string, trans
 	// SAIN — refus sans alarme (même distinction qu'opa-deny dans T11).
 	tr, err := b.translator.Translate(ctx, subject, intent)
 	if err != nil {
+		// Arbitrage humain (§4.5, traducteur dégradé) : verdict DIFFÉRÉ ou refus de l'arbitre — des issues
+		// saines, ni faute ni échec de traduction.
+		var pending *PendingArbitrationError
+		if errors.As(err, &pending) {
+			res := b.deny(ctx, jti, ReasonArbitrationPending, nil)
+			res.ArbitrationID = pending.ID
+			return res
+		}
+		if errors.Is(err, ErrArbitrationRefused) {
+			return b.deny(ctx, jti, ReasonArbitrationRefused, nil)
+		}
 		b.mu.Lock()
 		b.stats.TranslationFailures++
 		b.mu.Unlock()

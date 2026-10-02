@@ -437,6 +437,29 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # redirection suivie
 #   TBP_TRANSLATOR_PROBE_INTERVAL_MS=5000  # [500, 60000]
 #   TBP_TRANSLATOR_PROBE_TIMEOUT_MS=2000   # [100, 10000]
+#   TBP_ARBITRATION=1              # optionnel, OPT-IN, seulement avec la garde
+#                                  # (spec §4.5, #275) : arbitrage HUMAIN des
+#                                  # demandes dégradées des systèmes STANDARD (pas
+#                                  # F/I/W : ceux-là passent par le miroir).
+#                                  # Traducteur dégradé + un arbitre JOIGNABLE (un
+#                                  # battement frais signé par un opérateur) ⇒ la
+#                                  # demande est mise en file (arbitration-pending
+#                                  # + arbitration_id, hash seulement — jamais le
+#                                  # contenu) ; un opérateur SIGNE une décision ;
+#                                  # l'agent renvoie la même demande, admise UNE
+#                                  # fois (usage unique, expirante) puis jugée par
+#                                  # toute la chaîne. Aucun arbitre joignable ⇒
+#                                  # default-deny. Clés d'opérateurs =
+#                                  # TBP_OPERATOR_KEYS_FILE (déjà mesuré). Plan
+#                                  # d'administration : POST
+#                                  # /v1/supervision/degraded/{presence,decide},
+#                                  # GET /v1/supervision/degraded. Gestes
+#                                  # d'opérateur : `quorumproof arbid|arbpresence|
+#                                  # arbdecide`. La file est en mémoire (perdue au
+#                                  # redémarrage : les agents renvoient).
+#   TBP_ARBITRATION_PRESENCE_TTL_S=60   # [10, 600] validité d'un battement
+#   TBP_ARBITRATION_ENTRY_TTL_S=600     # [60, 3600] vie en file, borne d'une décision
+#   TBP_ARBITRATION_MAX_PENDING=256     # [1, 4096] pleine ⇒ default-deny
 #   TBP_MIRROR_ANCHORS_FILE=/etc/tbp/mirror-anchors.json  # optionnel, OPT-IN
 #                                  # (spec §7.4, #275), les DEUX fichiers miroir
 #                                  # ensemble et seulement avec la garde :

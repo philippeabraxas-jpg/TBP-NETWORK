@@ -86,6 +86,8 @@ type actionResponseJSON struct {
 	// Detail : pourquoi la demande n'a pas été comprise (#289) — code stable, clé fautive, noms exacts
 	// acceptés. Jamais le contenu de la demande.
 	Detail *strictjson.Detail `json:"detail,omitempty"`
+	// ArbitrationID : « arbitration-pending » — le hash de la demande que l'arbitre humain signera.
+	ArbitrationID string `json:"arbitration_id,omitempty"`
 }
 
 // requestRefusedJSON est le refus 400 d'un corps de demande mal formé : pas de jti (aucune identité
@@ -184,6 +186,8 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		Reason: res.Reason,
 		JTI:    hex.EncodeToString(res.JTI[:]),
 		Detail: res.Detail,
+
+		ArbitrationID: res.ArbitrationID,
 	}
 	if res.Allow {
 		resp.Token = hex.EncodeToString(res.Token)

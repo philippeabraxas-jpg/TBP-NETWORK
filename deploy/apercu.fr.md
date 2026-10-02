@@ -164,7 +164,7 @@ brokerd/supervisord réels), fail-closed, rapport JSON dans
 - `brokerd` v1 n'accepte que le traducteur `structured` : le chemin
   langage naturel / escalade humaine n'est pas câblé (le contrôleur de
   dégradation est livré, testé et tourne dans `brokerd` en garde opt-in —
-  failover vers la cellule miroir des systèmes critiques en opt-in, arbitrage humain non câblé : sinon dégradé ⇒ default-deny).
+  failover vers la cellule miroir des systèmes critiques et arbitrage humain des systèmes standard en opt-in ; sinon dégradé ⇒ default-deny).
 - L'inter-domaine est différé par la spec elle-même (§13, issue #33).
 - La durabilité bornée-async du registre (T38) est livrée (PR #78,
   fusionnée).

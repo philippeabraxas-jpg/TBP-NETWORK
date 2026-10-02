@@ -18,11 +18,13 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
+	arbiter "github.com/philippeabraxas-jpg/TBP-NETWORK/src/arbiter"
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 	translator "github.com/philippeabraxas-jpg/TBP-NETWORK/src/translator"
@@ -35,23 +37,49 @@ type controllerGate struct {
 	ctl *translator.Controller
 	// critical dit si le sujet est un système CRITIQUE (§4.5) ; nil ⇒ tous STANDARD.
 	critical func(subject string) bool
+	// arb : la file d'arbitrage humain (nil ⇒ pas d'escalade : un standard dégradé est refusé).
+	arb *arbiter.Queue
 }
 
-func (g controllerGate) Admit(ctx context.Context, subject string, natural bool) error {
+func (g controllerGate) Admit(ctx context.Context, subject string, natural bool, intent string) error {
 	var in translator.Input
 	if _, err := rand.Read(in.JTI[:]); err != nil { // inatteignable — fail-closed
 		return fmt.Errorf("tirage jti de garde : %w", err)
 	}
 	in.Natural = natural
+	in.Payload = []byte(intent) // intention OPAQUE : la file n'en retient que le hash (no-DPI)
 	// La classe vient du registre d'agents (AUTORITAIRE, hors-bande) : F, I, W ⇒ critique (failover miroir si
-	// disponible, jamais d'escalade humaine) ; le reste ⇒ standard (arbitrage si joignable). Sans miroir ni
-	// arbitrage câblés, la classe ne change pas l'issue (default-deny). Toute issue non nulle — y compris
-	// ErrPendingArbitration, qu'aucune file câblée ici ne saurait honorer — est un refus.
+	// disponible, jamais d'escalade humaine) ; le reste ⇒ standard (arbitrage si joignable).
 	class := translator.SystemStandard
 	if g.critical != nil && g.critical(subject) {
 		class = translator.SystemCritical
 	}
-	return g.ctl.Accept(ctx, translator.System{ID: subject, Class: class}, in)
+	// Une décision humaine DÉJÀ rendue est honorée avant tout : le standard dégradé qui REPRÉSENTE la même demande
+	// la voit admise (UNE fois — l'approbation est consommée) ou refusée. Une approbation ne lève QUE l'admission
+	// du traducteur : la chaîne complète (OPA, quorum, plan, contrats) s'applique ensuite sans exception.
+	if g.arb != nil && class == translator.SystemStandard && !natural {
+		if up, _ := g.ctl.State(); !up {
+			out, id, err := g.arb.Take(ctx, subject, in.Payload)
+			if err != nil {
+				return err // feuille impossible ⇒ pas d'admission sans trace
+			}
+			switch out {
+			case arbiter.OutcomeApproved:
+				return nil
+			case arbiter.OutcomeRefused:
+				return broker.ErrArbitrationRefused
+			case arbiter.OutcomePending:
+				return &broker.PendingArbitrationError{ID: hex.EncodeToString(id[:])}
+			}
+		}
+	}
+	err := g.ctl.Accept(ctx, translator.System{ID: subject, Class: class}, in)
+	if errors.Is(err, translator.ErrPendingArbitration) {
+		id := arbiter.IntentID(subject, in.Payload)
+		return &broker.PendingArbitrationError{ID: hex.EncodeToString(id[:])}
+	}
+	// Toute autre issue non nulle est un refus.
+	return err
 }
 
 type translatorGuardConfig struct {
@@ -112,7 +140,7 @@ func translatorGuardFromEnv(getenv func(string) string) (translatorGuardConfig, 
 // ne serve), puis périodique jusqu'à annulation de ctx. Le chemin de décision ne sonde jamais.
 func setupTranslatorGuard(cfg translatorGuardConfig, inner broker.Translator, cellID string, salt []byte,
 	leaves translator.LeafSink, journal *registry.RecordStore, onAlarm func(string),
-	mirror translator.MirrorCell, critical func(subject string) bool) (broker.Translator, func(ctx context.Context), error) {
+	mirror translator.MirrorCell, critical func(subject string) bool, arb *arbiter.Queue) (broker.Translator, func(ctx context.Context), error) {
 	if !cfg.enabled {
 		return inner, func(context.Context) {}, nil
 	}
@@ -120,13 +148,17 @@ func setupTranslatorGuard(cfg translatorGuardConfig, inner broker.Translator, ce
 	if err != nil {
 		return nil, nil, err
 	}
-	ctl, err := translator.NewController(translator.Options{
+	opts := translator.Options{
 		CellID: cellID, Salt: salt, Leaves: leaves, Journal: journal, Probe: probe, Mirror: mirror, OnAlarm: onAlarm,
-	})
+	}
+	if arb != nil { // un *Queue nil dans l'interface serait non-nil
+		opts.Arbitration = arb
+	}
+	ctl, err := translator.NewController(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("contrôleur de dégradation : %w", err)
 	}
-	guarded, err := broker.NewGuardedTranslator(inner, controllerGate{ctl: ctl, critical: critical}, false)
+	guarded, err := broker.NewGuardedTranslator(inner, controllerGate{ctl: ctl, critical: critical, arb: arb}, false)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -91,6 +91,12 @@ func main() {
 		err = cmdPlanHash(os.Args[2:], os.Stdout)
 	case "planbind":
 		err = cmdPlanBind(os.Args[2:])
+	case "arbid":
+		err = cmdArbID(os.Args[2:], os.Stdout)
+	case "arbpresence":
+		err = cmdArbPresence(os.Args[2:])
+	case "arbdecide":
+		err = cmdArbDecide(os.Args[2:])
 	case "wproof":
 		err = cmdWProof(os.Args[2:])
 	case "wmessage":
@@ -108,7 +114,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble|planapprove|planrevoke|planhash|planbind> [flags]
+	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble|planapprove|planrevoke|planhash|planbind|arbid|arbpresence|arbdecide> [flags]
   keygen   -key FILE -keyring TROUSSEAU.json
   message  -condition C -cell ID [-ttl 240]
   sign     -condition C -cell ID [-ttl 240] -key FILE [-key FILE …] -out PREUVE.json
@@ -119,7 +125,10 @@ func usage() {
   planapprove -plan-hash HEX64 [-ttl S] -key CLE_OPERATEUR -out APPROBATION.json   (contrat de plan, #177)
   planrevoke  -plan-hash HEX64 [-ttl S] -key CLE_OPERATEUR -out REVOCATION.json    (révocation d'un plan, #244)
   planhash    -cell ID -policy-id HEX64 -submitted-at T -plan PLAN.json [-expect HEX64]   (recalcule le hash d'un plan, #273)
-  planbind    -plan-hash HEX64 [-params-hex HEX]`)
+  planbind    -plan-hash HEX64 [-params-hex HEX]
+  arbid       -subject S (-intent STR | -intent-file F)   (recalcule l'id d'une demande dégradée, §4.5)
+  arbpresence -key CLE_OPERATEUR -out PRESENCE.json       (battement de présence de l'arbitre humain)
+  arbdecide   -id HEX64 -verdict approve|refuse [-ttl S] -key CLE_OPERATEUR -out DECISION.json`)
 }
 
 func expiryFrom(ttl int, now time.Time) (time.Time, error) {
