@@ -10,6 +10,10 @@
 //   - hash-only (no-DPI) : la file ne retient que SHA-256(sujet ‖ intention), le sujet, l'état et l'échéance — jamais
 //     l'intention. L'identifiant rendu à l'agent EST ce hash : l'opérateur, qui connaît ce que l'agent veut faire,
 //     le recalcule (IntentID) et signe SON hash — il ne signe pas une lecture de la file.
+//   - une décision signée ne vaut que pour UNE mise en file de UNE cellule : le message signé porte l'identité de la
+//     cellule et le TICKET (16 octets aléatoires tirés à la mise en file). Consommée, la demande qui revient en file
+//     reçoit un autre ticket : la même signature ne la rouvre pas (rejeu), et une cellule B n'accepte ni le
+//     battement ni la décision signés pour A (même trousseau d'opérateurs).
 //   - joignabilité PROUVÉE : « un arbitre est joignable » = un battement de présence signé par une clé d'opérateur
 //     épinglée, frais et strictement croissant ; jamais une déclaration.
 //   - persistante sans fichier d'état : au démarrage, Restore reconstruit la file depuis le journal (voir Restore) ;
@@ -23,6 +27,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -85,19 +90,33 @@ var (
 )
 
 // Message signés (domaines DISTINCTS de l'approbation de plan « TBPA1 » et de la révocation « TBPR1 » : une
-// signature ne vaut que pour l'acte pour lequel elle a été donnée).
+// signature ne vaut que pour l'acte pour lequel elle a été donnée). Les deux portent l'identité de la CELLULE
+// (longueur u16 BE ‖ octets) : un opérateur dont la clé est épinglée dans plusieurs cellules ne signe pas, par un
+// geste, pour toutes.
 
-// PresenceMessage : "TBAH1" ‖ unix(u64 BE).
-func PresenceMessage(at time.Time) []byte {
-	msg := append(make([]byte, 0, 13), "TBAH1"...)
+func appendCell(msg []byte, cellID string) []byte {
+	msg = binary.BigEndian.AppendUint16(msg, uint16(len(cellID)))
+	return append(msg, cellID...)
+}
+
+// PresenceMessage : "TBAH2" ‖ len(cellule) u16 BE ‖ cellule ‖ unix(u64 BE).
+func PresenceMessage(cellID string, at time.Time) []byte {
+	msg := append(make([]byte, 0, 5+2+len(cellID)+8), "TBAH2"...)
+	msg = appendCell(msg, cellID)
 	return binary.BigEndian.AppendUint64(msg, uint64(at.Unix()))
 }
 
-// DecisionMessage : "TBAV1" ‖ verdict(1) ‖ id(32) ‖ expiry unix(u64 BE).
-func DecisionMessage(id [32]byte, v Verdict, expiry time.Time) []byte {
-	msg := append(make([]byte, 0, 5+1+32+8), "TBAV1"...)
+// Ticket est l'identité d'UNE mise en file : 16 octets aléatoires tirés par Enqueue et lisibles par l'opérateur
+// (Snapshot, GET /v1/supervision/degraded). Entre dans le message signé de la décision.
+type Ticket [16]byte
+
+// DecisionMessage : "TBAV2" ‖ len(cellule) u16 BE ‖ cellule ‖ verdict(1) ‖ id(32) ‖ ticket(16) ‖ expiry unix(u64 BE).
+func DecisionMessage(cellID string, id [32]byte, ticket Ticket, v Verdict, expiry time.Time) []byte {
+	msg := append(make([]byte, 0, 5+2+len(cellID)+1+32+16+8), "TBAV2"...)
+	msg = appendCell(msg, cellID)
 	msg = append(msg, byte(v))
 	msg = append(msg, id[:]...)
+	msg = append(msg, ticket[:]...)
 	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
 }
 
@@ -142,6 +161,7 @@ const (
 )
 
 type entry struct {
+	ticket  Ticket
 	subject string
 	created time.Time
 	expires time.Time // pending : fin de la file ; décidé : fin de la décision
@@ -239,7 +259,7 @@ func (q *Queue) Heartbeat(ctx context.Context, at time.Time, sig []byte) error {
 	if d := now.Sub(at); d > HeartbeatSkew || d < -HeartbeatSkew {
 		return ErrHeartbeatStale
 	}
-	if _, ok := q.kidOf(PresenceMessage(at), sig); !ok {
+	if _, ok := q.kidOf(PresenceMessage(q.cellID, at), sig); !ok {
 		return ErrBadSignature
 	}
 	if !at.After(q.lastHB) {
@@ -277,11 +297,15 @@ func (q *Queue) Enqueue(ctx context.Context, item translator.ArbitrationItem) er
 		return ErrFull
 	}
 	expires := now.Add(q.entTTL)
-	// l'échéance de mise en file entre dans la feuille : c'est ce qui permet de RESTAURER l'entrée (Restore)
-	if err := q.leafLocked(ctx, actEnqueue, id, item.SystemID, [16]byte{}, 0, expires, now); err != nil {
+	var ticket Ticket
+	if _, err := rand.Read(ticket[:]); err != nil {
+		return fmt.Errorf("arbiter: ticket de mise en file : %w", err) // pas de ticket, pas d'entrée
+	}
+	// l'échéance et le ticket de mise en file entrent dans la feuille : c'est ce qui permet de RESTAURER l'entrée (Restore)
+	if err := q.leafLocked(ctx, actEnqueue, id, ticket, item.SystemID, [16]byte{}, 0, expires, now); err != nil {
 		return err
 	}
-	q.entries[id] = &entry{subject: item.SystemID, created: now, expires: expires, status: statusPending}
+	q.entries[id] = &entry{ticket: ticket, subject: item.SystemID, created: now, expires: expires, status: statusPending}
 	return nil
 }
 
@@ -302,7 +326,7 @@ func (q *Queue) Decide(ctx context.Context, id [32]byte, v Verdict, expiry time.
 	if ttl := expiry.Sub(now); ttl < MinDecisionTTL || ttl > q.entTTL {
 		return ErrDecisionExpiry
 	}
-	kid, signed := q.kidOf(DecisionMessage(id, v, expiry), sig)
+	kid, signed := q.kidOf(DecisionMessage(q.cellID, id, e.ticket, v, expiry), sig)
 	if !signed {
 		return ErrBadSignature
 	}
@@ -310,7 +334,7 @@ func (q *Queue) Decide(ctx context.Context, id [32]byte, v Verdict, expiry time.
 	if v == VerdictApprove {
 		act = actApprove
 	}
-	if err := q.leafLocked(ctx, act, id, e.subject, kid, byte(v), expiry, now); err != nil {
+	if err := q.leafLocked(ctx, act, id, e.ticket, e.subject, kid, byte(v), expiry, now); err != nil {
 		return err
 	}
 	e.status = statusApproved
@@ -351,7 +375,7 @@ func (q *Queue) Take(ctx context.Context, subject string, intent []byte) (Outcom
 		if e.status == statusApproved {
 			act, out = actConsume, OutcomeApproved
 		}
-		if err := q.leafLocked(ctx, act, id, e.subject, e.by, 0, e.expires, now); err != nil {
+		if err := q.leafLocked(ctx, act, id, e.ticket, e.subject, e.by, 0, e.expires, now); err != nil {
 			return OutcomeNone, id, err
 		}
 		delete(q.entries, id)
@@ -371,6 +395,7 @@ func (q *Queue) pruneLocked(now time.Time) {
 // Entry est la vue d'une entrée pour l'opérateur : jamais l'intention.
 type Entry struct {
 	ID        [32]byte
+	Ticket    Ticket // à signer avec la décision (DecisionMessage)
 	Subject   string
 	Status    string // pending | approved | refused
 	CreatedAt time.Time
@@ -391,7 +416,7 @@ func (q *Queue) Snapshot() []Entry {
 		case statusRefused:
 			st = "refused"
 		}
-		out = append(out, Entry{ID: id, Subject: e.subject, Status: st, CreatedAt: e.created, ExpiresAt: e.expires})
+		out = append(out, Entry{ID: id, Ticket: e.ticket, Subject: e.subject, Status: st, CreatedAt: e.created, ExpiresAt: e.expires})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -404,7 +429,7 @@ func (q *Queue) Snapshot() []Entry {
 
 // --- Feuille « TBAR1 » (KindTelemetry, hash-only §6.2) ----------------------------------------------------------
 //
-//	"TBAR1" ‖ action(1) ‖ id(32) ‖ u8 len(sujet) ‖ sujet ‖ kid(16) ‖ verdict(1) ‖ expiry unix(u64 BE)
+//	"TBAR2" ‖ action(1) ‖ id(32) ‖ ticket(16) ‖ u8 len(sujet) ‖ sujet ‖ kid(16) ‖ verdict(1) ‖ expiry unix(u64 BE)
 //
 // action : 1=enqueue 2=approve 3=refuse 4=consume 5=consume-refused. kid/verdict sont nuls hors décision ; expiry est
 // l'échéance de la mise en file (enqueue), de la décision (approve/refuse) ou de l'entrée consommée. Un « enqueue » à
@@ -417,14 +442,15 @@ const (
 	actConsumeRefused byte = 5
 )
 
-func (q *Queue) leafLocked(ctx context.Context, act byte, id [32]byte, subject string, kid [16]byte, verdict byte, expiry, now time.Time) error {
+func (q *Queue) leafLocked(ctx context.Context, act byte, id [32]byte, ticket Ticket, subject string, kid [16]byte, verdict byte, expiry, now time.Time) error {
 	if len(subject) > maxSubjectLen {
 		subject = subject[:maxSubjectLen]
 	}
-	rec := make([]byte, 0, 5+1+32+1+len(subject)+16+1+8)
-	rec = append(rec, "TBAR1"...)
+	rec := make([]byte, 0, 5+1+32+16+1+len(subject)+16+1+8)
+	rec = append(rec, "TBAR2"...)
 	rec = append(rec, act)
 	rec = append(rec, id[:]...)
+	rec = append(rec, ticket[:]...)
 	rec = append(rec, byte(len(subject)))
 	rec = append(rec, subject...)
 	rec = append(rec, kid[:]...)
@@ -469,14 +495,14 @@ func (q *Queue) Restore(recs []registry.SealedRecord, inLog func(registry.Sealed
 	defer q.mu.Unlock()
 	var st RestoreStats
 	for _, r := range recs {
-		if r.Leaf.Kind != registry.KindTelemetry || r.Leaf.CellID != q.cellID || !bytes.HasPrefix(r.Record, []byte("TBAR1")) {
+		if r.Leaf.Kind != registry.KindTelemetry || r.Leaf.CellID != q.cellID || !bytes.HasPrefix(r.Record, []byte("TBAR2")) {
 			continue
 		}
 		if !bytes.Equal(r.Salt, q.salt) || r.VerifyHash() != nil {
 			st.Skipped++
 			continue
 		}
-		act, id, subject, kid, _, expiry, ok := parseLeafRecord(r.Record)
+		act, id, ticket, subject, kid, _, expiry, ok := parseLeafRecord(r.Record)
 		if !ok {
 			st.Skipped++
 			continue
@@ -488,23 +514,28 @@ func (q *Queue) Restore(recs []registry.SealedRecord, inLog func(registry.Sealed
 				continue
 			}
 			if _, exists := q.entries[id]; !exists {
-				q.entries[id] = &entry{subject: subject, created: time.Unix(0, r.Leaf.Timestamp), expires: expiry, status: statusPending}
+				q.entries[id] = &entry{ticket: ticket, subject: subject, created: time.Unix(0, r.Leaf.Timestamp), expires: expiry, status: statusPending}
 			}
 		case actApprove:
 			e, exists := q.entries[id]
-			if !exists || e.status != statusPending || inLog == nil || !inLog(r) {
+			// le ticket de la décision est celui de la mise en file VIVANTE : l'approbation d'une mise en file
+			// antérieure (déjà consommée) n'approuve pas la suivante
+			if !exists || e.status != statusPending || e.ticket != ticket || inLog == nil || !inLog(r) {
 				st.Skipped++
 				continue
 			}
 			e.status, e.expires, e.by = statusApproved, expiry, kid
 		case actRefuse:
-			if e, exists := q.entries[id]; exists && e.status == statusPending {
+			if e, exists := q.entries[id]; exists && e.status == statusPending && e.ticket == ticket {
 				e.status, e.expires, e.by = statusRefused, expiry, kid
 			} else {
 				st.Skipped++
 			}
 		case actConsume, actConsumeRefused:
-			delete(q.entries, id)
+			// une consommation ne retire que la mise en file qu'elle a consommée (même ticket)
+			if e, exists := q.entries[id]; exists && e.ticket == ticket {
+				delete(q.entries, id)
+			}
 		default:
 			st.Skipped++
 		}
@@ -524,14 +555,15 @@ func (q *Queue) Restore(recs []registry.SealedRecord, inLog func(registry.Sealed
 }
 
 // parseLeafRecord décode un enregistrement « TBAR1 » (voir leafLocked) ; strict sur la longueur.
-func parseLeafRecord(rec []byte) (act byte, id [32]byte, subject string, kid [16]byte, verdict byte, expiry time.Time, ok bool) {
-	const head = 5 + 1 + 32 + 1
+func parseLeafRecord(rec []byte) (act byte, id [32]byte, ticket Ticket, subject string, kid [16]byte, verdict byte, expiry time.Time, ok bool) {
+	const head = 5 + 1 + 32 + 16 + 1
 	if len(rec) < head {
 		return
 	}
 	act = rec[5]
 	copy(id[:], rec[6:38])
-	sl := int(rec[38])
+	copy(ticket[:], rec[38:54])
+	sl := int(rec[54])
 	if len(rec) != head+sl+16+1+8 {
 		return
 	}

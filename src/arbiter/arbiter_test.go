@@ -58,8 +58,26 @@ func newHarness(t *testing.T, mod func(*Options)) *harness {
 	return h
 }
 
+// ticketOf rend le ticket de la mise en file vivante de id (ce que l'opérateur lit dans GET /v1/supervision/degraded).
+func (h *harness) ticketOf(t testing.TB, id [32]byte) Ticket {
+	t.Helper()
+	for _, e := range h.q.Snapshot() {
+		if e.ID == id {
+			return e.Ticket
+		}
+	}
+	t.Fatalf("aucune mise en file vivante pour %x", id[:4])
+	return Ticket{}
+}
+
+// msg : le message de décision que signerait l'opérateur pour la mise en file vivante de id, dans la cellule de la file.
+func (h *harness) msg(t testing.TB, id [32]byte, v Verdict, exp time.Time) []byte {
+	t.Helper()
+	return DecisionMessage("cell-a", id, h.ticketOf(t, id), v, exp)
+}
+
 func (h *harness) beat(t *testing.T, key ed25519.PrivateKey, at time.Time) error {
-	return h.q.Heartbeat(context.Background(), at, ed25519.Sign(key, PresenceMessage(at)))
+	return h.q.Heartbeat(context.Background(), at, ed25519.Sign(key, PresenceMessage("cell-a", at)))
 }
 
 func item(subject, intent string) translator.ArbitrationItem {
@@ -190,7 +208,7 @@ func TestEnqueueDecideTakeLifecycle(t *testing.T) {
 	}
 
 	exp := h.clock().Add(5 * time.Minute)
-	good := ed25519.Sign(h.op, DecisionMessage(id, VerdictApprove, exp))
+	good := ed25519.Sign(h.op, h.msg(t, id, VerdictApprove, exp))
 	// mauvaise signature / signature d'un autre acte / autre échéance / mauvais verdict
 	for name, c := range map[string]struct {
 		v   Verdict
@@ -198,11 +216,11 @@ func TestEnqueueDecideTakeLifecycle(t *testing.T) {
 		sig []byte
 		err error
 	}{
-		"intrus":          {VerdictApprove, exp, ed25519.Sign(h.other, DecisionMessage(id, VerdictApprove, exp)), ErrBadSignature},
+		"intrus":          {VerdictApprove, exp, ed25519.Sign(h.other, h.msg(t, id, VerdictApprove, exp)), ErrBadSignature},
 		"verdict_inverse": {VerdictRefuse, exp, good, ErrBadSignature},
 		"autre_echeance":  {VerdictApprove, exp.Add(time.Second), good, ErrBadSignature},
 		"autre_domaine":   {VerdictApprove, exp, ed25519.Sign(h.op, append([]byte("TBPA1"), id[:]...)), ErrBadSignature},
-		"echeance_proche": {VerdictApprove, h.clock().Add(time.Second), ed25519.Sign(h.op, DecisionMessage(id, VerdictApprove, h.clock().Add(time.Second))), ErrDecisionExpiry},
+		"echeance_proche": {VerdictApprove, h.clock().Add(time.Second), ed25519.Sign(h.op, h.msg(t, id, VerdictApprove, h.clock().Add(time.Second))), ErrDecisionExpiry},
 		"echeance_longue": {VerdictApprove, h.clock().Add(DefaultEntryTTL + time.Minute), nil, ErrDecisionExpiry},
 	} {
 		if err := h.q.Decide(ctx, id, c.v, c.exp, c.sig); !errors.Is(err, c.err) {
@@ -248,7 +266,7 @@ func TestRefusalIsConsumedOnceAndExpiryHolds(t *testing.T) {
 	id := IntentID(it.SystemID, it.Payload)
 	_ = h.q.Enqueue(ctx, it)
 	exp := h.clock().Add(2 * time.Minute)
-	if err := h.q.Decide(ctx, id, VerdictRefuse, exp, ed25519.Sign(h.op, DecisionMessage(id, VerdictRefuse, exp))); err != nil {
+	if err := h.q.Decide(ctx, id, VerdictRefuse, exp, ed25519.Sign(h.op, h.msg(t, id, VerdictRefuse, exp))); err != nil {
 		t.Fatal(err)
 	}
 	if out, _, _ := h.q.Take(ctx, it.SystemID, it.Payload); out != OutcomeRefused {
@@ -261,7 +279,7 @@ func TestRefusalIsConsumedOnceAndExpiryHolds(t *testing.T) {
 	// approbation non consommée avant son échéance : elle meurt
 	_ = h.q.Enqueue(ctx, it)
 	exp2 := h.clock().Add(2 * time.Minute)
-	_ = h.q.Decide(ctx, id, VerdictApprove, exp2, ed25519.Sign(h.op, DecisionMessage(id, VerdictApprove, exp2)))
+	_ = h.q.Decide(ctx, id, VerdictApprove, exp2, ed25519.Sign(h.op, h.msg(t, id, VerdictApprove, exp2)))
 	h.now.Add(121)
 	if out, _, _ := h.q.Take(ctx, it.SystemID, it.Payload); out != OutcomeNone {
 		t.Fatalf("approbation échue encore valable : %v", out)
@@ -322,7 +340,7 @@ func TestLeafFailureMeansNoEffect(t *testing.T) {
 	h.leaves.fail.Store(false)
 	_ = h.q.Enqueue(ctx, it)
 	exp := h.clock().Add(5 * time.Minute)
-	sig := ed25519.Sign(h.op, DecisionMessage(id, VerdictApprove, exp))
+	sig := ed25519.Sign(h.op, h.msg(t, id, VerdictApprove, exp))
 	h.leaves.fail.Store(true)
 	if err := h.q.Decide(ctx, id, VerdictApprove, exp, sig); !errors.Is(err, ErrLeaf) {
 		t.Fatalf("décision sans feuille : %v", err)

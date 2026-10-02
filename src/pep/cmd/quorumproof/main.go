@@ -127,8 +127,8 @@ func usage() {
   planhash    -cell ID -policy-id HEX64 -submitted-at T -plan PLAN.json [-expect HEX64]   (recalcule le hash d'un plan, #273)
   planbind    -plan-hash HEX64 [-params-hex HEX]
   arbid       -subject S (-intent STR | -intent-file F)   (recalcule l'id d'une demande dégradée, §4.5)
-  arbpresence -key CLE_OPERATEUR -out PRESENCE.json       (battement de présence de l'arbitre humain)
-  arbdecide   -id HEX64 -verdict approve|refuse [-ttl S] -key CLE_OPERATEUR -out DECISION.json`)
+  arbpresence -cell CELLULE -key CLE_OPERATEUR -out PRESENCE.json (battement de présence de l'arbitre humain, lié à la cellule)
+  arbdecide   -cell CELLULE -id HEX64 -ticket HEX32 -verdict approve|refuse [-ttl S] -key CLE_OPERATEUR -out DECISION.json`)
 }
 
 func expiryFrom(ttl int, now time.Time) (time.Time, error) {

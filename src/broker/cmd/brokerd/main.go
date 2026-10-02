@@ -1116,7 +1116,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		view := arbStatusView{Reachable: arbQueue.Reachable(r.Context()), Pending: []arbEntryView{}}
 		for _, e := range arbQueue.Snapshot() {
 			view.Pending = append(view.Pending, arbEntryView{
-				ID: hex.EncodeToString(e.ID[:]), Subject: e.Subject, Status: e.Status,
+				ID: hex.EncodeToString(e.ID[:]), Ticket: hex.EncodeToString(e.Ticket[:]), Subject: e.Subject, Status: e.Status,
 				CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339), ExpiresAt: e.ExpiresAt.UTC().Format(time.RFC3339),
 			})
 		}

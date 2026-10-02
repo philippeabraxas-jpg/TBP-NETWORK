@@ -71,7 +71,7 @@ func TestRestoreRebuildsPendingApprovedAndRefused(t *testing.T) {
 	decide := func(it translatorItem, v Verdict) {
 		id := IntentID(it.s, []byte(it.i))
 		e := exp()
-		if err := j.q.Decide(ctx, id, v, e, ed25519.Sign(j.op, DecisionMessage(id, v, e))); err != nil {
+		if err := j.q.Decide(ctx, id, v, e, ed25519.Sign(j.op, j.msg(t, id, v, e))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestRestoreRequiresLogInclusionForApprovals(t *testing.T) {
 	id := IntentID(it.SystemID, it.Payload)
 	_ = j.q.Enqueue(ctx, it)
 	e := j.clock().Add(5 * time.Minute)
-	if err := j.q.Decide(ctx, id, VerdictApprove, e, ed25519.Sign(j.op, DecisionMessage(id, VerdictApprove, e))); err != nil {
+	if err := j.q.Decide(ctx, id, VerdictApprove, e, ed25519.Sign(j.op, j.msg(t, id, VerdictApprove, e))); err != nil {
 		t.Fatal(err)
 	}
 	for name, inLog := range map[string]func(registry.SealedRecord) bool{"jamais": never, "nil": nil} {
@@ -148,11 +148,11 @@ func TestRestoreAppliesConsumptionWithoutLogInclusion(t *testing.T) {
 	id := IntentID(it.SystemID, it.Payload)
 	_ = j.q.Enqueue(ctx, it)
 	e := j.clock().Add(5 * time.Minute)
-	_ = j.q.Decide(ctx, id, VerdictApprove, e, ed25519.Sign(j.op, DecisionMessage(id, VerdictApprove, e)))
+	_ = j.q.Decide(ctx, id, VerdictApprove, e, ed25519.Sign(j.op, j.msg(t, id, VerdictApprove, e)))
 	_, _, _ = j.q.Take(ctx, "a", []byte("x"))
 	// inLog vrai pour l'approbation seulement (la feuille de consommation n'a pas atteint le checkpoint)
 	onlyApprove := func(r registry.SealedRecord) bool {
-		act, _, _, _, _, _, _ := parseLeafRecord(r.Record)
+		act, _, _, _, _, _, _, _ := parseLeafRecord(r.Record)
 		return act == actApprove
 	}
 	q := j.fresh(t)
@@ -222,23 +222,24 @@ func TestRestoreIsBounded(t *testing.T) {
 
 func TestParseLeafRecordIsStrict(t *testing.T) {
 	good := make([]byte, 0, 64)
-	good = append(good, "TBAR1"...)
+	good = append(good, "TBAR2"...)
 	good = append(good, actEnqueue)
 	good = append(good, make([]byte, 32)...)
+	good = append(good, make([]byte, 16)...) // ticket
 	good = append(good, 1, 'a')
 	good = append(good, make([]byte, 16)...)
 	good = append(good, 0)
 	good = append(good, make([]byte, 8)...)
-	if _, _, subj, _, _, _, ok := parseLeafRecord(good); !ok || subj != "a" {
+	if _, _, _, subj, _, _, _, ok := parseLeafRecord(good); !ok || subj != "a" {
 		t.Fatalf("valide refusé : %v %q", ok, subj)
 	}
 	for name, b := range map[string][]byte{
 		"court":                     good[:10],
 		"tronque":                   good[:len(good)-1],
 		"trop_long":                 append(append([]byte(nil), good...), 0),
-		"longueur_sujet_mensongere": func() []byte { c := append([]byte(nil), good...); c[38] = 200; return c }(),
+		"longueur_sujet_mensongere": func() []byte { c := append([]byte(nil), good...); c[54] = 200; return c }(),
 	} {
-		if _, _, _, _, _, _, ok := parseLeafRecord(b); ok {
+		if _, _, _, _, _, _, _, ok := parseLeafRecord(b); ok {
 			t.Errorf("%s : accepté", name)
 		}
 	}

@@ -431,7 +431,12 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # /v1/supervision/degraded/{presence,decide},
 #                                  # GET /v1/supervision/degraded. Operator
 #                                  # gestures: `quorumproof arbid|arbpresence|
-#                                  # arbdecide`. The queue lives in memory and is
+#                                  # arbdecide`. A signed heartbeat or decision is
+#                                  # bound to THIS cell (-cell) and a decision to ONE
+#                                  # queueing (-ticket, read in GET
+#                                  # /v1/supervision/degraded): the same signature
+#                                  # replayed after consumption, or presented to
+#                                  # another cell, is refused. The queue lives in memory and is
 #                                  # RESTORED at start from the journal (queued /
 #                                  # approved / refused entries, not the arbiter's
 #                                  # presence: heartbeats start again) — see the

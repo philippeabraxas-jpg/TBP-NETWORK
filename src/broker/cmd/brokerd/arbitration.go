@@ -86,18 +86,19 @@ func arbitrationFromEnv(getenv func(string) string, guardEnabled bool) (arbitrat
 // Corps du plan d'administration — décodés STRICTEMENT (decodeStrictJSON, #274).
 type arbPresenceRequest struct {
 	At        time.Time `json:"at"`
-	Signature string    `json:"signature"` // hex Ed25519 sur arbiter.PresenceMessage(at)
+	Signature string    `json:"signature"` // hex Ed25519 sur arbiter.PresenceMessage(cellule, at)
 }
 
 type arbDecideRequest struct {
 	ID        string    `json:"id"`         // hex, 32 octets — arbiter.IntentID
 	Verdict   string    `json:"verdict"`    // "approve" | "refuse"
 	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans DecisionMessage
-	Signature string    `json:"signature"`  // hex Ed25519 sur arbiter.DecisionMessage(id, verdict, expires_at)
+	Signature string    `json:"signature"`  // hex Ed25519 sur arbiter.DecisionMessage(cellule, id, ticket, verdict, expires_at)
 }
 
 type arbEntryView struct {
 	ID        string `json:"id"`
+	Ticket    string `json:"ticket"` // hex, 16 octets — à signer avec la décision (une mise en file = un ticket)
 	Subject   string `json:"subject"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
