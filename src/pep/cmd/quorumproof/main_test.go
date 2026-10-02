@@ -182,6 +182,9 @@ func TestKeygenBuildsAKeyringTheVerifierAccepts(t *testing.T) {
 	if len(wire) != 2 {
 		t.Fatalf("trousseau après 2 keygen = %d clé(s)", len(wire))
 	}
+	if out, _ := os.ReadFile(filepath.Join(dir, "stdout")); !strings.Contains(string(out), "(2 clé(s))") {
+		t.Fatalf("le compte annoncé est faux : %s", out)
+	}
 	// un trousseau illisible n'est pas réécrit
 	if err := os.WriteFile(ringPath, []byte("pas du json"), 0o600); err != nil {
 		t.Fatal(err)
@@ -618,6 +621,116 @@ func TestPlanHashRefusesWhatTheBrokerRefuses(t *testing.T) {
 	} {
 		if _, err := planHashOf(t, bad...); err == nil {
 			t.Errorf("%s : accepté", name)
+		}
+	}
+}
+
+// Revue tierce 4.4, alignement : keygen « complète » un trousseau avec le MÊME chargeur strict que les démons. Un trousseau
+// que pepd refuserait n'est pas complété (il serait refusé plus tard, au démarrage), et RIEN n'est écrit : ni clé ni trousseau.
+func TestKeygenRefusesAKeyringTheDaemonsWouldRefuse(t *testing.T) {
+	kid := "000102030405060708090a0b0c0d0e0f"
+	pub1, pub2 := strings.Repeat("01", 32), strings.Repeat("02", 32)
+	for name, body := range map[string]string{
+		"clé JSON dupliquée":              `{"` + kid + `":"` + pub1 + `","` + kid + `":"` + pub2 + `"}`,
+		"même kid, casse différente":      `{"` + kid + `":"` + pub1 + `","` + strings.ToUpper(kid) + `":"` + pub2 + `"}`,
+		"même clé publique sous deux kid": `{"` + kid + `":"` + pub1 + `","ffeeddccbbaa99887766554433221100":"` + pub1 + `"}`,
+		"valeur non texte":                `{"` + kid + `":1}`,
+	} {
+		dir := t.TempDir()
+		keyPath, ringPath := filepath.Join(dir, "k.key"), filepath.Join(dir, "ring.json")
+		if err := os.WriteFile(ringPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sink, _ := os.Create(filepath.Join(dir, "stdout"))
+		err := cmdKeygen([]string{"-key", keyPath, "-keyring", ringPath}, sink)
+		_ = sink.Close()
+		if err == nil {
+			t.Errorf("%s : keygen a complété un trousseau que les démons refusent", name)
+		} else if name != "clé JSON dupliquée" && name != "valeur non texte" && !strings.Contains(err.Error(), "refusé par le chargeur des démons") {
+			// refus sémantique (casse du kid, même clé publique) : annoncé comme tel, avant toute génération
+			t.Errorf("%s : refus sans le motif « chargeur des démons » : %v", name, err)
+		}
+		if _, e := os.Stat(keyPath); e == nil {
+			t.Errorf("%s : une clé privée a été créée malgré le refus", name)
+		}
+		if got, _ := os.ReadFile(ringPath); string(got) != body {
+			t.Errorf("%s : le trousseau a été modifié malgré le refus", name)
+		}
+	}
+	// voisin : un trousseau VIDE ({}) reste un point de départ valide, et le résultat passe le chargeur des démons
+	dir := t.TempDir()
+	keyPath, ringPath := filepath.Join(dir, "k.key"), filepath.Join(dir, "ring.json")
+	_ = os.WriteFile(ringPath, []byte(`{}`), 0o600)
+	sink, _ := os.Create(filepath.Join(dir, "stdout"))
+	defer sink.Close()
+	if err := cmdKeygen([]string{"-key", keyPath, "-keyring", ringPath}, sink); err != nil {
+		t.Fatalf("trousseau vide refusé : %v", err)
+	}
+	raw, _ := os.ReadFile(ringPath)
+	if kr, err := pep.ParseKeyring(raw); err != nil || len(kr) != 1 {
+		t.Fatalf("le trousseau produit n'est pas chargeable par les démons : %v", err)
+	}
+}
+
+// Un kid généré qui ne diffère d'une entrée existante que par la casse hexadécimale serait écrit puis refusé au démarrage :
+// détecté AVANT d'écrire. (Entrée existante en majuscules = trousseau fait à la main, valide pour les démons.)
+func TestAddToKeyringRefusesWhatTheDaemonsWouldRefuse(t *testing.T) {
+	kid := "000102030405060708090a0b0c0d0e0f"
+	ring := map[string]string{kid: strings.Repeat("01", 32)}
+	// kid identique à la casse près : refusé, et l'argument n'est pas modifié
+	if _, err := addToKeyring(ring, strings.ToUpper(kid), strings.Repeat("02", 32)); err == nil || !strings.Contains(err.Error(), "rien n'est écrit") {
+		t.Fatalf("kid en double à la casse près accepté : %v", err)
+	}
+	// même clé publique sous un autre kid
+	if _, err := addToKeyring(ring, "ffeeddccbbaa99887766554433221100", strings.Repeat("01", 32)); err == nil {
+		t.Fatal("même clé publique sous deux kid acceptée")
+	}
+	if len(ring) != 1 {
+		t.Fatalf("le trousseau d'entrée a été modifié : %v", ring)
+	}
+	if data, err := addToKeyring(ring, "ffeeddccbbaa99887766554433221100", strings.Repeat("02", 32)); err != nil {
+		t.Fatalf("ajout valide refusé : %v", err)
+	} else if kr, err := pep.ParseKeyring(data); err != nil || len(kr) != 2 {
+		t.Fatalf("trousseau produit non chargeable : %v", err)
+	}
+}
+
+func TestKeygenChecksTheProducedKeyringBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, ringPath := filepath.Join(dir, "k.key"), filepath.Join(dir, "ring.json")
+	// on tire des clés jusqu'à ce que keygen produise un kid connu : impossible à forcer ; on vérifie plutôt le garde
+	// directement — un trousseau existant valide, complété, reste chargeable
+	_ = os.WriteFile(ringPath, []byte(`{"`+strings.ToUpper("000102030405060708090a0b0c0d0e0f")+`":"`+strings.Repeat("03", 32)+`"}`), 0o600)
+	sink, _ := os.Create(filepath.Join(dir, "stdout"))
+	defer sink.Close()
+	if err := cmdKeygen([]string{"-key", keyPath, "-keyring", ringPath}, sink); err != nil {
+		t.Fatalf("complétion d'un trousseau valide à kid en majuscules refusée : %v", err)
+	}
+	raw, _ := os.ReadFile(ringPath)
+	if kr, err := pep.ParseKeyring(raw); err != nil || len(kr) != 2 {
+		t.Fatalf("trousseau complété non chargeable : %v (%d)", err, len(kr))
+	}
+}
+
+func TestManifestIDsRefusesADuplicatedController(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "manifest.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	a, b := strings.Repeat("11", 32), strings.Repeat("22", 32)
+	if ids, err := manifestIDs(write(`{"pubkeys":["` + a + `","` + b + `"],"token_label":"x"}`)); err != nil || ids[a] != 1 || ids[b] != 2 {
+		t.Fatalf("manifeste valide : %v %v", ids, err)
+	}
+	for name, body := range map[string]string{
+		"même clé":              `{"pubkeys":["` + a + `","` + b + `","` + a + `"]}`,
+		"même clé, autre casse": `{"pubkeys":["` + strings.Repeat("ab", 32) + `","` + strings.ToUpper(strings.Repeat("ab", 32)) + `"]}`,
+	} {
+		if _, err := manifestIDs(write(body)); err == nil {
+			t.Errorf("%s : accepté (la dernière écrasait la première)", name)
 		}
 	}
 }
