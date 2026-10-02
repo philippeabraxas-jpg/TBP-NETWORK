@@ -245,7 +245,7 @@ func SealLeaf(store *RecordStore, kind byte, cellID string, salt, record []byte,
 // refuse (la feuille d'arrêt du backpressure, la feuille d'épisode de durabilité : le journal est
 // justement sur le disque qui vient de se remplir). Elle rend TOUJOURS la feuille à inscrire ; si le
 // journal a refusé, la feuille est nue (hash seul, sans clair) et journalErr dit pourquoi — l'appelant
-// l'inscrit quand même et SIGNALE la dérogation (alarme dédiée). `tbp-audit verify -coverage` liste les
+// l'inscrit quand même et SIGNALE la dérogation (alarme dédiée). `tbp-audit verify -log` (couverture par défaut) liste les
 // feuilles du log qui n'ont pas d'entrée de journal.
 func SealLeafBestEffort(store *RecordStore, kind byte, cellID string, salt, record []byte, ts int64) (leaf Leaf, journalErr error) {
 	leaf = Leaf{Kind: kind, CellID: cellID, PayloadHash: HashPayload(salt, record), Timestamp: ts}

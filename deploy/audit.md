@@ -62,7 +62,7 @@ tbp-audit keygen -out /etc/tbp/records.key      # never overwrites
 
 ```
 tbp-audit verify -records records.jsonl -key records.key \
-    -log /var/lib/tbp/registry -vkey-file cell_log.pub [-index N] [-reveal]
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub [-index N] [-reveal] [-no-coverage]
 ```
 
 Without `-log`, only `sha256(salt ‖ record)` = leaf hash is checked (`hash-ok`).
@@ -82,17 +82,25 @@ Exit code: `0` all verified, `1` at least one failure, `2` usage or unreadable
 journal (wrong key, altered line — a partially readable journal does not pass
 for a complete one). The cleartext is printed only with `-reveal`.
 
-**The reverse check: `-coverage`.** `verify` goes from the journal to the log: it
-sees an orphan record, but **not** a leaf that sits in the log with no journal
-entry. `-coverage` (needs `-log`) re-reads **every leaf of the log** under the
-signed checkpoint and lists those with no journal entry (`SANS-CLAIR`), exit
-code `1` if there is any:
+**The reverse check: coverage, ON by default with `-log`.** `verify` goes from the journal to the
+log: it sees an orphan record, but **not** a leaf that sits in the log with no journal entry — nor
+an entry that was **deleted** from the journal. With `-log`, `verify` therefore also re-reads
+**every leaf of the log** under the signed checkpoint and lists those with no journal entry
+(`SANS-CLAIR`), exit code `1` if there is any:
 
 ```
 tbp-audit verify -records records.jsonl -key records.key \
-    -log /var/lib/tbp/registry -vkey-file cell_log.pub -coverage
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub
 feuille index=412 kind=3 cell=cell-a ts=… SANS-CLAIR : aucune entrée de journal
 ```
+
+Before, this check was opt-in (`-coverage`) and `verify -log` answered "0 failures" on a journal
+whose last entry had been deleted (third-party review of 2 October, 4.5). Now `-no-coverage`
+turns it off **explicitly**, and `verify` says so on stderr: *"0 failures" does not mean "journal
+complete"*. `-index N` (a targeted check) skips it with the same warning unless you add
+`-coverage`; without `-log`, only the hash match is checked, and the warning says that too.
+`-coverage` is still accepted. Upgrading: a script that ran `verify -log` on a log with leaves
+older than the journal now exits `1`; pass `-no-coverage` knowingly, or accept the list.
 
 Such a leaf is expected in two cases only: a leaf **older than the journal**, and the
 **documented exception** below (journal refused on a full disk). Anything else is a

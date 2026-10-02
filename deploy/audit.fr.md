@@ -62,7 +62,7 @@ tbp-audit keygen -out /etc/tbp/records.key      # n'écrase jamais
 
 ```
 tbp-audit verify -records records.jsonl -key records.key \
-    -log /var/lib/tbp/registry -vkey-file cell_log.pub [-index N] [-reveal]
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub [-index N] [-reveal] [-no-coverage]
 ```
 
 Sans `-log`, seul `sha256(sel ‖ record)` = hash de la feuille est contrôlé
@@ -83,16 +83,26 @@ Code de sortie : `0` tout vérifié, `1` au moins un échec, `2` usage ou journa
 illisible (mauvaise clé, ligne altérée — un journal lisible en partie ne passe
 pas pour complet). Le clair n'est affiché qu'avec `-reveal`.
 
-**La vérification inverse : `-coverage`.** `verify` va du journal vers le log : il voit un
-enregistrement orphelin, mais **pas** une feuille qui est dans le log sans entrée de journal.
-`-coverage` (exige `-log`) relit **toutes les feuilles du log** sous le checkpoint signé et liste
-celles sans entrée de journal (`SANS-CLAIR`), code de sortie `1` s'il y en a :
+**La vérification inverse : la couverture, ACTIVE par défaut avec `-log`.** `verify` va du journal vers
+le log : il voit un enregistrement orphelin, mais **pas** une feuille qui est dans le log sans entrée
+de journal — ni une entrée **effacée** du journal. Avec `-log`, `verify` relit donc aussi **toutes les
+feuilles du log** sous le checkpoint signé et liste celles sans entrée de journal (`SANS-CLAIR`),
+code de sortie `1` s'il y en a :
 
 ```
 tbp-audit verify -records records.jsonl -key records.key \
-    -log /var/lib/tbp/registry -vkey-file cell_log.pub -coverage
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub
 feuille index=412 kind=3 cell=cell-a ts=… SANS-CLAIR : aucune entrée de journal
 ```
+
+Avant, cette vérification était optionnelle (`-coverage`) et `verify -log` répondait « 0 échec » sur
+un journal dont la dernière entrée avait été effacée (revue tierce du 2 octobre, 4.5). Maintenant
+`-no-coverage` la désactive **explicitement**, et `verify` le dit sur stderr : *« 0 échec » ne dit
+pas « journal complet »*. `-index N` (vérification ciblée) la saute avec le même avertissement, sauf
+si l'on ajoute `-coverage` ; sans `-log`, seule la correspondance du hash est contrôlée, et
+l'avertissement le dit aussi. `-coverage` reste accepté. Mise à niveau : un script qui lançait
+`verify -log` sur un log contenant des feuilles antérieures au journal sort maintenant en `1` ;
+passer `-no-coverage` en connaissance de cause, ou accepter la liste.
 
 Une telle feuille n'est attendue que dans deux cas : une feuille **antérieure au journal**, et
 l'**exception documentée** ci-dessous (journal refusé sur un disque plein). Tout autre cas est un
