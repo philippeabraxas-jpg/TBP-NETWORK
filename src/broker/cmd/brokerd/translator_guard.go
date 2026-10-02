@@ -31,7 +31,11 @@ import (
 // controllerGate adapte *translator.Controller à broker.AdmissionGate (le broker n'importe pas le paquet
 // translator : voir broker.AdmissionGate). Le jti de la feuille est tiré au hasard — l'intention n'est jamais
 // transmise ni hachée (no-DPI : un haché d'intention serait un oracle de dictionnaire dans une feuille).
-type controllerGate struct{ ctl *translator.Controller }
+type controllerGate struct {
+	ctl *translator.Controller
+	// critical dit si le sujet est un système CRITIQUE (§4.5) ; nil ⇒ tous STANDARD.
+	critical func(subject string) bool
+}
 
 func (g controllerGate) Admit(ctx context.Context, subject string, natural bool) error {
 	var in translator.Input
@@ -39,10 +43,15 @@ func (g controllerGate) Admit(ctx context.Context, subject string, natural bool)
 		return fmt.Errorf("tirage jti de garde : %w", err)
 	}
 	in.Natural = natural
-	// Standard : la classe de l'agent n'est résolue que plus loin (registre d'agents) ; sans miroir ni arbitrage
-	// câblés, la classe ne change pas l'issue (default-deny). Toute issue non nulle — y compris
+	// La classe vient du registre d'agents (AUTORITAIRE, hors-bande) : F, I, W ⇒ critique (failover miroir si
+	// disponible, jamais d'escalade humaine) ; le reste ⇒ standard (arbitrage si joignable). Sans miroir ni
+	// arbitrage câblés, la classe ne change pas l'issue (default-deny). Toute issue non nulle — y compris
 	// ErrPendingArbitration, qu'aucune file câblée ici ne saurait honorer — est un refus.
-	return g.ctl.Accept(ctx, translator.System{ID: subject, Class: translator.SystemStandard}, in)
+	class := translator.SystemStandard
+	if g.critical != nil && g.critical(subject) {
+		class = translator.SystemCritical
+	}
+	return g.ctl.Accept(ctx, translator.System{ID: subject, Class: class}, in)
 }
 
 type translatorGuardConfig struct {
@@ -102,7 +111,8 @@ func translatorGuardFromEnv(getenv func(string) string) (translatorGuardConfig, 
 // fonction qui lance la boucle de sonde : une sonde SYNCHRONE d'abord (l'état est établi avant que le broker
 // ne serve), puis périodique jusqu'à annulation de ctx. Le chemin de décision ne sonde jamais.
 func setupTranslatorGuard(cfg translatorGuardConfig, inner broker.Translator, cellID string, salt []byte,
-	leaves translator.LeafSink, journal *registry.RecordStore, onAlarm func(string)) (broker.Translator, func(ctx context.Context), error) {
+	leaves translator.LeafSink, journal *registry.RecordStore, onAlarm func(string),
+	mirror translator.MirrorCell, critical func(subject string) bool) (broker.Translator, func(ctx context.Context), error) {
 	if !cfg.enabled {
 		return inner, func(context.Context) {}, nil
 	}
@@ -111,12 +121,12 @@ func setupTranslatorGuard(cfg translatorGuardConfig, inner broker.Translator, ce
 		return nil, nil, err
 	}
 	ctl, err := translator.NewController(translator.Options{
-		CellID: cellID, Salt: salt, Leaves: leaves, Journal: journal, Probe: probe, OnAlarm: onAlarm,
+		CellID: cellID, Salt: salt, Leaves: leaves, Journal: journal, Probe: probe, Mirror: mirror, OnAlarm: onAlarm,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("contrôleur de dégradation : %w", err)
 	}
-	guarded, err := broker.NewGuardedTranslator(inner, controllerGate{ctl}, false)
+	guarded, err := broker.NewGuardedTranslator(inner, controllerGate{ctl: ctl, critical: critical}, false)
 	if err != nil {
 		return nil, nil, err
 	}

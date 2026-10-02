@@ -4,9 +4,17 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
+	"time"
+
+	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 )
 
 // healthStub est le faux service de santé du traducteur.
@@ -34,3 +42,43 @@ func startHealthStub() (*healthStub, error) {
 
 func (h *healthStub) set(ok bool) { h.healthy.Store(ok) }
 func (h *healthStub) stop()       { _ = h.srv.Close() }
+
+// mirrorFixture : la cellule miroir (§7.4) de la phase daemons — clés de cellule et ancres signées 2-of-3 par les
+// contrôleurs de la genèse, épingles que brokerd lit au démarrage.
+type mirrorFixture struct {
+	AnchorsFile, CellKeysFile string
+	cellPriv                  ed25519.PrivateKey
+	bundle                    [32]byte
+}
+
+func newMirrorFixture(dir string, bundle [32]byte, epoch uint64, privs map[int]ed25519.PrivateKey) (*mirrorFixture, error) {
+	cellPriv := devKey("mirror-cell-b")
+	keys, err := json.Marshal(map[string]string{"cell-b": hex.EncodeToString(cellPriv.Public().(ed25519.PublicKey))})
+	if err != nil {
+		return nil, err
+	}
+	f := &mirrorFixture{
+		AnchorsFile: filepath.Join(dir, "mirror-anchors.json"), CellKeysFile: filepath.Join(dir, "mirror-cell-keys.json"),
+		cellPriv: cellPriv, bundle: bundle,
+	}
+	now := time.Now()
+	anchors, err := cluster.SignAnchors(cluster.AnchorPayload{Anchors: []cluster.AnchorEntry{{
+		Epoch: epoch, BundleHash: hex.EncodeToString(bundle[:]),
+		WindowStart: now.Add(-time.Hour).UTC().Format(time.RFC3339), WindowEnd: now.Add(6 * time.Hour).UTC().Format(time.RFC3339),
+	}}}, map[int]ed25519.PrivateKey{1: privs[1], 2: privs[2]})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(f.CellKeysFile, keys, 0o600); err != nil {
+		return nil, err
+	}
+	return f, os.WriteFile(f.AnchorsFile, anchors, 0o600)
+}
+
+// receipt signe la réception du bundle ancré de l'époque (par la cellule miroir).
+func (f *mirrorFixture) receipt(epoch uint64) []byte {
+	rc := cluster.Receipt{CellID: "cell-b", Epoch: epoch, BundleHash: hex.EncodeToString(f.bundle[:]), ReceivedAt: time.Now().UTC().Format(time.RFC3339)}
+	canon, _ := json.Marshal(rc)
+	b, _ := json.Marshal(cluster.SignedReceipt{Receipt: rc, Sig: hex.EncodeToString(ed25519.Sign(f.cellPriv, canon))})
+	return b
+}

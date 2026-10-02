@@ -73,6 +73,11 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 		// l'autorité qui décide QUELS certificats valent identité d'agent
 		files = append(files, registry.ProvisioningFile{Name: "tls-client-ca", Path: cfg.netTLSClientCAFile})
 	}
+	if cfg.mirror.enabled {
+		// la racine de confiance des reçus de promotion (le fichier d'ANCRES, lui, change à chaque fenêtre et
+		// porte sa propre signature de quorum, vérifiée contre le manifeste de genèse ci-dessus)
+		files = append(files, registry.ProvisioningFile{Name: "mirror-cell-keys", Path: cfg.mirror.cellKeysFile})
+	}
 	// l'ÉCHELLE : k du quorum et topologie, engagés dans le témoin (issue #224) — abaisser
 	// TBP_QUORUM_MIN par l'environnement diverge désormais, et ne s'autorise que par k ATTESTÉ.
 	topology := "mono"

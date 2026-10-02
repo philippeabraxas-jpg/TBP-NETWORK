@@ -437,6 +437,35 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # redirection suivie
 #   TBP_TRANSLATOR_PROBE_INTERVAL_MS=5000  # [500, 60000]
 #   TBP_TRANSLATOR_PROBE_TIMEOUT_MS=2000   # [100, 10000]
+#   TBP_MIRROR_ANCHORS_FILE=/etc/tbp/mirror-anchors.json  # optionnel, OPT-IN
+#                                  # (spec §7.4, #275), les DEUX fichiers miroir
+#                                  # ensemble et seulement avec la garde :
+#                                  # cellule miroir pour les systèmes CRITIQUES
+#                                  # (classes F, I, W) quand le traducteur est
+#                                  # dégradé. Signé k-of-n par les contrôleurs de
+#                                  # la genèse (`genesis anchors`, voir
+#                                  # scripts/genesis/README.md) : par époque, le
+#                                  # hash du bundle ancré et la fenêtre saine
+#                                  # (DÉFINIE là, jamais mesurée par le canari).
+#                                  # Relu et revérifié à chaque lecture ; PAS un
+#                                  # fichier mesuré du provisionnement (il change
+#                                  # à chaque fenêtre et porte sa propre signature
+#                                  # de quorum).
+#   TBP_MIRROR_CELL_KEYS_FILE=/etc/tbp/mirror-cell-keys.json  # {"cell-b":
+#                                  # "<clé publique Ed25519 hex>"} — racine de
+#                                  # confiance des reçus de promotion ; MESURÉ
+#                                  # (nom « mirror-cell-keys »). Cette cellule ne
+#                                  # peut pas être son propre miroir. Une
+#                                  # promotion est un acte d'opérateur sur le plan
+#                                  # d'ADMINISTRATION : POST
+#                                  # /v1/supervision/mirror/promote avec le reçu
+#                                  # signé de la cellule miroir ; GET
+#                                  # /v1/supervision/mirror rend le statut.
+#                                  # Disponible = une promotion valide couvre
+#                                  # l'époque COURANTE et la fenêtre ancrée n'est
+#                                  # pas échue. Le failover ne lève QUE
+#                                  # l'admission du traducteur : OPA, quorum, plan
+#                                  # et contrats s'appliquent sans changement.
 #   # --- custody DEV (labo/CI seulement) — revue de sécurité #113 : contrairement
 #   # aux deux drapeaux de dev d'OPA ci-dessus, celui-ci était accepté sans
 #   # AUCUN drapeau dédié ; refusé maintenant au démarrage sauf si

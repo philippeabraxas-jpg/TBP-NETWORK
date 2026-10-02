@@ -532,11 +532,18 @@ func runDaemons(s *suite, cfg config) {
 		return
 	}
 	defer translatorHealth.stop()
+	mirrorFx, err := newMirrorFixture(base, policyID, 0, privs)
+	if err != nil {
+		s.fail(phaseDaemons, "fixture de la cellule miroir (harnais)", err)
+		return
+	}
 
 	brokerEnv := append(os.Environ(),
 		"TBP_TRANSLATOR_GUARD=1",
 		"TBP_TRANSLATOR_PROBE_URL="+translatorHealth.URL,
 		"TBP_TRANSLATOR_PROBE_INTERVAL_MS=500",
+		"TBP_MIRROR_ANCHORS_FILE="+mirrorFx.AnchorsFile,
+		"TBP_MIRROR_CELL_KEYS_FILE="+mirrorFx.CellKeysFile,
 		"TBP_AUDIT_RECORDS="+auditJournalPath,
 		"TBP_AUDIT_RECORDS_KEY_FILE="+auditKeyPath,
 		"TBP_CELL_ID="+daemonsCellID,
@@ -1139,6 +1146,38 @@ func runDaemons(s *suite, cfg config) {
 		s.add(phaseDaemons, "#206 : la preuve déjà consommée reste refusée APRÈS un redémarrage de brokerd (registre durable)",
 			err == nil && status == http.StatusOK && !actV.Allow && statsA.QuorumDenies == 1 && age < 4*time.Minute,
 			fmt.Sprintf("allow=%v reason=%s quorum_denies=%d âge_preuve=%s", actV.Allow, actV.Reason, statsA.QuorumDenies, age.Round(time.Second)))
+
+		// --- Cellule miroir (§7.4, #275) : le failover d'un système CRITIQUE ---------------------
+		// agent-1 est de classe W (critique). Traducteur tombé : refus (translation-failed). Le reçu signé de
+		// la cellule miroir est déposé sur le plan d'administration : agent-1 franchit alors l'admission
+		// (il est jugé plus loin par la chaîne — OPA, quorum… — donc la raison n'est PLUS translation-failed).
+		translatorHealth.set(false)
+		reason := func() string {
+			st, rw, e := postUnixJSON(brokerHC, "http://brokerd/v1/actions", map[string]string{"subject": "agent-1", "intent": denyIntent})
+			var av daemonActionResponse
+			if e != nil || st != http.StatusOK || json.Unmarshal(rw, &av) != nil || av.Allow {
+				return "erreur-ou-admis"
+			}
+			return av.Reason
+		}
+		mirrorClosed := ""
+		for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+			if mirrorClosed = reason(); mirrorClosed == "translation-failed" {
+				break
+			}
+		}
+		s.add(phaseDaemons, "miroir : traducteur tombé, sans promotion ⇒ même un système critique est refusé (translation-failed)",
+			mirrorClosed == "translation-failed", "raison="+mirrorClosed)
+		stP, rawP, errP := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/mirror/promote", json.RawMessage(mirrorFx.receipt(0)))
+		s.add(phaseDaemons, "miroir : le reçu signé de la cellule miroir (bundle ancré, fenêtre ancrée) est promu",
+			errP == nil && stP == http.StatusOK && strings.Contains(string(rawP), `"available":true`), fmt.Sprintf("status=%d %s", stP, strings.TrimSpace(string(rawP))))
+		mirrorOpen := reason()
+		s.add(phaseDaemons, "miroir : un système critique franchit l'admission (jugé plus loin par la chaîne), plus translation-failed",
+			mirrorOpen != "translation-failed" && mirrorOpen != "erreur-ou-admis", "raison="+mirrorOpen)
+		badReceipt := mirrorFx.receipt(7) // époque non ancrée
+		stB, _, errB := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/mirror/promote", json.RawMessage(badReceipt))
+		s.add(phaseDaemons, "miroir : un reçu d'une époque non ancrée est refusé (400)", errB == nil && stB == http.StatusBadRequest, fmt.Sprintf("status=%d", stB))
+		translatorHealth.set(true)
 	}
 }
 
