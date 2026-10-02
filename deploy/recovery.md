@@ -54,8 +54,11 @@ Example: 2-of-3, one key lost, two available.
 1. Generate the replacement key (on the signer's own machine) and take its public key.
 2. Edit the quorum keyring: replace the lost entry with the new one. `TBP_QUORUM_MIN` is
    unchanged.
-3. Start `pepd` once without a proof: it refuses and prints `condition to sign: provisioning-transition-pepd|from=…|to=…`
-   (#236). Have **k of the remaining controllers** sign exactly that:
+3. Recompute the condition on **your own workstation** (#264) —
+   `pepd -print-provisioning-condition -cell-vkey cell_log.vkey`, same environment file, a copy of the
+   witness — and compare it with the one `pepd` prints when it refuses (`condition to sign:
+   provisioning-transition-pepd|from=…|to=…`, #236): they must be identical. Have **k of the remaining
+   controllers** sign the one **you** computed:
    `quorumproof sign -condition '<that condition>' -cell <cell> -key … -key … -out proof.json`
 4. Set `TBP_PROVISIONING_TRANSITION_PROOF_FILE` in `pepd.env`, restart. The proof is checked
    against the keyring **as attested at the previous start**, not against the file you just
@@ -68,8 +71,9 @@ Example: 2-of-3, one key lost, two available.
 1. **Replace the lost key in place. Never delete an entry and never reorder.** Removing an
    entry shifts every later `key_id`, and every signature already made under the old order
    stops verifying.
-2. Start `brokerd` once without a proof; sign the condition it prints
-   (`provisioning-transition-brokerd|from=…|to=…`) with k of the remaining controllers, set
+2. Recompute the condition on your workstation (`brokerd -print-provisioning-condition -cell-vkey cell_log.vkey`),
+   compare it with the one `brokerd` prints when it refuses (`provisioning-transition-brokerd|from=…|to=…`),
+   sign it with k of the remaining controllers, set
    `TBP_PROVISIONING_TRANSITION_PROOF_FILE`, restart, remove the line.
 3. If the replaced entry was one of the signers of `epoch0.json` (multi-cell, `TBP_TOPOLOGY=multi`),
    `brokerd` refuses to start with `epoch0 refused`: have k controllers of the **new** manifest
@@ -101,8 +105,9 @@ exists — but an **installation act by whoever administers the machine**, recor
    `quorumproof keygen -key /etc/tbp/admin.key.new -keyring /etc/tbp/quorum-keyring.new.json`
    (a **new** keyring file: `keygen` adds to an existing one), then put the new keyring in place.
    Store the off-machine copy **now**.
-4. Sign a transition with the **new** key(s): start `pepd` once without a proof, take the condition it prints
-   (`provisioning-transition-pepd|from=000…0|to=…` — no witness, so `from` is zero, #236), then
+4. Sign a transition with the **new** key(s): recompute the condition (`pepd -print-provisioning-condition
+   -cell-vkey cell_log.vkey`; with no witness it reports `state=no-witness` and `provisioning-transition-pepd|from=000…0|to=…`
+   — `from` is zero, #236) and compare it with the refusal's, then
    `quorumproof sign -condition '<that condition>' -cell <cell> -key /etc/tbp/admin.key.new -out proof.json`,
    set `TBP_PROVISIONING_TRANSITION_PROOF_FILE`, start `pepd`.
 5. With no witness on a registry that has already lived, the daemon refuses without a proof

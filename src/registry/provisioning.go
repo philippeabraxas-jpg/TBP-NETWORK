@@ -686,7 +686,13 @@ func (g *ProvisioningGuard) persist(wf witnessFile) error {
 // loadWitness lit et VÉRIFIE le témoin : absent ⇒ (nil, nil) ; tout défaut (JSON,
 // signature, autre cellule ou autre composant) est une erreur.
 func (g *ProvisioningGuard) loadWitness() (*ProvisioningWitness, error) {
-	data, err := os.ReadFile(g.o.WitnessFile)
+	return readProvisioningWitness(g.o.WitnessFile, g.o.CellID, g.o.Component, g.o.Verifier)
+}
+
+// readProvisioningWitness est la lecture vérifiée du témoin, partagée par le garde et par
+// PreviewProvisioning : UNE seule implémentation de ce qui fait foi comme état attesté.
+func readProvisioningWitness(path, cellID, component string, verifier note.Verifier) (*ProvisioningWitness, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -706,13 +712,57 @@ func (g *ProvisioningGuard) loadWitness() (*ProvisioningWitness, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !g.o.Verifier.Verify(rec, sig) {
+	if !verifier.Verify(rec, sig) {
 		return nil, fmt.Errorf("%w : signature invalide", ErrProvisioningWitnessBad)
 	}
-	if w.CellID != g.o.CellID || w.Component != g.o.Component {
-		return nil, fmt.Errorf("%w : témoin de %s/%s, attendu %s/%s", ErrProvisioningWitnessBad, w.CellID, w.Component, g.o.CellID, g.o.Component)
+	if w.CellID != cellID || w.Component != component {
+		return nil, fmt.Errorf("%w : témoin de %s/%s, attendu %s/%s", ErrProvisioningWitnessBad, w.CellID, w.Component, cellID, component)
 	}
 	return &w, nil
+}
+
+// ProvisioningPreview est ce qu'un contrôleur doit RECALCULER lui-même avant de signer une
+// transition (#264) : l'état de départ attesté par le témoin et l'état cible mesuré sur les fichiers
+// qu'il a relus. Rien n'est écrit, rien n'est signé, aucune feuille n'est inscrite.
+type ProvisioningPreview struct {
+	// WitnessPresent : un témoin vérifié a été lu. Faux ⇒ From est nul (premier démarrage, ou
+	// ré-engagement d'un témoin effacé : la condition à signer a alors « from » nul).
+	WitnessPresent bool
+	From           [32]byte // condensé ATTESTÉ (celui du témoin) ; nul sans témoin
+	Seq            uint64
+	To             [32]byte // condensé de l'état CIBLE, mesuré sur les fichiers donnés
+	Files          []ProvisioningFileHash
+	Conforming     bool   // To == From : aucune transition à autoriser
+	Changed        string // noms des fichiers qui diffèrent du témoin (jamais leur contenu)
+}
+
+// PreviewProvisioning mesure files et lit le témoin avec le MÊME code que ProvisioningGuard.Check
+// (measureProvisioning, readProvisioningWitness) : le condensé que le contrôleur recalcule hors de
+// la machine est, par construction, celui que le démon calculera. verifier est la clé PUBLIQUE de la
+// cellule (cell_log.vkey) : un témoin falsifié ou d'une autre cellule est refusé, jamais lu « tel quel ».
+func PreviewProvisioning(files []ProvisioningFile, witnessFile, cellID, component string, verifier note.Verifier) (ProvisioningPreview, error) {
+	var pv ProvisioningPreview
+	if verifier == nil || cellID == "" || component == "" || witnessFile == "" {
+		return pv, fmt.Errorf("%w : cellule, composant, témoin et clé publique requis", ErrProvisioningConfig)
+	}
+	digest, per, _, err := measureProvisioning(files)
+	if err != nil {
+		return pv, err
+	}
+	pv.To, pv.Files = digest, per
+	w, err := readProvisioningWitness(witnessFile, cellID, component, verifier)
+	if err != nil {
+		return pv, err
+	}
+	if w == nil {
+		return pv, nil
+	}
+	pv.WitnessPresent, pv.From, pv.Seq = true, w.Digest, w.Seq
+	pv.Conforming = w.Digest == digest
+	if !pv.Conforming {
+		pv.Changed = changedNames(w.Files, per)
+	}
+	return pv, nil
 }
 
 // Layout de la feuille « TBPL3 » (hash-only, §6.2) :

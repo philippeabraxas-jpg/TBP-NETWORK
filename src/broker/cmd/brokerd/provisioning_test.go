@@ -19,6 +19,7 @@ import (
 
 	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 // --- configuration -----------------------------------------------------------
@@ -742,5 +743,136 @@ func TestBrokerdProofBoundToStartRefusesAnotherAttestedState(t *testing.T) {
 	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = p1
 	if err := boot(t, fx, sock); err == nil {
 		t.Fatal("la preuve A→B a servi alors que l'attesté est C (liaison au départ absente)")
+	}
+}
+
+// --- recalcul hors démon de la condition à signer (#264) ------------------------
+
+// previewOf lance `brokerd -print-provisioning-condition` comme le fait un contrôleur sur son poste :
+// MÊME environnement que le démon, une COPIE du témoin, la clé publique de la cellule. Rend la sortie
+// clé=valeur et le code de sortie.
+func previewOf(t *testing.T, fx *runFixture, vkey string) (map[string]string, int, string) {
+	t.Helper()
+	var out, errb strings.Builder
+	code := printProvisioningCondition([]string{"-cell-vkey", vkey}, mapGetenv(fx.env), statPresent, &out, &errb)
+	kv := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && !strings.Contains(k, " ") {
+			kv[k] = v
+		}
+	}
+	return kv, code, errb.String()
+}
+
+func TestBrokerdPrintedConditionIsTheOneTheDaemonRefusesWith(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("genèse : %v", err)
+	}
+	vkey := filepath.Join(fx.env["TBP_REGISTRY_DIR"], "cell_log.vkey")
+	original, _ := os.ReadFile(fx.agentsFile)
+
+	// conforme : rien à signer, et rien n'est écrit
+	kv, code, stderr := previewOf(t, fx, vkey)
+	if code != 0 || kv["state"] != "conforming" || kv["condition"] != "" {
+		t.Fatalf("état conforme : code=%d %v %s", code, kv, stderr)
+	}
+	witnessBefore, _ := os.ReadFile(fx.env["TBP_PROVISIONING_WITNESS_FILE"])
+
+	// divergent : la condition imprimée EST celle du refus du démon, au caractère près
+	if err := os.WriteFile(fx.agentsFile, []byte(strings.Replace(string(original), "{", `{"agent-9":{"class":3},`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refusal := boot(t, fx, sock)
+	if refusal == nil {
+		t.Fatal("pas de refus")
+	}
+	const marker = "condition à signer : "
+	i := strings.Index(refusal.Error(), marker)
+	if i < 0 {
+		t.Fatalf("refus sans condition : %v", refusal)
+	}
+	fromDaemon := strings.Fields(refusal.Error()[i+len(marker):])[0]
+
+	kv, code, stderr = previewOf(t, fx, vkey)
+	if code != 0 || kv["state"] != "divergent" {
+		t.Fatalf("état divergent : code=%d %v %s", code, kv, stderr)
+	}
+	if kv["condition"] != fromDaemon {
+		t.Fatalf("la condition recalculée diffère de celle du démon :\n recalculée %s\n démon      %s", kv["condition"], fromDaemon)
+	}
+	if !strings.HasPrefix(kv["condition"], conditionProvisioningTransition+"|from=") || !strings.Contains(kv["changed"], "agent-registry") {
+		t.Fatalf("condition ou pièce modifiée inattendues : %v", kv)
+	}
+	if after, _ := os.ReadFile(fx.env["TBP_PROVISIONING_WITNESS_FILE"]); string(after) != string(witnessBefore) {
+		t.Fatal("le recalcul a modifié le témoin")
+	}
+
+	// mutant : UN octet de plus dans le fichier relu ⇒ une autre cible, donc une autre condition
+	if err := os.WriteFile(fx.agentsFile, []byte(strings.Replace(string(original), "{", `{"agent-9":{"class":3} ,`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kv2, _, _ := previewOf(t, fx, vkey)
+	if kv2["to"] == kv["to"] || kv2["condition"] == kv["condition"] {
+		t.Fatal("un octet modifié n'a pas changé la condition à signer")
+	}
+	if kv2["from"] != kv["from"] {
+		t.Fatal("l'état de départ doit rester celui du témoin")
+	}
+
+	// l'approbation de la condition RECALCULÉE (jamais lue sur la machine contrôlée) autorise le démarrage
+	if err := os.WriteFile(fx.agentsFile, []byte(strings.Replace(string(original), "{", `{"agent-9":{"class":3},`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kv, _, _ = previewOf(t, fx, vkey)
+	proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+	signConditionBy(t, fx, proof, kv["condition"], 2)
+	fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("preuve sur la condition recalculée refusée : %v", err)
+	}
+}
+
+func TestBrokerdPrintConditionRefusesWhatItCannotVerify(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatal(err)
+	}
+	vkey := filepath.Join(fx.env["TBP_REGISTRY_DIR"], "cell_log.vkey")
+
+	// cas voisin
+	if _, code, stderr := previewOf(t, fx, vkey); code != 0 {
+		t.Fatalf("recalcul nominal refusé : %s", stderr)
+	}
+	// -cell-vkey absent / illisible / d'une autre cellule : refus, aucune condition
+	var out, errb strings.Builder
+	if code := printProvisioningCondition(nil, mapGetenv(fx.env), statPresent, &out, &errb); code != 2 || out.Len() != 0 {
+		t.Errorf("sans -cell-vkey : code=%d sortie=%q", code, out.String())
+	}
+	if _, code, _ := previewOf(t, fx, filepath.Join(t.TempDir(), "absent.vkey")); code != 2 {
+		t.Errorf("clé absente : code=%d", code)
+	}
+	otherKey := filepath.Join(t.TempDir(), "other.vkey")
+	if _, vk, err := registry.GenerateCellKey("cell-a"); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(otherKey, []byte(vk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kv, code, _ := previewOf(t, fx, otherKey)
+	if code != 1 || kv["condition"] != "" {
+		t.Errorf("témoin vérifié avec une autre clé : code=%d %v", code, kv)
+	}
+	// témoin altéré
+	w := fx.env["TBP_PROVISIONING_WITNESS_FILE"]
+	raw, _ := os.ReadFile(w)
+	if err := os.WriteFile(w, []byte(strings.Replace(string(raw), `"record":"5442`, `"record":"5443`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if kv, code, _ := previewOf(t, fx, vkey); code != 1 || kv["condition"] != "" {
+		t.Errorf("témoin altéré : code=%d %v", code, kv)
 	}
 }

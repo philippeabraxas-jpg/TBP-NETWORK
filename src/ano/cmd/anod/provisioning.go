@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -110,6 +111,45 @@ func provisioningFiles(cfg config, binary string) ([]registry.ProvisioningFile, 
 		// autorisée que par le k ATTESTÉ (#224). anod n'a pas de topologie multi-cellule.
 		{Name: pep.ProvisioningQuorumSettingsName, Content: pep.QuorumSettings(cfg.quorumMin, "anod")},
 	}, extra...), nil
+}
+
+// printProvisioningCondition recalcule la condition de transition à signer (#264) : même configuration
+// que le démon (loadConfig), mêmes fichiers (provisioningFiles), copie du témoin ; n'écrit rien.
+func printProvisioningCondition(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	a, err := pep.ParsePrintConditionArgs(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "anod:", err)
+		return 2
+	}
+	verifier, err := pep.CellVerifierFromFile(a.CellVKey)
+	if err != nil {
+		fmt.Fprintln(stderr, "anod:", err)
+		return 2
+	}
+	cfg, err := loadConfig(getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, "anod:", err)
+		return 2
+	}
+	binary := a.Binary
+	if binary == "" {
+		if binary, err = os.Executable(); err != nil {
+			fmt.Fprintln(stderr, "anod:", err)
+			return 2
+		}
+	}
+	files, err := provisioningFiles(cfg, binary)
+	if err != nil {
+		fmt.Fprintln(stderr, "anod:", err)
+		return 2
+	}
+	pv, err := registry.PreviewProvisioning(files, cfg.witnessFile, cfg.cellID, "anod", verifier)
+	if err != nil {
+		fmt.Fprintln(stderr, "anod:", err)
+		return 1
+	}
+	pep.WriteProvisioningPreview(stdout, conditionProvisioningTransition, "anod", pv)
+	return 0
 }
 
 // setupProvisioning mesure et atteste. Toute erreur est fatale : anod ne sert rien tant que ses

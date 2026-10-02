@@ -18,7 +18,9 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"strconv"
 
 	"golang.org/x/mod/sumdb/note"
 
@@ -40,6 +42,94 @@ type provisioningInputs struct {
 	topology string
 }
 
+// pepdProvisioningFiles : ce que pepd mesure, dérivé de SA configuration. Partagé par le démarrage
+// (setupProvisioning) et par le recalcul de la condition hors machine (#264) : une seule liste.
+func pepdProvisioningFiles(in provisioningInputs, getenv func(string) string) ([]registry.ProvisioningFile, error) {
+	extra, err := registry.ParseProvisioningExtra(getenv("TBP_PROVISIONING_EXTRA_FILES"))
+	if err != nil {
+		return nil, fmt.Errorf("TBP_PROVISIONING_EXTRA_FILES : %w", err)
+	}
+	return append([]registry.ProvisioningFile{
+		{Name: "issuer-keyring", Path: in.keyringFile},
+		{Name: "quorum-keyring", Path: in.quorumKeyringFile, Authority: true},
+		// l'ÉCHELLE : k du quorum et topologie. Abaisser TBP_QUORUM_MIN par l'environnement
+		// divergerait du témoin ; la transition n'est autorisée que par k ATTESTÉ (#224).
+		{Name: "quorum-settings", Content: pep.QuorumSettings(in.quorumMin, in.topology)},
+	}, extra...), nil
+}
+
+// provisioningInputsFromEnv relit de l'environnement ce que run() passe à setupProvisioning (mêmes
+// variables, mêmes défauts : TBP_QUORUM_MIN vaut 2 sans valeur). Un test compare le résultat à celui
+// du démon pour que cette copie ne dérive jamais.
+func provisioningInputsFromEnv(getenv func(string) string) (provisioningInputs, error) {
+	var in provisioningInputs
+	var err error
+	if in.cellID = getenv("TBP_CELL_ID"); in.cellID == "" {
+		return in, errors.New("TBP_CELL_ID requis")
+	}
+	in.keyringFile = getenv("TBP_KEYRING_FILE")
+	in.quorumKeyringFile = getenv("TBP_QUORUM_KEYRING_FILE")
+	in.quorumMin = 2
+	if s := getenv("TBP_QUORUM_MIN"); s != "" {
+		n, aerr := strconv.Atoi(s)
+		if aerr != nil || n < 1 {
+			return in, fmt.Errorf("TBP_QUORUM_MIN invalide %q", s)
+		}
+		in.quorumMin = n
+	}
+	multi, err := topologyFromEnv(getenv)
+	if err != nil {
+		return in, err
+	}
+	in.topology = topologyName(multi)
+	return in, nil
+}
+
+// printProvisioningCondition recalcule les conditions de transition à signer (#264) — provisionnement ET,
+// si le démarrage mesuré est actif, le démarrage mesuré : mêmes fichiers que le démon, copie du témoin ;
+// n'écrit rien. Rend le code de sortie.
+func printProvisioningCondition(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	a, err := pep.ParsePrintConditionArgs(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "pepd:", err)
+		return 2
+	}
+	verifier, err := pep.CellVerifierFromFile(a.CellVKey)
+	if err != nil {
+		fmt.Fprintln(stderr, "pepd:", err)
+		return 2
+	}
+	in, err := provisioningInputsFromEnv(getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, "pepd:", err)
+		return 2
+	}
+	if getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1" {
+		fmt.Fprintln(stderr, "pepd: mesure du provisionnement désactivée (TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1) : aucune condition")
+		return 2
+	}
+	files, err := pepdProvisioningFiles(in, getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, "pepd:", err)
+		return 2
+	}
+	witness := getenv("TBP_PROVISIONING_WITNESS_FILE")
+	pv, err := registry.PreviewProvisioning(files, witness, in.cellID, "pepd", verifier)
+	if err != nil {
+		fmt.Fprintln(stderr, "pepd:", err)
+		return 1
+	}
+	pep.WriteProvisioningPreview(stdout, conditionProvisioningTransition, "pepd", pv)
+	if manifest := getenv("TBP_MEASURED_BOOT_MANIFEST_FILE"); manifest != "" {
+		fmt.Fprintln(stdout)
+		if err := printMeasuredBootCondition(stdout, manifest, getenv, verifier); err != nil {
+			fmt.Fprintln(stderr, "pepd:", err)
+			return 1
+		}
+	}
+	return 0
+}
+
 // setupProvisioning est appelé juste après l'ouverture du journal de pepd, AVANT le
 // démarrage mesuré (dont la genèse écrit des feuilles : la taille du journal sert ici à
 // reconnaître un premier démarrage). Toute erreur est fatale.
@@ -55,17 +145,10 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 	if witness == "" {
 		return errors.New("TBP_PROVISIONING_WITNESS_FILE requis (issue #192 : les trousseaux épinglés sont mesurés au démarrage) — ou déclarer EXPLICITEMENT TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1 (dev/labo uniquement, jamais en production)")
 	}
-	extra, err := registry.ParseProvisioningExtra(getenv("TBP_PROVISIONING_EXTRA_FILES"))
+	files, err := pepdProvisioningFiles(in, getenv)
 	if err != nil {
-		return fmt.Errorf("TBP_PROVISIONING_EXTRA_FILES : %w", err)
+		return err
 	}
-	files := append([]registry.ProvisioningFile{
-		{Name: "issuer-keyring", Path: in.keyringFile},
-		{Name: "quorum-keyring", Path: in.quorumKeyringFile, Authority: true},
-		// l'ÉCHELLE : k du quorum et topologie. Abaisser TBP_QUORUM_MIN par l'environnement
-		// divergerait du témoin ; la transition n'est autorisée que par k ATTESTÉ (#224).
-		{Name: "quorum-settings", Content: pep.QuorumSettings(in.quorumMin, in.topology)},
-	}, extra...)
 
 	// La preuve de transition est vérifiée contre le trousseau de contrôleurs ATTESTÉ
 	// (celui du témoin, avant l'édition), jamais contre le fichier courant : sinon

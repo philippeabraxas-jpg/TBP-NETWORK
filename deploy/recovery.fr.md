@@ -55,8 +55,11 @@ Exemple : 2-sur-3, une clé perdue, deux disponibles.
 1. Générer la clé de remplacement (sur la machine du signataire) et relever sa clé publique.
 2. Éditer le trousseau de quorum : remplacer l'entrée perdue par la nouvelle. `TBP_QUORUM_MIN` ne
    change pas.
-3. Démarrer `pepd` une fois sans preuve : il refuse et affiche `condition à signer : provisioning-transition-pepd|from=…|to=…`
-   (#236). Faire signer exactement celle-ci par **k des contrôleurs restants** :
+3. Recalculer la condition sur **votre propre poste** (#264) —
+   `pepd -print-provisioning-condition -cell-vkey cell_log.vkey`, même fichier d'environnement, copie du
+   témoin — et la comparer à celle que `pepd` affiche en refusant (`condition à signer :
+   provisioning-transition-pepd|from=…|to=…`, #236) : elles doivent être identiques. Faire signer celle que
+   **vous** avez calculée par **k des contrôleurs restants** :
    `quorumproof sign -condition '<cette condition>' -cell <cellule> -key … -key … -out proof.json`
 4. Poser `TBP_PROVISIONING_TRANSITION_PROOF_FILE` dans `pepd.env`, redémarrer. La preuve est
    vérifiée contre le trousseau **tel qu'attesté au démarrage précédent**, pas contre le fichier qu'on
@@ -69,8 +72,9 @@ Exemple : 2-sur-3, une clé perdue, deux disponibles.
 1. **Remplacer la clé perdue sur place. Ne jamais supprimer une entrée, ne jamais réordonner.**
    Supprimer une entrée décale tous les `key_id` suivants, et toutes les signatures déjà faites sous
    l'ancien ordre cessent de se vérifier.
-2. Démarrer `brokerd` une fois sans preuve ; signer la condition qu'il affiche
-   (`provisioning-transition-brokerd|from=…|to=…`) par k des contrôleurs restants, poser
+2. Recalculer la condition sur votre poste (`brokerd -print-provisioning-condition -cell-vkey cell_log.vkey`),
+   la comparer à celle que `brokerd` affiche en refusant (`provisioning-transition-brokerd|from=…|to=…`),
+   la signer par k des contrôleurs restants, poser
    `TBP_PROVISIONING_TRANSITION_PROOF_FILE`, redémarrer, retirer la ligne.
 3. Si l'entrée remplacée était l'un des signataires de `epoch0.json` (multi-cellules,
    `TBP_TOPOLOGY=multi`), `brokerd` refuse de démarrer avec `epoch0 refusé` : faire re-signer
@@ -104,8 +108,9 @@ un **acte d'installation de celui qui administre la machine**, consigné dans le
    `quorumproof keygen -key /etc/tbp/admin.key.new -keyring /etc/tbp/quorum-keyring.new.json`
    (un **nouveau** fichier de trousseau : `keygen` ajoute à un trousseau existant), puis mettre le
    nouveau trousseau en place. Faire la copie hors machine **maintenant**.
-4. Signer une transition avec la ou les **nouvelles** clés : démarrer `pepd` une fois sans preuve, prendre la
-   condition affichée (`provisioning-transition-pepd|from=000…0|to=…` — pas de témoin, donc `from` est nul, #236), puis
+4. Signer une transition avec la ou les **nouvelles** clés : recalculer la condition (`pepd -print-provisioning-condition
+   -cell-vkey cell_log.vkey` ; sans témoin elle annonce `state=no-witness` et `provisioning-transition-pepd|from=000…0|to=…`
+   — `from` est nul, #236) et la comparer à celle du refus, puis
    `quorumproof sign -condition '<cette condition>' -cell <cellule> -key /etc/tbp/admin.key.new -out proof.json`,
    poser `TBP_PROVISIONING_TRANSITION_PROOF_FILE`, démarrer `pepd`.
 5. Sans témoin sur un registre qui a déjà vécu, le démon refuse sans preuve (un témoin effacé n'est

@@ -24,7 +24,9 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"path/filepath"
 
 	"golang.org/x/mod/sumdb/note"
@@ -79,6 +81,38 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 	}
 	files = append(files, registry.ProvisioningFile{Name: "quorum-settings", Content: pep.QuorumSettings(cfg.quorumMin, topology)})
 	return append(files, cfg.provExtra...)
+}
+
+// printProvisioningCondition recalcule la condition de transition à signer (#264) : même configuration
+// que le démon (loadConfig), mêmes fichiers (provisioningFiles), copie du témoin ; n'écrit rien. Rend le
+// code de sortie.
+func printProvisioningCondition(args []string, getenv func(string) string, stat func(string) (os.FileInfo, error), stdout, stderr io.Writer) int {
+	a, err := pep.ParsePrintConditionArgs(args, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "brokerd:", err)
+		return 2
+	}
+	verifier, err := pep.CellVerifierFromFile(a.CellVKey)
+	if err != nil {
+		fmt.Fprintln(stderr, "brokerd:", err)
+		return 2
+	}
+	cfg, err := loadConfig(getenv, stat)
+	if err != nil {
+		fmt.Fprintln(stderr, "brokerd:", err)
+		return 2
+	}
+	if cfg.provDisabled {
+		fmt.Fprintln(stderr, "brokerd: mesure du provisionnement désactivée (TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1) : aucune condition")
+		return 2
+	}
+	pv, err := registry.PreviewProvisioning(provisioningFiles(cfg), cfg.provWitnessFile, cfg.cellID, "brokerd", verifier)
+	if err != nil {
+		fmt.Fprintln(stderr, "brokerd:", err)
+		return 1
+	}
+	pep.WriteProvisioningPreview(stdout, conditionProvisioningTransition, "brokerd", pv)
+	return 0
 }
 
 // setupProvisioning est appelé juste après l'ouverture du journal de brokerd.

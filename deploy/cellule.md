@@ -287,7 +287,8 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #   TBP_MEASURED_BOOT_AI_CONTAINER=<container image digest or path>
 #   TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE=/etc/tbp/measured-boot-transition-proof.json
 #                                  # (the proof signs the condition the daemon prints
-#                                  # when it refuses: measured-boot-transition|from=…|to=…, #236)
+#                                  # when it refuses: measured-boot-transition|from=…|to=…, #236 —
+#                                  # recompute it yourself: pepd -print-provisioning-condition, #264)
 #                                  # optional — only present for a DELIBERATE
 #                                  # reference re-engagement (bundle/config
 #                                  # update). security review #112: replaces
@@ -640,7 +641,8 @@ scope used to pass without any alarm.
   (`ano-settings`: classifier socket, timeout, grace, bounds) and `k` (`quorum-settings`). Removing a
   pattern, widening `keep_paths` or plugging a classifier between two starts is **refused** without a
   quorum proof bound to (attested state, target state), condition
-  `provisioning-transition-anod|from=…|to=…` — the refusal prints it. `anod` needs its own chain and
+  `provisioning-transition-anod|from=…|to=…` — the refusal prints it, and
+  `anod -print-provisioning-condition -cell-vkey cell_log.vkey` recomputes it on your workstation (#264). `anod` needs its own chain and
   witness: `TBP_CELL_ID`, `TBP_SALT`, `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (outside the
   registry directory, which must already exist), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN`; no
   "dev disable" escape hatch exists for `anod`. Upgrading an existing `anod` takes one transition proof.
@@ -654,14 +656,30 @@ scope used to pass without any alarm.
 
   ```bash
   go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
-  # 1. start WITHOUT a proof: the daemon refuses and prints what to sign, e.g.
-  #      condition to sign: provisioning-transition-brokerd|from=<attested digest>|to=<target digest>
-  # 2. the controllers sign EXACTLY that condition (they see what they approve)
+  # 1. RECOMPUTE the condition on YOUR workstation (#264) — never sign the one printed by the
+  #    machine you are controlling. Same daemon binary, same environment file, the files YOU
+  #    re-read, a COPY of the witness, the cell PUBLIC key (cell_log.vkey):
+  brokerd -print-provisioning-condition -cell-vkey cell_log.vkey
+  #      state=divergent  changed=modified: agent-registry
+  #      file agent-registry sha256=…            <- compare with what you reviewed
+  #      condition=provisioning-transition-brokerd|from=<attested digest>|to=<target digest>
+  # 2. compare it with the one the refusing daemon prints ("condition to sign: …"): they MUST be
+  #    identical. If they differ, STOP — the machine is not measuring what you reviewed.
+  #    Then the controllers sign EXACTLY the condition YOU computed:
   quorumproof sign -condition 'provisioning-transition-brokerd|from=…|to=…' -cell cell-a \
     -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
   # 3. in brokerd.env: TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
   #    restart, check it started, and REMOVE the line (the proof lives 4 minutes by default)
   ```
+
+  `-print-provisioning-condition` writes nothing, signs nothing and opens no journal: it measures with
+  the start-up code (`registry.PreviewProvisioning`) and prints `state=` (`conforming`, `divergent` or
+  `no-witness`), `from=`, `to=`, `changed=`, one `file <name> sha256=…` line per measured piece, and the
+  `condition=`. `pepd` also prints the **measured-boot** condition (`measured-boot-transition|from=…|to=…`)
+  when `TBP_MEASURED_BOOT_MANIFEST_FILE` is set; `anod` takes `-binary FILE` for the binary you reviewed.
+  `-cell-vkey` is required: without the cell public key the copied witness proves nothing, and the
+  command refuses a witness it cannot verify (tampered, other cell, other daemon). One byte changed in
+  a reviewed file changes `to`, hence the condition.
 
   Conditions: `provisioning-transition-brokerd` and `provisioning-transition-pepd` (a
   proof for one never works for the other, nor for a posture switch). **A proof is bound

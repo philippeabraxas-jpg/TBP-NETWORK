@@ -30,7 +30,9 @@
 // Les transitions de provisionnement et de démarrage mesuré portent en plus l'état de
 // départ et l'état cible (issue #236) : « provisioning-transition-pepd|from=<hex>|to=<hex> ».
 // Le démon qui REFUSE un état divergent affiche cette condition complète (« condition à
-// signer : … ») ; c'est elle qu'on passe à -condition. Une preuve ne vaut que pour cette
+// signer : … ») ; mais on ne signe jamais ce que la machine contrôlée affiche : on la RECALCULE sur
+// son poste (« <démon> -print-provisioning-condition -cell-vkey cell_log.vkey », #264), on la compare
+// à celle du refus, puis c'est elle qu'on passe à -condition. Une preuve ne vaut que pour cette
 // paire : elle ne ré-engage aucun autre état, et ne ramène pas à l'état précédent.
 package main
 

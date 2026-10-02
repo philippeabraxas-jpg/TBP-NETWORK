@@ -744,3 +744,132 @@ func TestInlineSettingTooLargeIsRefused(t *testing.T) {
 		t.Fatalf("réglage démesuré accepté : %v", err)
 	}
 }
+
+// --- aperçu hors démon (#264) ---------------------------------------------------
+
+// Ce que l'aperçu annonce est EXACTEMENT ce que le garde exige : mêmes (from, to) que ceux que reçoit
+// AuthorizeTransition au démarrage refusé, et rien n'est écrit (ni témoin, ni feuille).
+func TestPreviewProvisioningMatchesWhatTheGuardAsksToAuthorize(t *testing.T) {
+	e := newProvEnv(t, nil)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.log.size = 1
+	witnessBefore, _ := os.ReadFile(e.opts.WitnessFile)
+
+	// cas voisin : conforme ⇒ pas de transition
+	pv, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier)
+	if err != nil || !pv.WitnessPresent || !pv.Conforming || pv.Changed != "" || pv.From != pv.To {
+		t.Fatalf("aperçu d'un état conforme : %+v, %v", pv, err)
+	}
+
+	e.edit("agents.json", `{"agent-1":{"class":0}}`)
+	pv, err = PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pv.Conforming || !strings.Contains(pv.Changed, "agents.json") || strings.Contains(pv.Changed, "operators.json") || pv.From == pv.To {
+		t.Fatalf("aperçu d'un état divergent : %+v", pv)
+	}
+	var gotFrom, gotTo [32]byte
+	e.opts.AuthorizeTransition = func(_ map[string][]byte, from, to [32]byte) error {
+		gotFrom, gotTo = from, to
+		return errors.New("refusé pour le test")
+	}
+	if err := e.guard().Check(context.Background()); !errors.Is(err, ErrProvisioningDivergence) {
+		t.Fatalf("divergence non refusée : %v", err)
+	}
+	if pv.From != gotFrom || pv.To != gotTo {
+		t.Fatalf("l'aperçu ne recalcule pas ce que le démon refuse :\n aperçu from=%x to=%x\n démon  from=%x to=%x", pv.From, pv.To, gotFrom, gotTo)
+	}
+
+	// aucune écriture : l'aperçu n'a jamais touché le témoin
+	if after, _ := os.ReadFile(e.opts.WitnessFile); string(after) != string(witnessBefore) {
+		t.Fatal("l'aperçu a modifié le témoin")
+	}
+}
+
+// Mutant : un octet d'un fichier relu change `to` ; le même contenu rend le même `to` (déterminisme
+// requis pour que le contrôleur compare). Le chemin et l'ordre des fichiers ne comptent pas.
+func TestPreviewProvisioningToTracksOneByte(t *testing.T) {
+	e := newProvEnv(t, nil)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	preview := func() ProvisioningPreview {
+		pv, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pv
+	}
+	base := preview()
+	if again := preview(); again.To != base.To {
+		t.Fatal("aperçu non déterministe")
+	}
+	e.edit("operators.json", `["ab"]`) // un octet
+	changed := preview()
+	if changed.To == base.To {
+		t.Fatal("un octet modifié n'a pas changé la condition cible")
+	}
+	if changed.From != base.From {
+		t.Fatal("l'état de départ doit rester celui du témoin")
+	}
+	e.edit("operators.json", `["aa"]`)
+	if back := preview(); back.To != base.To || !back.Conforming {
+		t.Fatal("contenu restauré : l'aperçu devrait redevenir conforme")
+	}
+	// ordre inversé : même mesure
+	rev := []ProvisioningFile{e.files[1], e.files[0]}
+	pv, err := PreviewProvisioning(rev, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier)
+	if err != nil || pv.To != base.To {
+		t.Fatalf("l'ordre des fichiers change la condition : %v", err)
+	}
+}
+
+// Un témoin que le contrôleur ne peut pas vérifier (copie falsifiée, autre clé, autre composant,
+// autre cellule) n'est JAMAIS prétexte à une condition : l'aperçu refuse.
+func TestPreviewProvisioningRefusesAnUnverifiableWitness(t *testing.T) {
+	e := newProvEnv(t, nil)
+	if err := e.guard().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := os.ReadFile(e.opts.WitnessFile)
+	_, otherVerifier := manifestOtherKey(t)
+
+	if _, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", otherVerifier); !errors.Is(err, ErrProvisioningWitnessBad) {
+		t.Errorf("témoin vérifié avec la clé d'une autre cellule : %v", err)
+	}
+	if _, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "pepd", e.opts.Verifier); !errors.Is(err, ErrProvisioningWitnessBad) {
+		t.Errorf("témoin d'un autre composant accepté : %v", err)
+	}
+	if _, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-b", "brokerd", e.opts.Verifier); !errors.Is(err, ErrProvisioningWitnessBad) {
+		t.Errorf("témoin d'une autre cellule accepté : %v", err)
+	}
+	if err := os.WriteFile(e.opts.WitnessFile, []byte(strings.Replace(string(good), `"record":"5442`, `"record":"5443`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier); !errors.Is(err, ErrProvisioningWitnessBad) {
+		t.Errorf("témoin altéré accepté : %v", err)
+	}
+	// configuration incomplète : refus, pas de condition devinée
+	if _, err := PreviewProvisioning(e.files, "", "cell-a", "brokerd", e.opts.Verifier); !errors.Is(err, ErrProvisioningConfig) {
+		t.Errorf("configuration incomplète : %v", err)
+	}
+	// cas voisin : le bon témoin passe
+	if err := os.WriteFile(e.opts.WitnessFile, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if pv, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier); err != nil || !pv.Conforming {
+		t.Fatalf("bon témoin refusé : %+v %v", pv, err)
+	}
+}
+
+// Sans témoin : aperçu « no-witness », from nul (le cas du témoin effacé / genèse).
+func TestPreviewProvisioningWithoutWitness(t *testing.T) {
+	e := newProvEnv(t, nil)
+	pv, err := PreviewProvisioning(e.files, e.opts.WitnessFile, "cell-a", "brokerd", e.opts.Verifier)
+	if err != nil || pv.WitnessPresent || pv.From != ([32]byte{}) || pv.To == ([32]byte{}) || pv.Conforming {
+		t.Fatalf("aperçu sans témoin : %+v, %v", pv, err)
+	}
+}

@@ -188,6 +188,10 @@ import (
 )
 
 func main() {
+	// #264 : recalcul de la condition de transition hors de la machine contrôlée — rien n'est démarré.
+	if len(os.Args) > 1 && os.Args[1] == pep.PrintConditionFlag {
+		os.Exit(printProvisioningCondition(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
+	}
 	if err := run(); err != nil {
 		log.Fatalf("pepd: %v", err)
 	}
