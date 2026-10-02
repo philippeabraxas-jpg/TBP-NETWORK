@@ -204,8 +204,9 @@ type MonitorOptions struct {
 	// Fs mesure l'espace libre hôte (défaut StatfsStats — injectable).
 	Fs FsStats
 	// Journal reçoit le clair de la feuille d'arrêt AVANT son inscription (#275,
-	// #271). Optionnel ici (nil = feuille nue, historique). S'il refuse, la feuille
-	// n'est pas écrite (« +leaf-write-failed » dans l'alarme) : le verrouillage tient.
+	// #271). Optionnel ici (nil = feuille nue, historique). S'il refuse (disque plein),
+	// la feuille d'arrêt est inscrite NUE et l'alarme porte « +journal-write-failed » :
+	// la trace de l'arrêt prime, la dérogation est signalée. Le verrouillage tient.
 	Journal *RecordStore
 	// OnTrip est appelé UNE fois à l'engagement — couture vers le module
 	// fail-closed unique (T14) : c'est ici que le broker cessera d'émettre
@@ -416,11 +417,15 @@ func (m *Monitor) engage(ctx context.Context, alarm Alarm) {
 		payload := fmt.Sprintf(`{"reason":%q,"cellID":%q,"usedBytes":%d,"quotaBytes":%d,"at":%q}`,
 			alarm.Reason, alarm.CellID, alarm.UsedBytes, alarm.QuotaBytes,
 			alarm.At.Format(time.RFC3339Nano))
-		leaf, err := SealLeaf(m.journal, KindBackpressure, m.cellID, m.salt, []byte(payload), alarm.At.UnixNano())
-		if err == nil {
-			_, err = log.appendInternal(ioCtx, leaf)
+		// Le journal est souvent sur le disque qui vient de se remplir : s'il refuse, la feuille d'arrêt
+		// est INSCRITE quand même, nue (hash seul), et l'alarme porte « +journal-write-failed » — la
+		// preuve de l'arrêt existe dans le log signé, la dérogation est signalée (arbitrage #275 :
+		// pas de clair ≠ pas de trace de l'arrêt). Voir SealLeafBestEffort.
+		leaf, jerr := SealLeafBestEffort(m.journal, KindBackpressure, m.cellID, m.salt, []byte(payload), alarm.At.UnixNano())
+		if jerr != nil {
+			alarm.Reason += "+journal-write-failed"
 		}
-		if err != nil {
+		if _, err := log.appendInternal(ioCtx, leaf); err != nil {
 			// La feuille d'arrêt n'a pas pu être écrite (p.ex. disque
 			// plein) : on verrouille quand même — l'absence de feuille
 			// est elle-même un symptôme classe W, remonté par l'alarme.

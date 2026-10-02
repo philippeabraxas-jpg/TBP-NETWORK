@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,9 +148,16 @@ func TestBackpressureStopLeafIsJournaled(t *testing.T) {
 			t.Fatal(err)
 		}
 		if journalDown {
-			// le verrouillage tient, la feuille n'est pas inscrite, l'alarme le dit
-			if size != 0 || !bytes.HasSuffix([]byte(alarm.Reason), []byte("+leaf-write-failed")) {
-				t.Fatalf("journal HS : taille %d, alarme %q — feuille inscrite sans clair, ou défaillance non signalée", size, alarm.Reason)
+			// arbitrage #275 : le journal refuse (disque plein) ⇒ la feuille d'arrêt est inscrite NUE, le verrou
+			// tient, et l'alarme signale la dérogation par une raison dédiée (pas « leaf-write-failed »)
+			if size != 1 || !strings.HasSuffix(alarm.Reason, "+journal-write-failed") || strings.Contains(alarm.Reason, "leaf-write-failed") {
+				t.Fatalf("journal HS : taille %d, alarme %q — feuille d'arrêt absente, ou dérogation non signalée", size, alarm.Reason)
+			}
+			if leaf := readLeafAt(t, log, size, 0); leaf.Kind != KindBackpressure {
+				t.Fatalf("la feuille nue n'est pas la feuille d'arrêt : kind=%d", leaf.Kind)
+			}
+			if recs, err := ReadRecords(path, key); err != nil || len(recs) != 0 {
+				t.Fatalf("journal HS : %d enregistrements (err=%v), attendu aucun", len(recs), err)
 			}
 		} else {
 			if size != 1 {
@@ -170,9 +178,11 @@ func TestAsyncEpisodeLeafIsJournaled(t *testing.T) {
 		log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
 		trips := make(chan string, 4)
 		clears := make(chan struct{}, 4)
+		faults := make(chan string, 4)
 		w, err := NewAsyncWriter(log, AsyncOptions{
 			CellID: "cell-async", Salt: []byte("sel-async-16oct!"), Window: 500 * time.Millisecond, Journal: j,
 			OnTrip: func(d string) { trips <- d }, OnClear: func() { clears <- struct{}{} },
+			OnJournalFault: func(d string) { faults <- d },
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -203,9 +213,18 @@ func TestAsyncEpisodeLeafIsJournaled(t *testing.T) {
 		}
 		dcancel()
 		if journalDown {
-			time.Sleep(300 * time.Millisecond)
-			if size := waitHead(t, ctx, log, 3, 5*time.Second); size != 3 {
-				t.Fatalf("taille %d : une feuille d'épisode a été inscrite sans clair journalisé", size)
+			// arbitrage #275 : feuille d'épisode inscrite NUE + OnJournalFault, pas de feuille perdue
+			size := waitHead(t, ctx, log, 4, 5*time.Second)
+			if size != 4 {
+				t.Fatalf("taille %d : la feuille d'épisode manque quand le journal refuse", size)
+			}
+			select {
+			case <-faults:
+			case <-time.After(2 * time.Second):
+				t.Fatal("dérogation (feuille sans clair) non signalée : OnJournalFault jamais appelé")
+			}
+			if recs, err := ReadRecords(path, key); err != nil || len(recs) != 0 {
+				t.Fatalf("journal HS : %d enregistrements (err=%v), attendu aucun", len(recs), err)
 			}
 		} else {
 			size := waitHead(t, ctx, log, 4, 5*time.Second)

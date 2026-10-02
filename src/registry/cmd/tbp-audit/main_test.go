@@ -150,3 +150,49 @@ func TestVerifyBadKeyOrJournal(t *testing.T) {
 		t.Fatalf("sans sous-commande : code %d", code)
 	}
 }
+
+// -coverage : la vérification INVERSE. Une feuille du log sans entrée de journal (feuille d'arrêt
+// inscrite nue quand le journal refuse, ou antérieure au journal) est listée et fait échouer la commande ;
+// sans elle, `verify` ne la voit pas (il va du journal vers le log, pas du log vers le journal).
+func TestCoverageListsLeavesWithoutAJournalEntry(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	// voisin : toutes les feuilles ont leur clair ⇒ couverture complète, code 0
+	var code int
+	var out, errs string
+	for i := 0; i < 100; i++ { // le checkpoint signé suit les feuilles avec un léger retard
+		code, out, errs = f.verify("-log", f.logDir, "-vkey", f.vkey, "-coverage")
+		if code == 0 || !strings.Contains(out+errs, "absente") && !strings.Contains(out+errs, "checkpoint") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if code != 0 || !strings.Contains(out, "2 feuille(s) dans le log, 0 sans entrée de journal") {
+		t.Fatalf("couverture complète refusée : code %d\n%s%s", code, out, errs)
+	}
+
+	// une feuille NUE : inscrite sans clair (comme la feuille d'arrêt quand le journal refuse)
+	bare := registry.Leaf{Kind: registry.KindBackpressure, CellID: "cell-a", PayloadHash: registry.HashPayload(salt, []byte("arret")), Timestamp: time.Date(2026, 10, 1, 0, 0, 9, 0, time.UTC).UnixNano()}
+	if _, err := f.log.Append(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		code, out, errs = f.verify("-log", f.logDir, "-vkey", f.vkey, "-coverage")
+		if strings.Contains(out, "3 feuille(s) dans le log") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if code != 1 || !strings.Contains(out, "index=2 kind=3") || !strings.Contains(out, "SANS-CLAIR") || !strings.Contains(out, "3 feuille(s) dans le log, 1 sans entrée de journal") {
+		t.Fatalf("feuille nue non listée : code %d\n%s%s", code, out, errs)
+	}
+	// sans -coverage, verify ne la voit pas : le journal est intact (c'est la raison d'être du mode)
+	if code, out, errs := f.verify("-log", f.logDir, "-vkey", f.vkey); code != 0 {
+		t.Fatalf("verify sans -coverage : code %d\n%s%s", code, out, errs)
+	}
+	// -coverage exige -log
+	if code, _, errs := f.verify("-coverage"); code != 2 || !strings.Contains(errs, "-coverage exige -log") {
+		t.Fatalf("-coverage sans -log : code %d %s", code, errs)
+	}
+}

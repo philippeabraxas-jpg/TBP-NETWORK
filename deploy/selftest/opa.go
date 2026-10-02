@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -242,8 +244,26 @@ func startOPA(s *suite, phase string, cfg config, addr, bundlePath, verification
 		s.fail(phase, "opa run (sonde /health, signature vérifiée)", err)
 		return nil, false
 	}
+	warmOPA(addr)
 	s.add(phase, "opa run avec capabilities restreintes et signature vérifiée (§106)", true, "http://"+addr)
 	return srv, true
+}
+
+// warmOPA échauffe un OPA fraîchement démarré avec quelques évaluations à vide : la toute première
+// évaluation d'un OPA froid peut dépasser le disjoncteur de 5 ms de pepd/brokerd (§9.1), et le
+// selftest — qui juge un allow sur la PREMIÈRE action — verrait alors un « opa-timeout » qui ne dit rien
+// du code testé (vu deux fois, en phases mono et daemons, juste après un gros calcul de la machine).
+// Les erreurs sont ignorées : c'est un échauffement, jamais un verdict.
+func warmOPA(addr string) {
+	hc := &http.Client{Timeout: 2 * time.Second}
+	for i := 0; i < 20; i++ {
+		resp, err := hc.Post("http://"+addr+"/v1/data/tbp/allow", "application/json", strings.NewReader(`{"input":{}}`)) //nolint:noctx
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
 }
 
 // verifyForgedBundleRefused est le témoin NON-VACUE direct de #106 :

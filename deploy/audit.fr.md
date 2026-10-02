@@ -37,6 +37,15 @@ feuille** n'est écrite : il n'existe jamais de feuille dont le clair n'existe
 pas. Le cas inverse (record écrit, feuille non inscrite) laisse un record
 **orphelin** : inoffensif, et signalé par la vérification.
 
+**Une exception documentée : les feuilles écrites autour du verrou de backpressure.** La feuille
+d'arrêt (`KindBackpressure`) et la feuille d'épisode de durabilité (`TBAD1`) sont la preuve que la
+cellule s'est arrêtée, et le journal est le plus souvent sur le disque qui vient de se remplir. Si le
+journal refuse leur clair, la feuille est **quand même écrite, nue** (hash seul), et le démon le dit :
+la raison de l'alarme du backpressure porte `+journal-write-failed` (pepd journalise `ALARME journal
+d'audit` pour la feuille d'épisode). Le verrou tient dans les deux cas. La feuille est ensuite listée
+par `tbp-audit verify -coverage`. (Décision prise dans #275 : un arrêt sans trace dans le log signé est
+pire qu'un arrêt dont le clair manque et est signalé.)
+
 ## La clé du journal
 
 Un secret de 32 octets, en hex dans un fichier `0600` (un mode plus large est
@@ -74,6 +83,21 @@ Code de sortie : `0` tout vérifié, `1` au moins un échec, `2` usage ou journa
 illisible (mauvaise clé, ligne altérée — un journal lisible en partie ne passe
 pas pour complet). Le clair n'est affiché qu'avec `-reveal`.
 
+**La vérification inverse : `-coverage`.** `verify` va du journal vers le log : il voit un
+enregistrement orphelin, mais **pas** une feuille qui est dans le log sans entrée de journal.
+`-coverage` (exige `-log`) relit **toutes les feuilles du log** sous le checkpoint signé et liste
+celles sans entrée de journal (`SANS-CLAIR`), code de sortie `1` s'il y en a :
+
+```
+tbp-audit verify -records records.jsonl -key records.key \
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub -coverage
+feuille index=412 kind=3 cell=cell-a ts=… SANS-CLAIR : aucune entrée de journal
+```
+
+Une telle feuille n'est attendue que dans deux cas : une feuille **antérieure au journal**, et
+l'**exception documentée** ci-dessous (journal refusé sur un disque plein). Tout autre cas est un
+producteur non câblé — le selftest lance cette vérification sur le log de chaque démon.
+
 ## Producteurs
 
 Câblés à ce jour :
@@ -87,7 +111,7 @@ Câblés à ce jour :
 | `pepd` / `brokerd` / `anod` — garde de provisionnement (`TBPL3` : genèse, démarrage, transition, refus, ré-engagement) | `KindManifest` | même journal (partagé) ; `anod` a son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : `anod` ne démarre pas sans eux). Un journal qui refuse ⇒ aucune feuille ⇒ la garde refuse le démarrage. |
 | `pepd` — manifeste du démarrage mesuré (`TBPL2`) | `KindManifest` | même journal (partagé) |
 | `brokerd` — suivi d'époque (`TBPE1`), feuille d'épisode de l'écrivain asynchrone de `pepd` (`TBAD1`) | `KindEpoch`, `KindTelemetry` | même journal (partagé) |
-| Producteurs de bibliothèque à option `Journal`, câblés par le démon qui les fait tourner : contrôleur de promotion (`TBPP1`), ancreur, feuille d'arrêt du backpressure | `KindPromotion`, `KindAnchor`, `KindBackpressure` | option `Journal` (nil = feuille nue). La feuille d'arrêt et la feuille d'épisode s'écrivent autour du verrou de backpressure : un journal qui refuse ⇒ la feuille est omise (`+leaf-write-failed` dans l'alarme) et le verrou tient. |
+| Producteurs de bibliothèque à option `Journal`, câblés par le démon qui les fait tourner : contrôleur de promotion (`TBPP1`), ancreur, feuille d'arrêt du backpressure | `KindPromotion`, `KindAnchor`, `KindBackpressure` | option `Journal` (nil = feuille nue). La feuille d'arrêt et la feuille d'épisode s'écrivent autour du verrou de backpressure : un journal qui refuse ⇒ la feuille est **quand même écrite, nue** et l'alarme dit `+journal-write-failed` (voir « une exception documentée ») ; le verrou tient. |
 | `supervisord` — alertes du moniteur (`TBPS1`, sel compris) | `KindSupervision` | son propre `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis** : sans journal `supervisord` ne démarre pas). Un journal qui refuse ⇒ aucune feuille ⇒ aucune alerte notifiée. |
 | `pepd` / `brokerd` — drapeaux d'échappatoires dev (`TBDV1`) | `KindTelemetry` | même journal (partagé) ; un journal qui refuse ⇒ le démarrage est refusé |
 | `tmetrics` — mesure du traducteur (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**requis**), qui désignent le journal du service (pepd ou brokerd) propriétaire du registre où il inscrit |
