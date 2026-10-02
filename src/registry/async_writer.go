@@ -95,6 +95,9 @@ type AsyncOptions struct {
 	// la feuille étant impossible (publication en panne), c'est le seul
 	// signal en temps réel. Ne doit pas bloquer.
 	OnTrip func(detail string)
+	// OnJournalFault est appelé quand le journal d'enregistrements a refusé le clair de la feuille
+	// d'épisode : elle est inscrite quand même, nue (sans clair) — ceci en est le signal. Optionnel.
+	OnJournalFault func(detail string)
 	// OnClear est appelé après rattrapage complet et écriture de la
 	// feuille d'épisode. Optionnel.
 	OnClear func()
@@ -124,15 +127,16 @@ type pendingFuture struct {
 // n'a pas à savoir quel modèle de durabilité le sert. Sûr pour un usage
 // concurrent.
 type AsyncWriter struct {
-	log      *CellLog
-	cellID   string
-	salt     []byte
-	journal  *RecordStore
-	window   time.Duration
-	capacity int
-	onTrip   func(detail string)
-	onClear  func()
-	now      func() time.Time
+	log            *CellLog
+	cellID         string
+	salt           []byte
+	journal        *RecordStore
+	onJournalFault func(string)
+	window         time.Duration
+	capacity       int
+	onTrip         func(detail string)
+	onClear        func()
+	now            func() time.Time
 
 	// mu protège la file et l'état de coupure. cond signale le tracker
 	// (file non vide) et WaitOutstanding (file vide hors rattrapage).
@@ -197,19 +201,20 @@ func NewAsyncWriter(log *CellLog, opts AsyncOptions) (*AsyncWriter, error) {
 	copy(salt, opts.Salt)
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &AsyncWriter{
-		log:         log,
-		cellID:      opts.CellID,
-		salt:        salt,
-		journal:     opts.Journal,
-		window:      window,
-		capacity:    capacity,
-		onTrip:      opts.OnTrip,
-		onClear:     opts.OnClear,
-		now:         now,
-		closed:      make(chan struct{}),
-		trackerCtx:  ctx,
-		trackerStop: cancel,
-		tickerStop:  make(chan struct{}),
+		log:            log,
+		cellID:         opts.CellID,
+		salt:           salt,
+		journal:        opts.Journal,
+		onJournalFault: opts.OnJournalFault,
+		window:         window,
+		capacity:       capacity,
+		onTrip:         opts.OnTrip,
+		onClear:        opts.OnClear,
+		now:            now,
+		closed:         make(chan struct{}),
+		trackerCtx:     ctx,
+		trackerStop:    cancel,
+		tickerStop:     make(chan struct{}),
 	}
 	w.cond.L = &w.mu
 	go w.tracker()
@@ -371,13 +376,17 @@ func (w *AsyncWriter) writeCatchup() {
 			tripAt.UTC().Format(time.RFC3339Nano),
 			w.now().UTC().Format(time.RFC3339Nano),
 			lag.Milliseconds())
-		// Échec (journal ou log) : l'absence de feuille est elle-même le symptôme
-		// (la coupure a été alarmée en temps réel) — jamais de boucle ici.
-		if leaf, err := SealLeaf(w.journal, KindTelemetry, w.cellID, w.salt, []byte(payload), w.now().UnixNano()); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_, _ = w.log.appendInternal(ctx, leaf)
-			cancel()
+		// Journal refusé : la feuille d'épisode est inscrite NUE (arbitrage #275, comme la feuille
+		// d'arrêt du backpressure) et OnJournalFault le signale. Échec du log lui-même :
+		// l'absence de feuille est le symptôme (la coupure a été alarmée en temps réel) — jamais de
+		// boucle ici.
+		leaf, jerr := SealLeafBestEffort(w.journal, KindTelemetry, w.cellID, w.salt, []byte(payload), w.now().UnixNano())
+		if jerr != nil && w.onJournalFault != nil {
+			w.onJournalFault(jerr.Error())
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, _ = w.log.appendInternal(ctx, leaf)
+		cancel()
 	}
 
 	w.mu.Lock()

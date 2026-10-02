@@ -37,6 +37,16 @@ written: there is never a leaf whose cleartext does not exist. The reverse
 (record written, leaf not appended) leaves an **orphan** record: harmless, and
 reported by the verification.
 
+**One documented exception: the leaves written around the backpressure lock.** The
+stop leaf (`KindBackpressure`) and the durability-episode leaf (`TBAD1`) are the
+proof that the cell stopped, and the journal usually sits on the disk that just
+filled up. If the journal refuses their cleartext, the leaf is **still written, bare**
+(hash only), and the daemon says so: the backpressure alarm reason gets
+`+journal-write-failed` (pepd logs `ALARME journal d'audit` for the episode leaf). The
+lock holds either way. The leaf is then listed by `tbp-audit verify -coverage`. (The
+decision made in #275: a stop with no trace in the signed log is worse than a stop
+whose cleartext is missing and flagged.)
+
 ## The journal key
 
 A 32-byte secret, hex in a `0600` file (a wider mode is refused at load). It
@@ -72,6 +82,22 @@ Exit code: `0` all verified, `1` at least one failure, `2` usage or unreadable
 journal (wrong key, altered line — a partially readable journal does not pass
 for a complete one). The cleartext is printed only with `-reveal`.
 
+**The reverse check: `-coverage`.** `verify` goes from the journal to the log: it
+sees an orphan record, but **not** a leaf that sits in the log with no journal
+entry. `-coverage` (needs `-log`) re-reads **every leaf of the log** under the
+signed checkpoint and lists those with no journal entry (`SANS-CLAIR`), exit
+code `1` if there is any:
+
+```
+tbp-audit verify -records records.jsonl -key records.key \
+    -log /var/lib/tbp/registry -vkey-file cell_log.pub -coverage
+feuille index=412 kind=3 cell=cell-a ts=… SANS-CLAIR : aucune entrée de journal
+```
+
+Such a leaf is expected in two cases only: a leaf **older than the journal**, and the
+**documented exception** below (journal refused on a full disk). Anything else is a
+producer that is not wired — the selftest runs this check on every daemon's log.
+
 ## Producers
 
 Wired so far:
@@ -85,7 +111,7 @@ Wired so far:
 | `pepd` / `brokerd` / `anod` — provisioning guard (`TBPL3`: genesis, boot, transition, refusal, re-engagement) | `KindManifest` | same journal (shared); `anod` has its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: `anod` does not start without them). A journal that refuses ⇒ no leaf ⇒ the guard refuses the boot. |
 | `pepd` — measured-boot manifest (`TBPL2`) | `KindManifest` | same journal (shared) |
 | `brokerd` — epoch tracker (`TBPE1`), `pepd`'s async writer episode leaf (`TBAD1`) | `KindEpoch`, `KindTelemetry` | same journal (shared) |
-| Library producers with a `Journal` option, wired by the daemon that runs them: promotion controller (`TBPP1`), anchorer, backpressure stop leaf | `KindPromotion`, `KindAnchor`, `KindBackpressure` | `Journal` option (nil = bare leaf). The stop leaf and the episode leaf are written around the backpressure lock: a journal that refuses ⇒ the leaf is skipped (`+leaf-write-failed` in the alarm) and the lock holds. |
+| Library producers with a `Journal` option, wired by the daemon that runs them: promotion controller (`TBPP1`), anchorer, backpressure stop leaf | `KindPromotion`, `KindAnchor`, `KindBackpressure` | `Journal` option (nil = bare leaf). The stop leaf and the episode leaf are written around the backpressure lock: a journal that refuses ⇒ the leaf is **still written, bare** and the alarm says `+journal-write-failed` (see "one documented exception"); the lock holds. |
 | `supervisord` — monitor alerts (`TBPS1`, salt included) | `KindSupervision` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: no journal ⇒ `supervisord` does not start). A journal that refuses ⇒ no leaf ⇒ no alert is notified. |
 | `pepd` / `brokerd` — dev-escape-hatch flags (`TBDV1`) | `KindTelemetry` | same journal (shared); a journal that refuses ⇒ the start is refused |
 | `tmetrics` — translator measurement (`TBTM1`) | `KindTelemetry` | `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**), pointing at the journal of the service (pepd or brokerd) that owns the registry it appends to |

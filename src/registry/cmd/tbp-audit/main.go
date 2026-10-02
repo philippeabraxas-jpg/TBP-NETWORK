@@ -8,7 +8,12 @@
 //	tbp-audit keygen -out records.key
 //	tbp-audit verify -records records.jsonl -key records.key \
 //	    [-log /var/lib/tbp/registry -vkey-file cell_log.pub | -vkey <clé note>] \
-//	    [-index N] [-reveal]
+//	    [-index N] [-reveal] [-coverage]
+//
+// -coverage (exige -log) fait la vérification INVERSE : il relit toutes les feuilles du log (checkpoint
+// signé vérifié) et liste celles qui n'ont AUCUNE entrée dans le journal — feuilles inscrites sans clair
+// (journal refusé en disque plein : feuille d'arrêt du backpressure, feuille d'épisode de durabilité) ou
+// antérieures au journal. Sans lui, un enregistrement orphelin est vu, une feuille sans clair ne l'est pas.
 //
 // Sans -log, seule la correspondance (sel ‖ record) ↔ hash de la feuille est
 // contrôlée (« hash »). Avec -log, la feuille doit en plus figurer dans le log
@@ -34,6 +39,7 @@ import (
 	"golang.org/x/mod/sumdb/note"
 
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -54,7 +60,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage : tbp-audit keygen -out FICHIER | tbp-audit verify -records FICHIER -key FICHIER [-log RÉP (-vkey CLÉ | -vkey-file FICHIER)] [-index N] [-reveal]")
+	fmt.Fprintln(w, "usage : tbp-audit keygen -out FICHIER | tbp-audit verify -records FICHIER -key FICHIER [-log RÉP (-vkey CLÉ | -vkey-file FICHIER)] [-index N] [-reveal] [-coverage]")
 }
 
 func cmdKeygen(args []string, stdout, stderr io.Writer) int {
@@ -83,12 +89,17 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 	vkeyFile := fs.String("vkey-file", "", "fichier contenant la clé publique du log")
 	index := fs.Int64("index", -1, "ne vérifier que l'enregistrement dont la feuille est à cet index (exige -log)")
 	reveal := fs.Bool("reveal", false, "afficher le clair des enregistrements (base64)")
+	coverage := fs.Bool("coverage", false, "lister les feuilles du log SANS entrée de journal (exige -log)")
 	if fs.Parse(args) != nil || *records == "" || *keyFile == "" {
 		usage(stderr)
 		return 2
 	}
 	if *index >= 0 && *logDir == "" {
 		fmt.Fprintln(stderr, "-index exige -log")
+		return 2
+	}
+	if *coverage && *logDir == "" {
+		fmt.Fprintln(stderr, "-coverage exige -log")
 		return 2
 	}
 	key, err := registry.LoadRecordKey(*keyFile)
@@ -170,10 +181,52 @@ func cmdVerify(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "%d enregistrement(s) examiné(s), %d échec(s)\n", shown, failed)
+	if *coverage {
+		uncovered, total, err := uncoveredLeaves(ctx, *logDir, v, recs)
+		if err != nil {
+			fmt.Fprintln(stderr, "coverage :", err)
+			return 2
+		}
+		for _, u := range uncovered {
+			fmt.Fprintf(stdout, "feuille index=%d kind=%d cell=%s ts=%s SANS-CLAIR : aucune entrée de journal\n", u.index, u.leaf.Kind, u.leaf.CellID,
+				time.Unix(0, u.leaf.Timestamp).UTC().Format(time.RFC3339Nano))
+		}
+		fmt.Fprintf(stdout, "%d feuille(s) dans le log, %d sans entrée de journal\n", total, len(uncovered))
+		if len(uncovered) > 0 {
+			failed += len(uncovered)
+		}
+	}
 	if failed > 0 {
 		return 1
 	}
 	return 0
+}
+
+type uncoveredLeaf struct {
+	index int
+	leaf  registry.Leaf
+}
+
+// uncoveredLeaves relit TOUTES les feuilles du log sous checkpoint signé (supervision.ChainWatcher :
+// re-hash, consistance) et rend celles dont aucune entrée du journal ne porte les mêmes octets.
+func uncoveredLeaves(ctx context.Context, logDir string, v note.Verifier, recs []registry.SealedRecord) ([]uncoveredLeaf, int, error) {
+	leaves, _, err := supervision.NewChainWatcher(ctx, "tbp-audit", logDir, v.Name(), v, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	journaled := make(map[registry.Leaf]int, len(recs))
+	for _, r := range recs {
+		journaled[r.Leaf]++
+	}
+	var out []uncoveredLeaf
+	for i, l := range leaves {
+		if journaled[l] > 0 {
+			journaled[l]--
+			continue
+		}
+		out = append(out, uncoveredLeaf{index: i, leaf: l})
+	}
+	return out, len(leaves), nil
 }
 
 func failureCode(err error) string {

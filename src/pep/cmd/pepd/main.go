@@ -349,6 +349,9 @@ func run() error {
 			OnTrip: func(detail string) {
 				log.Printf("pepd: ALARME durabilité registre — coupure fail-closed (%s)", detail)
 			},
+			OnJournalFault: func(detail string) {
+				log.Printf("pepd: ALARME journal d'audit — feuille d'épisode de durabilité inscrite SANS clair (%s) ; `tbp-audit verify -coverage` la liste", detail)
+			},
 			OnClear: func() {
 				log.Printf("pepd: durabilité registre — rattrapage tracé, coupure levée")
 			},

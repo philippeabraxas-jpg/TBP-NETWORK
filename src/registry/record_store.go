@@ -241,6 +241,22 @@ func SealLeaf(store *RecordStore, kind byte, cellID string, salt, record []byte,
 	return leaf, nil
 }
 
+// SealLeafBestEffort est SealLeaf pour les deux feuilles qui ne doivent PAS disparaître quand le journal
+// refuse (la feuille d'arrêt du backpressure, la feuille d'épisode de durabilité : le journal est
+// justement sur le disque qui vient de se remplir). Elle rend TOUJOURS la feuille à inscrire ; si le
+// journal a refusé, la feuille est nue (hash seul, sans clair) et journalErr dit pourquoi — l'appelant
+// l'inscrit quand même et SIGNALE la dérogation (alarme dédiée). `tbp-audit verify -coverage` liste les
+// feuilles du log qui n'ont pas d'entrée de journal.
+func SealLeafBestEffort(store *RecordStore, kind byte, cellID string, salt, record []byte, ts int64) (leaf Leaf, journalErr error) {
+	leaf = Leaf{Kind: kind, CellID: cellID, PayloadHash: HashPayload(salt, record), Timestamp: ts}
+	if store != nil {
+		if err := store.Put(leaf, salt, record); err != nil {
+			journalErr = fmt.Errorf("journal d'enregistrements : %w (feuille inscrite SANS clair)", err)
+		}
+	}
+	return leaf, journalErr
+}
+
 // AppendLeaf inscrit la feuille (kind, cellID, hash salé de record, ts) ; si
 // store != nil, le clair est journalisé d'abord (AppendSealed), sinon c'est la
 // feuille nue historique (bibliothèque, tests). Les producteurs de feuilles

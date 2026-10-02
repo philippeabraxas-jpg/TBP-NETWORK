@@ -345,9 +345,25 @@ func runDaemons(s *suite, cfg config) {
 		s.fail(phaseDaemons, "signer cell-a", err)
 		return
 	}
+	// Journal d'audit de brokerd (#275) : REQUIS. Neuf à chaque exécution (base est vidée au début de la
+	// phase). Créé AVANT la genèse simulée : la feuille que le harnais écrit dans le registre de brokerd
+	// (une cellule déjà déployée) porte son clair dans CE journal, comme celles du démon — la vérification
+	// de couverture (`tbp-audit verify -coverage`) ne doit trouver aucune feuille sans clair.
+	auditKeyPath := filepath.Join(base, "brokerd-audit.key")
+	auditJournalPath := filepath.Join(base, "brokerd-audit-records.jsonl")
+	if err := registry.GenerateRecordKey(auditKeyPath); err != nil {
+		s.fail(phaseDaemons, "clé du journal d'audit de brokerd", err)
+		return
+	}
+	harnessJournal, err := registry.OpenRecordStoreFiles(auditJournalPath, auditKeyPath)
+	if err != nil {
+		s.fail(phaseDaemons, "journal d'audit de brokerd (harnais)", err)
+		return
+	}
+	defer harnessJournal.Close()
 	manifester, err := registry.NewManifester(registry.ManifestOptions{
 		CellID: daemonsCellID, Signer: cellSigner, Verifier: cellVerifier,
-		Leaves: cellLog, Salt: cellSalt,
+		Leaves: cellLog, Journal: harnessJournal, Salt: cellSalt,
 	})
 	if err != nil {
 		s.fail(phaseDaemons, "manifester cell-a", err)
@@ -508,15 +524,6 @@ func runDaemons(s *suite, cfg config) {
 		return
 	}
 	s.add(phaseDaemons, "clés DEV émises (émetteur 0600, opérateurs, cells.json — custody D97)", true, "")
-
-	// Journal d'audit de brokerd (#275) : REQUIS. Neuf à chaque exécution (base est
-	// vidée au début de la phase).
-	auditKeyPath := filepath.Join(base, "brokerd-audit.key")
-	auditJournalPath := filepath.Join(base, "brokerd-audit-records.jsonl")
-	if err := registry.GenerateRecordKey(auditKeyPath); err != nil {
-		s.fail(phaseDaemons, "clé du journal d'audit de brokerd", err)
-		return
-	}
 
 	brokerEnv := append(os.Environ(),
 		"TBP_AUDIT_RECORDS="+auditJournalPath,

@@ -38,6 +38,7 @@ import (
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
+	supervision "github.com/philippeabraxas-jpg/TBP-NETWORK/src/supervision"
 )
 
 const (
@@ -778,4 +779,27 @@ func verifyAuditJournal(s *suite, ph, who, regDir, journalPath, keyPath string, 
 	s.add(ph, "#275 : "+who+" — le clair de chaque feuille est vérifiable (hash + inclusion dans le log signé)",
 		bad == "" && decisions >= minDecisions,
 		fmt.Sprintf("%d enregistrements, %d décisions %s", len(recs), decisions, bad))
+
+	// Vérification INVERSE (`tbp-audit verify -coverage`) : toute feuille du log a son clair dans le journal.
+	// Le clair est journalisé AVANT la feuille : une feuille sans entrée n'est pas un retard, c'est un
+	// producteur non câblé (ou la dérogation « journal refusé » de la feuille d'arrêt).
+	leaves, _, werr := supervision.NewChainWatcher(context.Background(), who, regDir, verifier.Name(), verifier, 0)
+	if werr != nil {
+		s.add(ph, "#275 : "+who+" — couverture : le log se relit sous checkpoint signé", false, werr.Error())
+		return
+	}
+	journaled := make(map[registry.Leaf]int, len(recs))
+	for _, r := range recs {
+		journaled[r.Leaf]++
+	}
+	var uncovered []string
+	for i, l := range leaves {
+		if journaled[l] > 0 {
+			journaled[l]--
+			continue
+		}
+		uncovered = append(uncovered, fmt.Sprintf("index=%d kind=%d", i, l.Kind))
+	}
+	s.add(ph, "#275 : "+who+" — couverture : toute feuille du log a une entrée de journal (aucune feuille sans clair)",
+		len(uncovered) == 0, fmt.Sprintf("%d feuilles dans le log, %d sans entrée %s", len(leaves), len(uncovered), strings.Join(uncovered, ", ")))
 }
