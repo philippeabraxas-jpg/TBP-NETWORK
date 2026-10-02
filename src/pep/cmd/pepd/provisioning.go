@@ -40,8 +40,48 @@ type provisioningInputs struct {
 	// topology : « mono » ou « multi » (TBP_TOPOLOGY) — avec quorumMin, les réglages qui font
 	// l'échelle, engagés dans le témoin (issue #224).
 	topology string
+	// posture : les interrupteurs de sécurité engagés dans le témoin (security-posture, revue tierce 4.6).
+	posture []byte
 	// journal : journal d'enregistrements (#275) — le clair des feuilles de provisionnement.
 	journal *registry.RecordStore
+}
+
+// pepdPosture dérive de l'environnement les interrupteurs de sécurité de pepd, avec les MÊMES lecteurs que le démon (une
+// valeur illisible est une erreur, jamais un défaut). Partagé par le démarrage et par le recalcul hors machine (#264).
+func pepdPosture(getenv func(string) string) ([]byte, error) {
+	p := pep.Posture{}
+	p["ano-proxy"] = pep.OnOff(getenv("TBP_PROXY_ANO_SOCKET") != "") // le retirer désactive l'anonymisation
+	p["opa"] = pep.OnOff(getenv("TBP_OPA_DISABLED_DEV_UNSAFE") != "1")
+	trip, err := opaTripAfter(getenv)
+	if err != nil {
+		return nil, err
+	}
+	p["opa-trip-after"] = strconv.Itoa(trip) // le relever affaiblit le verrou T14
+	probes, _, err := opaAutoClearConfig(getenv)
+	if err != nil {
+		return nil, err
+	}
+	p["opa-autoclear"] = pep.OnOff(probes > 0) // 0 = levée manuelle seulement, le profil le plus strict
+	tuning, err := pep.OPATuningFromEnv(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("pepd: %w", err)
+	}
+	p.OPAPosture(tuning)
+	tele, err := telemetryFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	p["telemetry"] = pep.OnOff(tele.enabled) // détection d'exfiltration au compte-gouttes (anti-dribble)
+	async, _, err := durabilityFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	if async {
+		p["durability"] = "async-bounded"
+	} else {
+		p["durability"] = "sync"
+	}
+	return p.Bytes(), nil
 }
 
 // pepdProvisioningFiles : ce que pepd mesure, dérivé de SA configuration. Partagé par le démarrage
@@ -57,6 +97,9 @@ func pepdProvisioningFiles(in provisioningInputs, getenv func(string) string) ([
 		// l'ÉCHELLE : k du quorum et topologie. Abaisser TBP_QUORUM_MIN par l'environnement
 		// divergerait du témoin ; la transition n'est autorisée que par k ATTESTÉ (#224).
 		{Name: "quorum-settings", Content: pep.QuorumSettings(in.quorumMin, in.topology)},
+		// la POSTURE : les interrupteurs de sécurité (ano, verrou OPA, file d'admission, télémétrie, durabilité) — une
+		// dérive diverge comme TBP_QUORUM_MIN (revue tierce, 4.6)
+		{Name: pep.ProvisioningPostureName, Content: in.posture},
 	}, extra...), nil
 }
 
@@ -84,6 +127,9 @@ func provisioningInputsFromEnv(getenv func(string) string) (provisioningInputs, 
 		return in, err
 	}
 	in.topology = topologyName(multi)
+	if in.posture, err = pepdPosture(getenv); err != nil {
+		return in, err
+	}
 	return in, nil
 }
 

@@ -73,10 +73,15 @@ func (pf *provFixture) setup(t *testing.T) error {
 	if err != nil {
 		t.Fatal(err)
 	}
+	posture, err := pepdPosture(pf.getenv) // comme run() : dérivée de l'environnement du démon
+	if err != nil {
+		t.Fatal(err)
+	}
 	return setupProvisioning(pf.ctx, provisioningInputs{
 		cellID: pf.cellID, regDir: pf.regDir, salt: pf.salt,
 		keyringFile: pf.keyring, quorumKeyringFile: pf.quorumKeyring,
 		quorumKeyring: pf.measuredBootFixture.quorumKeyring, quorumMin: pf.quorumMin, topology: pf.topology,
+		posture: posture,
 	}, signer, verifier, pf.cellLog, pf.getenv)
 }
 
@@ -472,6 +477,112 @@ func TestPepdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
 	}
 }
 
+// --- interrupteurs de sécurité attestés (revue tierce du 2 octobre, 4.6) ------------------
+
+// Retirer TBP_PROXY_ANO_SOCKET désactive l'anonymisation ; relever TBP_OPA_TRIP_AFTER affaiblit le verrou ; couper
+// la file d'admission d'OPA ou la détection de blocage retire une défense. Sans engagement, rien ne divergeait : un
+// changement du fichier d'environnement modifiait la posture sans alarme. Même traitement que TBP_QUORUM_MIN (#224).
+func TestPepdSecuritySwitchesAreAttestedAndGoverned(t *testing.T) {
+	for name, edit := range map[string]func(env map[string]string){
+		"socket ano présent":          func(e map[string]string) { e["TBP_PROXY_ANO_SOCKET"] = "/run/tbp/ano.sock" },
+		"verrou OPA relevé":           func(e map[string]string) { e["TBP_OPA_TRIP_AFTER"] = "50" },
+		"file d'admission coupée":     func(e map[string]string) { e["TBP_OPA_MAX_INFLIGHT"] = "0" },
+		"détection de blocage coupée": func(e map[string]string) { e["TBP_OPA_STALL_WINDOW_MS"] = "0" },
+		"reprise auto coupée":         func(e map[string]string) { e["TBP_OPA_AUTOCLEAR_PROBES"] = "0" },
+		"télémétrie activée":          func(e map[string]string) { e["TBP_TELEMETRY"] = "1" },
+		"durabilité synchrone":        func(e map[string]string) { e["TBP_DURABILITY"] = "sync" },
+		"OPA désactivé (dev)":         func(e map[string]string) { e["TBP_OPA_DISABLED_DEV_UNSAFE"] = "1" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			pf := newProvFixture(t)
+			pf.topology = "mono"
+			a, b := newKey(t), newKey(t)
+			pf.useQuorum(t, 2, a, b)
+			if err := pf.setup(t); err != nil {
+				t.Fatalf("premier démarrage : %v", err)
+			}
+			if err := pf.setup(t); err != nil {
+				t.Fatalf("redémarrage à posture identique refusé : %v", err)
+			}
+			edit(pf.env)
+			if err := pf.setup(t); err == nil {
+				t.Fatal("posture changée par l'environnement acceptée sans preuve")
+			}
+			// une seule signature ne suffit pas (k attesté = 2)
+			pf.proofBy(t, conditionProvisioningTransition, a)
+			if err := pf.setup(t); err == nil {
+				t.Fatal("posture changée AUTORISÉE par une seule signature")
+			}
+			// la transition signée par le quorum attesté passe, et la nouvelle posture tient sans preuve
+			pf.proofBy(t, conditionProvisioningTransition, a, b)
+			if err := pf.setup(t); err != nil {
+				t.Fatalf("transition signée par le quorum refusée : %v", err)
+			}
+			delete(pf.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+			if err := pf.setup(t); err != nil {
+				t.Fatalf("nouvelle posture non retenue : %v", err)
+			}
+		})
+	}
+}
+
+// Les VALEURS de réglage fin ne sont pas la posture : ajuster une taille de file ou une durée ne demande pas de
+// preuve de quorum (choix d'arbitrage : interrupteurs seulement).
+func TestPepdTuningValuesAreNotAttested(t *testing.T) {
+	pf := newProvFixture(t)
+	pf.topology = "mono"
+	pf.useQuorum(t, 2, newKey(t), newKey(t))
+	if err := pf.setup(t); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"TBP_OPA_MAX_QUEUE": "64", "TBP_OPA_SUBJECT_SHARE": "50", "TBP_OPA_STALL_WINDOW_MS": "9000", "TBP_OPA_MAX_INFLIGHT": "4",
+		"TBP_OPA_AUTOCLEAR_PROBES": "7", "TBP_OPA_AUTOCLEAR_INTERVAL_MS": "5000", "TBP_DURABILITY_WINDOW_MS": "20000",
+	} {
+		pf.env[k] = v
+	}
+	if err := pf.setup(t); err != nil {
+		t.Fatalf("un réglage fin (valeurs) a divergé alors qu'il n'est pas un interrupteur : %v", err)
+	}
+}
+
+// La posture est dérivée des MÊMES lecteurs que le démon : une valeur illisible est une erreur, jamais un défaut.
+func TestPepdPostureReadsTheSameValuesAsTheDaemon(t *testing.T) {
+	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	def, err := pepdPosture(get(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ano-proxy=off\n", "opa=on\n", "opa-trip-after=3\n", "opa-autoclear=on\n", "opa-admission=on\n", "opa-stall-detection=on\n", "telemetry=off\n", "durability=async-bounded\n"} {
+		if !strings.Contains(string(def), want) {
+			t.Errorf("posture par défaut sans %q :\n%s", want, def)
+		}
+	}
+	if def2, _ := pepdPosture(get(nil)); string(def2) != string(def) {
+		t.Fatal("posture non déterministe")
+	}
+	for name, m := range map[string]map[string]string{
+		"trip illisible":      {"TBP_OPA_TRIP_AFTER": "beaucoup"},
+		"file hors bornes":    {"TBP_OPA_MAX_INFLIGHT": "999"},
+		"télémétrie invalide": {"TBP_TELEMETRY": "peut-etre"},
+		"durabilité inconnue": {"TBP_DURABILITY": "magique"},
+		"autoclear illisible": {"TBP_OPA_AUTOCLEAR_PROBES": "x"},
+	} {
+		if _, err := pepdPosture(get(m)); err == nil {
+			t.Errorf("%s : erreur attendue", name)
+		}
+	}
+	// le recalcul hors machine (#264) voit la même posture que le démon
+	in, err := provisioningInputsFromEnv(get(map[string]string{"TBP_CELL_ID": "cell-a", "TBP_TOPOLOGY": "mono", "TBP_OPA_TRIP_AFTER": "9"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := pepdPosture(get(map[string]string{"TBP_OPA_TRIP_AFTER": "9"}))
+	if string(in.posture) != string(want) {
+		t.Fatalf("posture de print-provisioning-condition ≠ celle du démon :\n%s\n%s", in.posture, want)
+	}
+}
+
 // La topologie fait partie de l'échelle : la changer est une transition, pas un réglage libre.
 func TestPepdTopologyChangeIsAGovernedTransition(t *testing.T) {
 	pf := newProvFixture(t)
@@ -633,11 +744,15 @@ func TestPepdProvisioningAndMeasuredBootLeavesAreJournaled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	posture, err := pepdPosture(pf.getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := setupProvisioning(pf.ctx, provisioningInputs{
 		cellID: pf.cellID, regDir: pf.regDir, salt: pf.salt,
 		keyringFile: pf.keyring, quorumKeyringFile: pf.quorumKeyring,
 		quorumKeyring: pf.measuredBootFixture.quorumKeyring, quorumMin: pf.quorumMin, topology: pf.topology,
-		journal: j,
+		posture: posture, journal: j,
 	}, signer, verifier, pf.cellLog, pf.getenv); err != nil {
 		t.Fatalf("provisionnement : %v", err)
 	}

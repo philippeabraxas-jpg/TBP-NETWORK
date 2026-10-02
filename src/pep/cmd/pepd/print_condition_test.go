@@ -273,8 +273,9 @@ func TestPepdProvisioningInputsFromEnv(t *testing.T) {
 		}
 	}
 	// la liste des fichiers est celle du démon : mêmes noms, autorité sur le trousseau de contrôleurs
-	files, err := pepdProvisioningFiles(provisioningInputs{keyringFile: "/k", quorumKeyringFile: "/q", quorumMin: 2, topology: "mono"}, func(string) string { return "" })
-	if err != nil || len(files) != 3 || files[1].Name != "quorum-keyring" || !files[1].Authority || string(files[2].Content) != string(pep.QuorumSettings(2, "mono")) {
+	files, err := pepdProvisioningFiles(provisioningInputs{keyringFile: "/k", quorumKeyringFile: "/q", quorumMin: 2, topology: "mono", posture: []byte("telemetry=off\n")}, func(string) string { return "" })
+	if err != nil || len(files) != 4 || files[1].Name != "quorum-keyring" || !files[1].Authority || string(files[2].Content) != string(pep.QuorumSettings(2, "mono")) ||
+		files[3].Name != pep.ProvisioningPostureName || string(files[3].Content) != "telemetry=off\n" {
 		t.Fatalf("fichiers mesurés : %+v, %v", files, err)
 	}
 }
