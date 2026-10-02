@@ -455,7 +455,12 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                  # /v1/supervision/degraded/{presence,decide},
 #                                  # GET /v1/supervision/degraded. Gestes
 #                                  # d'opérateur : `quorumproof arbid|arbpresence|
-#                                  # arbdecide`. La file vit en mémoire et est
+#                                  # arbdecide`. Un battement ou une décision signés
+#                                  # sont liés à CETTE cellule (-cell) et une décision
+#                                  # à UNE mise en file (-ticket, lu dans GET
+#                                  # /v1/supervision/degraded) : la même signature
+#                                  # rejouée après consommation, ou présentée à une
+#                                  # autre cellule, est refusée. La file vit en mémoire et est
 #                                  # RESTAURÉE au démarrage depuis le journal
 #                                  # (entrées en attente / approuvées / refusées,
 #                                  # pas la présence de l'arbitre : les battements

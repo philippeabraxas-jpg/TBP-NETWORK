@@ -116,7 +116,7 @@ func TestBrokerdPersistenceAcrossRestart(t *testing.T) {
 		t.Fatalf("promotion : %d", code)
 	}
 	at := time.Now().UTC().Truncate(time.Second)
-	if code := post(s1, "/v1/supervision/degraded/presence", arbPresenceRequest{At: at, Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.PresenceMessage(at)))}); code != http.StatusOK {
+	if code := post(s1, "/v1/supervision/degraded/presence", arbPresenceRequest{At: at, Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.PresenceMessage("cell-a", at)))}); code != http.StatusOK {
 		t.Fatalf("présence : %d", code)
 	}
 	if m := action(s1, "agent-1", act); m["reason"] != "arbitration-pending" {
@@ -128,7 +128,7 @@ func TestBrokerdPersistenceAcrossRestart(t *testing.T) {
 	id := arbiter.IntentID("agent-1", []byte(act))
 	exp := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
 	if code := post(s1, "/v1/supervision/degraded/decide", arbDecideRequest{ID: hex.EncodeToString(id[:]), Verdict: "approve", ExpiresAt: exp,
-		Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.DecisionMessage(id, arbiter.VerdictApprove, exp)))}); code != http.StatusOK {
+		Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.DecisionMessage("cell-a", id, httpTicket(t, s1.adminHC, hex.EncodeToString(id[:])), arbiter.VerdictApprove, exp)))}); code != http.StatusOK {
 		t.Fatalf("approbation : %d", code)
 	}
 	s1.stop() // arrêt propre : le dernier checkpoint est publié

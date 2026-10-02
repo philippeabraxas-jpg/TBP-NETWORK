@@ -108,7 +108,7 @@ func TestControllerGateArbitration(t *testing.T) {
 	}
 
 	// un arbitre se manifeste : la demande est mise en file, verdict DIFFÉRÉ avec l'id à signer
-	_ = q.Heartbeat(ctx, clk.t, ed25519.Sign(opPriv, arbiter.PresenceMessage(clk.t)))
+	_ = q.Heartbeat(ctx, clk.t, ed25519.Sign(opPriv, arbiter.PresenceMessage("cell-a", clk.t)))
 	_, err = tr.Translate(ctx, "std", intent)
 	if !errors.As(err, &pend) || pend.ID != hexID {
 		t.Fatalf("verdict différé attendu avec l'id %s : %v", hexID, err)
@@ -128,7 +128,7 @@ func TestControllerGateArbitration(t *testing.T) {
 
 	// l'opérateur approuve : la même demande est admise UNE fois
 	exp := clk.t.Add(5 * time.Minute)
-	if err := q.Decide(ctx, id, arbiter.VerdictApprove, exp, ed25519.Sign(opPriv, arbiter.DecisionMessage(id, arbiter.VerdictApprove, exp))); err != nil {
+	if err := q.Decide(ctx, id, arbiter.VerdictApprove, exp, ed25519.Sign(opPriv, queueDecisionMsg(t, q, id, arbiter.VerdictApprove, exp))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tr.Translate(ctx, "std", intent); err != nil {
@@ -144,7 +144,7 @@ func TestControllerGateArbitration(t *testing.T) {
 
 	// refus de l'arbitre : refus propre, consommé
 	exp = clk.t.Add(5 * time.Minute)
-	if err := q.Decide(ctx, id, arbiter.VerdictRefuse, exp, ed25519.Sign(opPriv, arbiter.DecisionMessage(id, arbiter.VerdictRefuse, exp))); err != nil {
+	if err := q.Decide(ctx, id, arbiter.VerdictRefuse, exp, ed25519.Sign(opPriv, queueDecisionMsg(t, q, id, arbiter.VerdictRefuse, exp))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tr.Translate(ctx, "std", intent); !errors.Is(err, broker.ErrArbitrationRefused) {
@@ -240,10 +240,10 @@ func TestBrokerdArbitrationEndToEnd(t *testing.T) {
 	// 2. présence : signature d'un intrus refusée, celle de l'opérateur acceptée
 	now := time.Now().UTC().Truncate(time.Second)
 	_, otherPriv, _ := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{9}, 64)))
-	if code, _ := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(otherPriv, arbiter.PresenceMessage(now)))}); code != http.StatusBadRequest {
+	if code, _ := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(otherPriv, arbiter.PresenceMessage("cell-a", now)))}); code != http.StatusBadRequest {
 		t.Fatalf("présence d'un intrus : %d", code)
 	}
-	if code, body := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.PresenceMessage(now)))}); code != http.StatusOK {
+	if code, body := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.PresenceMessage("cell-a", now)))}); code != http.StatusOK {
 		t.Fatalf("présence valide : %d %s", code, body)
 	}
 
@@ -264,7 +264,7 @@ func TestBrokerdArbitrationEndToEnd(t *testing.T) {
 	// 4. décisions invalides : intrus, mauvais verdict signé, échéance trop proche — la demande reste en attente
 	exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
 	sign := func(priv ed25519.PrivateKey, v arbiter.Verdict, e time.Time) string {
-		return hex.EncodeToString(ed25519.Sign(priv, arbiter.DecisionMessage(id, v, e)))
+		return hex.EncodeToString(ed25519.Sign(priv, arbiter.DecisionMessage("cell-a", id, httpTicket(t, adminHC, hexID), v, e)))
 	}
 	for name, body := range map[string]arbDecideRequest{
 		"intrus":          {ID: hexID, Verdict: "approve", ExpiresAt: exp, Signature: sign(otherPriv, arbiter.VerdictApprove, exp)},
@@ -282,7 +282,8 @@ func TestBrokerdArbitrationEndToEnd(t *testing.T) {
 	}
 
 	// 5. approbation de l'opérateur : la même demande est admise (la chaîne la juge ensuite : OPA autorise)
-	if code, body := post("/v1/supervision/degraded/decide", arbDecideRequest{ID: hexID, Verdict: "approve", ExpiresAt: exp, Signature: sign(fx.opPriv, arbiter.VerdictApprove, exp)}); code != http.StatusOK || !strings.Contains(body, `"approve"`) {
+	approveBody := arbDecideRequest{ID: hexID, Verdict: "approve", ExpiresAt: exp, Signature: sign(fx.opPriv, arbiter.VerdictApprove, exp)}
+	if code, body := post("/v1/supervision/degraded/decide", approveBody); code != http.StatusOK || !strings.Contains(body, `"approve"`) {
 		t.Fatalf("approbation : %d %s", code, body)
 	}
 	if m, _ = postRaw("agent-1"); m["allow"] != true || m["token"] == nil {
@@ -291,6 +292,14 @@ func TestBrokerdArbitrationEndToEnd(t *testing.T) {
 	// à usage unique : la représentation suivante repart en file
 	if m, _ = postRaw("agent-1"); m["reason"] != "arbitration-pending" {
 		t.Fatalf("approbation consommée deux fois : %v", m)
+	}
+	// REJEU (revue tierce) : la même décision signée, rejouée sur la demande remise en file, est refusée — elle
+	// valait pour la mise en file précédente, pas pour celle-ci
+	if code, body := post("/v1/supervision/degraded/decide", approveBody); code != http.StatusBadRequest || !strings.Contains(body, "signature") {
+		t.Fatalf("décision signée rejouée après consommation : %d %s", code, body)
+	}
+	if m, _ = postRaw("agent-1"); m["reason"] != "arbitration-pending" {
+		t.Fatalf("la décision rejouée ne doit rien admettre : %v", m)
 	}
 
 	// 6. refus de l'arbitre
@@ -332,7 +341,7 @@ func TestControllerGateIgnoresQueueWhenTranslatorHealthy(t *testing.T) {
 	defer cancel()
 	start(ctx)
 	now := time.Now()
-	_ = q.Heartbeat(ctx, now, ed25519.Sign(opPriv, arbiter.PresenceMessage(now)))
+	_ = q.Heartbeat(ctx, now, ed25519.Sign(opPriv, arbiter.PresenceMessage("cell-a", now)))
 	intent := `{"action":"read","resource":"r"}`
 	var pend *broker.PendingArbitrationError
 	if _, err := tr.Translate(ctx, "std", intent); !errors.As(err, &pend) {
@@ -340,7 +349,7 @@ func TestControllerGateIgnoresQueueWhenTranslatorHealthy(t *testing.T) {
 	}
 	id := arbiter.IntentID("std", []byte(intent))
 	exp := now.Add(5 * time.Minute)
-	if err := q.Decide(ctx, id, arbiter.VerdictApprove, exp, ed25519.Sign(opPriv, arbiter.DecisionMessage(id, arbiter.VerdictApprove, exp))); err != nil {
+	if err := q.Decide(ctx, id, arbiter.VerdictApprove, exp, ed25519.Sign(opPriv, queueDecisionMsg(t, q, id, arbiter.VerdictApprove, exp))); err != nil {
 		t.Fatal(err)
 	}
 	healthy.Store(true)
@@ -356,4 +365,36 @@ func TestControllerGateIgnoresQueueWhenTranslatorHealthy(t *testing.T) {
 	if !approved {
 		t.Fatalf("l'approbation ne doit pas être consommée tant que le traducteur est sain : %+v", q.Snapshot())
 	}
+}
+
+// httpTicket lit, sur le plan d'administration, le ticket de la mise en file vivante de la demande (ce que fait un opérateur).
+func httpTicket(t *testing.T, hc *http.Client, hexID string) arbiter.Ticket {
+	t.Helper()
+	var st arbStatusView
+	getJSON(t, hc, "http://brokerd/v1/supervision/degraded", &st)
+	for _, e := range st.Pending {
+		if e.ID == hexID {
+			raw, err := hex.DecodeString(e.Ticket)
+			if err != nil || len(raw) != 16 {
+				t.Fatalf("ticket illisible %q", e.Ticket)
+			}
+			var tk arbiter.Ticket
+			copy(tk[:], raw)
+			return tk
+		}
+	}
+	t.Fatalf("aucune mise en file vivante pour %s : %+v", hexID, st)
+	return arbiter.Ticket{}
+}
+
+// queueDecisionMsg : le message de décision pour la mise en file vivante de id dans q (cellule « cell-a »).
+func queueDecisionMsg(t *testing.T, q *arbiter.Queue, id [32]byte, v arbiter.Verdict, exp time.Time) []byte {
+	t.Helper()
+	for _, e := range q.Snapshot() {
+		if e.ID == id {
+			return arbiter.DecisionMessage("cell-a", id, e.Ticket, v, exp)
+		}
+	}
+	t.Fatalf("aucune mise en file vivante pour %x", id[:4])
+	return nil
 }

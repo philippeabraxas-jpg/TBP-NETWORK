@@ -1209,9 +1209,36 @@ func runDaemons(s *suite, cfg config) {
 		noArb, _ := stdAction()
 		s.add(phaseDaemons, "arbitrage : sans arbitre joignable, un système standard dégradé est refusé (translation-failed), rien en file",
 			!noArb.Allow && noArb.Reason == "translation-failed", "raison="+noArb.Reason)
+		// le ticket de la mise en file vivante d'une demande : ce que l'opérateur lit dans GET /v1/supervision/degraded
+		ticketOf := func(hexID string) arbiter.Ticket {
+			var tk arbiter.Ticket
+			st, rw, e := getUnix(brokerAdminHC, "http://brokerd/v1/supervision/degraded")
+			var view struct {
+				Pending []struct {
+					ID     string `json:"id"`
+					Ticket string `json:"ticket"`
+				} `json:"pending"`
+			}
+			if e != nil || st != http.StatusOK || json.Unmarshal(rw, &view) != nil {
+				return tk
+			}
+			for _, p := range view.Pending {
+				if p.ID == hexID {
+					if b, err := hex.DecodeString(p.Ticket); err == nil && len(b) == len(tk) {
+						copy(tk[:], b)
+					}
+				}
+			}
+			return tk
+		}
 		at := time.Now().UTC().Truncate(time.Second)
+		// liaison à la cellule (revue tierce) : un battement signé pour une AUTRE cellule du même trousseau est refusé
+		stF, _, errF := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/presence", map[string]string{
+			"at": at.Format(time.RFC3339), "signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.PresenceMessage("cell-b", at))),
+		})
+		s.add(phaseDaemons, "arbitrage : un battement signé pour une AUTRE cellule (même trousseau) est refusé (400)", errF == nil && stF == http.StatusBadRequest, fmt.Sprintf("status=%d", stF))
 		stH, _, errH := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/presence", map[string]string{
-			"at": at.Format(time.RFC3339), "signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.PresenceMessage(at))),
+			"at": at.Format(time.RFC3339), "signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.PresenceMessage(daemonsCellID, at))),
 		})
 		s.add(phaseDaemons, "arbitrage : la présence signée d'un opérateur épinglé est acceptée", errH == nil && stH == http.StatusOK, fmt.Sprintf("status=%d", stH))
 		pend, pendID := stdAction()
@@ -1219,10 +1246,12 @@ func runDaemons(s *suite, cfg config) {
 		s.add(phaseDaemons, "arbitrage : arbitre joignable ⇒ verdict DIFFÉRÉ (arbitration-pending) avec l'identifiant de la demande",
 			!pend.Allow && pend.Reason == "arbitration-pending" && pendID == hex.EncodeToString(wantID[:]), fmt.Sprintf("raison=%s id=%.16s…", pend.Reason, pendID))
 		decExp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
-		stD, _, errD := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", map[string]string{
-			"id": hex.EncodeToString(wantID[:]), "verdict": "approve", "expires_at": decExp.Format(time.RFC3339),
-			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(wantID, arbiter.VerdictApprove, decExp))),
-		})
+		wantHex := hex.EncodeToString(wantID[:])
+		decBody := map[string]string{
+			"id": wantHex, "verdict": "approve", "expires_at": decExp.Format(time.RFC3339),
+			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(daemonsCellID, wantID, ticketOf(wantHex), arbiter.VerdictApprove, decExp))),
+		}
+		stD, _, errD := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", decBody)
 		s.add(phaseDaemons, "arbitrage : l'approbation signée de l'opérateur est acceptée", errD == nil && stD == http.StatusOK, fmt.Sprintf("status=%d", stD))
 		appr, _ := stdAction()
 		s.add(phaseDaemons, "arbitrage : la demande approuvée franchit l'admission, puis la chaîne la juge (OPA refuse : l'approbation ne contourne rien)",
@@ -1230,6 +1259,11 @@ func runDaemons(s *suite, cfg config) {
 		again, _ := stdAction()
 		s.add(phaseDaemons, "arbitrage : l'approbation est à usage unique — la représentation suivante repart en file",
 			again.Reason == "arbitration-pending", "raison="+again.Reason)
+		// REJEU (revue tierce) : la même décision signée, rejouée sur la demande remise en file, est refusée
+		stR, _, errR := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", decBody)
+		stillPend, _ := stdAction()
+		s.add(phaseDaemons, "arbitrage : la même décision signée, rejouée après consommation, est refusée (400) et la demande reste en file",
+			errR == nil && stR == http.StatusBadRequest && stillPend.Reason == "arbitration-pending", fmt.Sprintf("status=%d raison=%s", stR, stillPend.Reason))
 
 		// --- Persistance (#275) : l'état survit à un redémarrage BRUTAL (kill), sans fichier d'état ---------------
 		// Une demande approuvée et non consommée, une demande en attente et la promotion du miroir sont retrouvées
@@ -1252,7 +1286,7 @@ func runDaemons(s *suite, cfg config) {
 		decExp2 := time.Now().Add(8 * time.Minute).UTC().Truncate(time.Second)
 		stD2, _, errD2 := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/degraded/decide", map[string]string{
 			"id": hex.EncodeToString(wantID[:]), "verdict": "approve", "expires_at": decExp2.Format(time.RFC3339),
-			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(wantID, arbiter.VerdictApprove, decExp2))),
+			"signature": hex.EncodeToString(ed25519.Sign(opKey, arbiter.DecisionMessage(daemonsCellID, wantID, ticketOf(wantHex), arbiter.VerdictApprove, decExp2))),
 		})
 		s.add(phaseDaemons, "persistance : une seconde approbation signée (avant le redémarrage) est acceptée", errD2 == nil && stD2 == http.StatusOK, fmt.Sprintf("status=%d", stD2))
 		brokerd3.stop() // SIGKILL : aucun arrêt propre
@@ -1291,7 +1325,7 @@ func runDaemons(s *suite, cfg config) {
 				againAfter.Reason == "translation-failed" || againAfter.Reason == "arbitration-pending", "raison="+againAfter.Reason)
 		}
 		translatorHealth.set(true)
-		// Les feuilles de l'arbitrage (TBAR1) et de la dégradation (TBTD1) ont leur clair dans le journal, et
+		// Les feuilles de l'arbitrage (TBAR2) et de la dégradation (TBTD1) ont leur clair dans le journal, et
 		// aucune feuille du registre n'est restée sans clair (couverture log → journal).
 		verifyAuditJournal(s, phaseDaemons, "brokerd (après arbitrage)", brokerRegDir, auditJournalPath, auditKeyPath, 3)
 

@@ -4,7 +4,7 @@ package main
 // (§4.5) (#275 suite). Aucun fichier d'état supplémentaire : l'état est DÉRIVÉ du journal d'enregistrements, c'est-à-
 // dire d'événements déjà audités, authentifiés (AEAD) et — pour ce qui accorde un droit — ancrés dans le log signé.
 //
-//   - une promotion du miroir (« TBPP1 ») et une approbation d'arbitre (« TBAR1 », approve) ne sont restaurées que si
+//   - une promotion du miroir (« TBPP1 ») et une approbation d'arbitre (« TBAR2 », approve) ne sont restaurées que si
 //     leur feuille est dans le log signé (preuve d'inclusion RFC 6962 contre le checkpoint) : un enregistrement forgé
 //     avec la clé du journal mais jamais inscrit ne rouvre rien ;
 //   - ce qui RETIRE un droit (consommation, refus) s'applique dès que le hash correspond : une consommation dont la
@@ -48,7 +48,7 @@ func restorePersistedState(ctx context.Context, cfg *config, verifier note.Verif
 	var relevant []registry.SealedRecord
 	for _, r := range recs {
 		if r.Leaf.Kind == registry.KindPromotion ||
-			(r.Leaf.Kind == registry.KindTelemetry && bytes.HasPrefix(r.Record, []byte("TBAR1"))) {
+			(r.Leaf.Kind == registry.KindTelemetry && bytes.HasPrefix(r.Record, []byte("TBAR2"))) {
 			relevant = append(relevant, r)
 		}
 	}

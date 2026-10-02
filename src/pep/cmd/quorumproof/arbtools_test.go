@@ -69,7 +69,7 @@ func TestArbToolsProduceWhatTheQueueAccepts(t *testing.T) {
 	}
 	// présence
 	pp := filepath.Join(dir, "presence.json")
-	if err := cmdArbPresence([]string{"-key", kf, "-out", pp}); err != nil {
+	if err := cmdArbPresence([]string{"-cell", "cell-a", "-key", kf, "-out", pp}); err != nil {
 		t.Fatal(err)
 	}
 	pm := read(pp)
@@ -81,8 +81,9 @@ func TestArbToolsProduceWhatTheQueueAccepts(t *testing.T) {
 	// décision
 	it := arbiter.IntentID("agent-1", []byte("x"))
 	_ = q.Enqueue(t.Context(), itemOf("agent-1", "x"))
+	ticket := q.Snapshot()[0].Ticket // ce que l'opérateur lit dans GET /v1/supervision/degraded
 	dp := filepath.Join(dir, "decision.json")
-	if err := cmdArbDecide([]string{"-id", hex.EncodeToString(it[:]), "-verdict", "approve", "-ttl", "120", "-key", kf, "-out", dp}); err != nil {
+	if err := cmdArbDecide([]string{"-cell", "cell-a", "-id", hex.EncodeToString(it[:]), "-ticket", hex.EncodeToString(ticket[:]), "-verdict", "approve", "-ttl", "120", "-key", kf, "-out", dp}); err != nil {
 		t.Fatal(err)
 	}
 	dm := read(dp)
@@ -104,23 +105,31 @@ func TestArbDecideRefusesBadInputs(t *testing.T) {
 	dir := t.TempDir()
 	_, kf := keyFile(t, dir, "op.key", 5)
 	id := strings.Repeat("ab", 32)
+	tk := strings.Repeat("cd", 16)
 	out := filepath.Join(dir, "o.json")
 	for name, a := range map[string][]string{
-		"sans_id":         {"-verdict", "approve", "-key", kf, "-out", out},
-		"verdict_inconnu": {"-id", id, "-verdict", "peut-etre", "-key", kf, "-out", out},
-		"id_court":        {"-id", "abcd", "-verdict", "approve", "-key", kf, "-out", out},
-		"id_non_hex":      {"-id", strings.Repeat("zz", 32), "-verdict", "approve", "-key", kf, "-out", out},
-		"ttl_court":       {"-id", id, "-verdict", "approve", "-ttl", "5", "-key", kf, "-out", out},
-		"ttl_long":        {"-id", id, "-verdict", "approve", "-ttl", "7200", "-key", kf, "-out", out},
-		"sans_cle":        {"-id", id, "-verdict", "approve", "-out", out},
-		"cle_absente":     {"-id", id, "-verdict", "approve", "-key", filepath.Join(dir, "absente"), "-out", out},
+		"sans_id":         {"-cell", "cell-a", "-ticket", tk, "-verdict", "approve", "-key", kf, "-out", out},
+		"sans_cellule":    {"-id", id, "-ticket", tk, "-verdict", "approve", "-key", kf, "-out", out},
+		"sans_ticket":     {"-cell", "cell-a", "-id", id, "-verdict", "approve", "-key", kf, "-out", out},
+		"ticket_court":    {"-cell", "cell-a", "-id", id, "-ticket", "abcd", "-verdict", "approve", "-key", kf, "-out", out},
+		"ticket_non_hex":  {"-cell", "cell-a", "-id", id, "-ticket", strings.Repeat("zz", 16), "-verdict", "approve", "-key", kf, "-out", out},
+		"verdict_inconnu": {"-cell", "cell-a", "-id", id, "-ticket", tk, "-verdict", "peut-etre", "-key", kf, "-out", out},
+		"id_court":        {"-cell", "cell-a", "-id", "abcd", "-ticket", tk, "-verdict", "approve", "-key", kf, "-out", out},
+		"id_non_hex":      {"-cell", "cell-a", "-id", strings.Repeat("zz", 32), "-ticket", tk, "-verdict", "approve", "-key", kf, "-out", out},
+		"ttl_court":       {"-cell", "cell-a", "-id", id, "-ticket", tk, "-verdict", "approve", "-ttl", "5", "-key", kf, "-out", out},
+		"ttl_long":        {"-cell", "cell-a", "-id", id, "-ticket", tk, "-verdict", "approve", "-ttl", "7200", "-key", kf, "-out", out},
+		"sans_cle":        {"-cell", "cell-a", "-id", id, "-ticket", tk, "-verdict", "approve", "-out", out},
+		"cle_absente":     {"-cell", "cell-a", "-id", id, "-ticket", tk, "-verdict", "approve", "-key", filepath.Join(dir, "absente"), "-out", out},
 	} {
 		if err := cmdArbDecide(a); err == nil {
 			t.Errorf("%s : accepté", name)
 		}
 	}
-	if err := cmdArbPresence([]string{"-out", out}); err == nil {
+	if err := cmdArbPresence([]string{"-cell", "cell-a", "-out", out}); err == nil {
 		t.Error("présence sans clé acceptée")
+	}
+	if err := cmdArbPresence([]string{"-key", kf, "-out", out}); err == nil {
+		t.Error("présence sans cellule acceptée : un battement doit nommer sa cellule")
 	}
 }
 
@@ -130,4 +139,28 @@ func (nopLeaves) Append(context.Context, registry.Leaf) (uint64, error) { return
 
 func itemOf(subject, intent string) translator.ArbitrationItem {
 	return translator.ArbitrationItem{SystemID: subject, Payload: []byte(intent)}
+}
+
+// Le geste d'opérateur signe POUR UNE CELLULE : la file d'une autre cellule le refuse.
+func TestArbToolsSignForOneCellOnly(t *testing.T) {
+	dir := t.TempDir()
+	priv, kf := keyFile(t, dir, "op.key", 5)
+	qB, err := arbiter.NewQueue(arbiter.Options{
+		CellID: "cell-b", Salt: make([]byte, 16), Leaves: nopLeaves{}, OperatorKeys: []ed25519.PublicKey{priv.Public().(ed25519.PublicKey)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pp := filepath.Join(dir, "presence.json")
+	if err := cmdArbPresence([]string{"-cell", "cell-a", "-key", kf, "-out", pp}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(pp)
+	var pm map[string]string
+	_ = json.Unmarshal(b, &pm)
+	at, _ := time.Parse(time.RFC3339, pm["at"])
+	sig, _ := hex.DecodeString(pm["signature"])
+	if err := qB.Heartbeat(t.Context(), at, sig); err == nil {
+		t.Fatal("la cellule B a accepté un battement signé pour la cellule A")
+	}
 }
