@@ -270,6 +270,7 @@ type runFixture struct {
 	adminSock       string
 	sock            string               // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
+	opPriv          ed25519.PrivateKey   // clé de l'opérateur épinglé : signe approbation et révocation de plan (#274)
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -373,7 +374,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		t.Fatalf("seed: %v", err)
 	}
 
-	opPub, _, err := ed25519.GenerateKey(rand.Reader)
+	opPub, opPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("operateur: %v", err)
 	}
@@ -426,6 +427,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		agentsFile:      agentsFile,
 		adminSock:       adminSock,
 		controllerPrivs: controllerPrivs,
+		opPriv:          opPriv,
 		env: map[string]string{
 			"TBP_CELL_ID":                   "cell-a",
 			"TBP_SALT":                      hex.EncodeToString(salt),

@@ -915,7 +915,10 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return
 		}
 		var req planSubmitRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		// #274 : décodage STRICT (champ inconnu, clé en double, contenu après l'objet : refus) — ce
+		// corps est ce que l'opérateur approuvera ; « dernier gagne » ferait sceller un plan que
+		// personne n'a relu tel quel.
+		if err := decodeStrictJSON(body, &req); err != nil {
 			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
 			return
 		}
@@ -963,7 +966,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return
 		}
 		var req planApproveRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		if err := decodeStrictJSON(body, &req); err != nil {
 			http.Error(w, `{"error":"JSON invalide"}`, http.StatusBadRequest)
 			return
 		}
