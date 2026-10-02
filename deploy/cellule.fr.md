@@ -296,7 +296,8 @@ service.
 #   TBP_MEASURED_BOOT_AI_CONTAINER=<digest ou chemin de l'image conteneur>
 #   TBP_MEASURED_BOOT_TRANSITION_PROOF_FILE=/etc/tbp/measured-boot-transition-proof.json
 #                                  # (la preuve signe la condition que le démon affiche en
-#                                  # refusant : measured-boot-transition|from=…|to=…, #236)
+#                                  # refusant : measured-boot-transition|from=…|to=…, #236 —
+#                                  # recalculez-la vous-même : pepd -print-provisioning-condition, #264)
 #                                  # optionnel — présent seulement pour une
 #                                  # ré-engagement DÉLIBÉRÉ de la référence
 #                                  # (mise à jour de bundle/config). Revue de
@@ -677,7 +678,7 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   du classifieur, délai, grâce, bornes) et `k` (`quorum-settings`). Retirer un motif, élargir
   `keep_paths` ou brancher un classifieur entre deux démarrages est **refusé** sans preuve de quorum liée
   à (état attesté, état cible), condition `provisioning-transition-anod|from=…|to=…` — le refus
-  l'affiche. `anod` exige sa propre chaîne et son témoin : `TBP_CELL_ID`, `TBP_SALT`,
+  l'affiche, et `anod -print-provisioning-condition -cell-vkey cell_log.vkey` la recalcule sur votre poste (#264). `anod` exige sa propre chaîne et son témoin : `TBP_CELL_ID`, `TBP_SALT`,
   `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (hors du répertoire du registre, qui doit déjà
   exister), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN` ; il n'existe pas d'échappatoire « dev » pour le
   désactiver. Mettre à jour un `anod` existant exige une preuve de transition.
@@ -691,14 +692,30 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
 
   ```bash
   go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
-  # 1. démarrer SANS preuve : le démon refuse et affiche ce qu'il faut signer, par ex.
-  #      condition à signer : provisioning-transition-brokerd|from=<condensé attesté>|to=<condensé cible>
-  # 2. les contrôleurs signent EXACTEMENT cette condition (ils voient ce qu'ils approuvent)
+  # 1. RECALCULER la condition sur VOTRE poste (#264) — ne jamais signer celle qu'affiche la
+  #    machine qu'on contrôle. Même binaire de démon, même fichier d'environnement, les fichiers
+  #    QUE VOUS AVEZ RELUS, une COPIE du témoin, la clé PUBLIQUE de la cellule (cell_log.vkey) :
+  brokerd -print-provisioning-condition -cell-vkey cell_log.vkey
+  #      state=divergent  changed=modifié(s) : agent-registry
+  #      file agent-registry sha256=…            <- à comparer avec ce que vous avez relu
+  #      condition=provisioning-transition-brokerd|from=<condensé attesté>|to=<condensé cible>
+  # 2. la comparer à celle qu'affiche le démon qui refuse (« condition à signer : … ») : elles
+  #    DOIVENT être identiques. Sinon, STOP — la machine ne mesure pas ce que vous avez relu.
+  #    Puis les contrôleurs signent EXACTEMENT la condition que VOUS avez calculée :
   quorumproof sign -condition 'provisioning-transition-brokerd|from=…|to=…' -cell cell-a \
     -key /secure/admin.key -out /etc/tbp/provisioning-proof.json
   # 3. dans brokerd.env : TBP_PROVISIONING_TRANSITION_PROOF_FILE=/etc/tbp/provisioning-proof.json
   #    redémarrer, vérifier le démarrage, puis RETIRER la ligne (la preuve vit 4 minutes par défaut)
   ```
+
+  `-print-provisioning-condition` n'écrit rien, ne signe rien et n'ouvre aucun journal : il mesure avec le
+  code du démarrage (`registry.PreviewProvisioning`) et imprime `state=` (`conforming`, `divergent` ou
+  `no-witness`), `from=`, `to=`, `changed=`, une ligne `file <nom> sha256=…` par pièce mesurée, puis la
+  `condition=`. `pepd` imprime aussi la condition de **démarrage mesuré** (`measured-boot-transition|from=…|to=…`)
+  si `TBP_MEASURED_BOOT_MANIFEST_FILE` est posé ; `anod` accepte `-binary FICHIER` pour le binaire relu.
+  `-cell-vkey` est obligatoire : sans la clé publique de la cellule, le témoin copié ne prouve rien, et la
+  commande refuse un témoin qu'elle ne sait pas vérifier (altéré, autre cellule, autre démon). Un octet
+  changé dans un fichier relu change `to`, donc la condition.
 
   Conditions : `provisioning-transition-brokerd` et `provisioning-transition-pepd` (la preuve
   de l'un ne vaut jamais pour l'autre, ni pour une bascule de posture). **Une preuve est liée

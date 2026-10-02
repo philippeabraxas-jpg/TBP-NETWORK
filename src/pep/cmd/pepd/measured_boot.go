@@ -48,6 +48,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -156,6 +157,44 @@ func setupMeasuredBoot(ctx context.Context, cellID string, salt []byte, signer n
 		return fmt.Errorf("measured boot: démarrage refusé (état divergent du manifeste attendu) : %w%s", err, hint)
 	}
 	log.Printf("pepd: measured boot — état conforme au manifeste attendu")
+	return nil
+}
+
+// printMeasuredBootCondition recalcule la condition « measured-boot-transition|from|to » (#264) : l'état
+// ATTESTÉ est celui du manifeste persisté (signature vérifiée avec la clé publique de la cellule), l'état
+// CIBLE est mesuré sur les quatre composants (mêmes variables, même mesure que le démarrage).
+func printMeasuredBootCondition(w io.Writer, manifestFile string, getenv func(string) string, verifier note.Verifier) error {
+	paths, err := loadComponentPaths(getenv)
+	if err != nil {
+		return fmt.Errorf("measured boot: %w", err)
+	}
+	target, err := registry.MeasureComponents(paths)
+	if err != nil {
+		return fmt.Errorf("measured boot: %w", err)
+	}
+	to := measuredStateDigest(target)
+	last, err := loadPersistedManifest(manifestFile)
+	if err != nil {
+		return fmt.Errorf("measured boot: %w", err)
+	}
+	fmt.Fprintf(w, "component=pepd-measured-boot\n")
+	if last == nil {
+		fmt.Fprintf(w, "state=no-manifest\nfrom=%x\nto=%x\npas de manifeste attesté : premier démarrage (genèse, aucune preuve)\n", [32]byte{}, to)
+		return nil
+	}
+	if !verifier.Verify(last.Record, last.Signature) {
+		return fmt.Errorf("measured boot: manifeste persisté %s : signature invalide (clé publique de la cellule ?)", manifestFile)
+	}
+	rec, err := registry.ParseManifestRecord(last.Record)
+	if err != nil {
+		return fmt.Errorf("measured boot: %w", err)
+	}
+	from := measuredStateDigest(rec.State)
+	if from == to {
+		fmt.Fprintf(w, "state=conforming\nfrom=%x\nto=%x\naucune transition à signer : l'état mesuré est celui du manifeste attesté\n", from, to)
+		return nil
+	}
+	fmt.Fprintf(w, "state=divergent\nfrom=%x\nto=%x\ncondition=%s\n", from, to, pep.TransitionCondition(reasonMeasuredBootTransition, from, to))
 	return nil
 }
 

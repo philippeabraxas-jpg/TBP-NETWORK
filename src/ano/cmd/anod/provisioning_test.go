@@ -17,6 +17,7 @@ import (
 	"time"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 )
 
 // boot rejoue le chemin de démarrage d'anod jusqu'à la mesure incluse (jamais le service) :
@@ -319,5 +320,138 @@ func TestAnodBinaryIsMeasured(t *testing.T) {
 	}
 	if err := bootWith(t, te, bin); err == nil || !strings.Contains(err.Error(), "anod-binary") {
 		t.Fatalf("binaire remplacé : %v, veut un refus nommant anod-binary", err)
+	}
+}
+
+// --- recalcul hors démon de la condition à signer (#264) ------------------------
+
+// previewOf lance `anod -print-provisioning-condition` comme un contrôleur sur son poste : même
+// environnement, une COPIE du témoin, la clé publique de la cellule. Rend sortie clé=valeur et code.
+func previewOf(t *testing.T, te *testEnv, vkey string, extra ...string) (map[string]string, int, string) {
+	t.Helper()
+	var out, errb strings.Builder
+	code := printProvisioningCondition(append([]string{"-cell-vkey", vkey}, extra...), te.env.get, &out, &errb)
+	kv := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok && !strings.Contains(k, " ") {
+			kv[k] = v
+		}
+	}
+	return kv, code, errb.String()
+}
+
+func (te *testEnv) cellVKey() string {
+	return filepath.Join(te.env["TBP_REGISTRY_DIR"], "cell_log.vkey")
+}
+
+// La condition imprimée par `-print-provisioning-condition` est, au caractère près, celle que le démon
+// annonce en refusant ; un octet d'une pièce relue la change ; la signer autorise le démarrage.
+func TestPrintedConditionIsTheOneTheDaemonRefusesWith(t *testing.T) {
+	te := newTestEnv(t)
+	if err := boot(t, te); err != nil {
+		t.Fatalf("genèse : %v", err)
+	}
+	kv, code, stderr := previewOf(t, te, te.cellVKey())
+	if code != 0 || kv["state"] != "conforming" || kv["condition"] != "" {
+		t.Fatalf("état conforme : code=%d %v %s", code, kv, stderr)
+	}
+	witnessBefore, _ := os.ReadFile(te.env["TBP_PROVISIONING_WITNESS_FILE"])
+
+	te.write(t, "TBP_ANO_RULES_FILE", rulesV2)
+	fromDaemon := conditionOf(t, boot(t, te))
+	kv, code, stderr = previewOf(t, te, te.cellVKey())
+	if code != 0 || kv["state"] != "divergent" {
+		t.Fatalf("état divergent : code=%d %v %s", code, kv, stderr)
+	}
+	if kv["condition"] != fromDaemon {
+		t.Fatalf("condition recalculée ≠ condition du démon :\n recalculée %s\n démon      %s", kv["condition"], fromDaemon)
+	}
+	if !strings.Contains(kv["changed"], "ano-rules") || strings.Contains(kv["changed"], "ano-settings") {
+		t.Fatalf("pièce modifiée mal désignée : %v", kv)
+	}
+	if after, _ := os.ReadFile(te.env["TBP_PROVISIONING_WITNESS_FILE"]); string(after) != string(witnessBefore) {
+		t.Fatal("le recalcul a modifié le témoin")
+	}
+
+	// mutant : un octet de plus dans les règles ⇒ autre cible, autre condition ; départ inchangé
+	te.write(t, "TBP_ANO_RULES_FILE", rulesV2+" ")
+	kv2, _, _ := previewOf(t, te, te.cellVKey())
+	if kv2["to"] == kv["to"] || kv2["condition"] == kv["condition"] {
+		t.Fatal("un octet modifié n'a pas changé la condition à signer")
+	}
+	if kv2["from"] != kv["from"] {
+		t.Fatal("l'état de départ doit rester celui du témoin")
+	}
+	// les réglages sont dans la mesure : la condition recalculée change avec TBP_ANO_MAX_ENTRIES
+	te.write(t, "TBP_ANO_RULES_FILE", rulesV2)
+	te.env["TBP_ANO_MAX_ENTRIES"] = "1000000"
+	kv3, _, _ := previewOf(t, te, te.cellVKey())
+	if kv3["to"] == kv["to"] {
+		t.Fatal("les réglages ne comptent pas dans la condition recalculée")
+	}
+	delete(te.env, "TBP_ANO_MAX_ENTRIES")
+
+	// signer la condition RECALCULÉE (jamais lue sur la machine contrôlée) autorise le démarrage
+	kv, _, _ = previewOf(t, te, te.cellVKey())
+	te.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = te.signProof(t, kv["condition"], te.ctl[0], te.ctl[1])
+	if err := boot(t, te); err != nil {
+		t.Fatalf("preuve sur la condition recalculée refusée : %v", err)
+	}
+}
+
+// Le binaire fait partie de la mesure : `-binary` désigne celui que le contrôleur a relu.
+func TestPrintConditionMeasuresTheBinaryGiven(t *testing.T) {
+	te := newTestEnv(t)
+	bin := filepath.Join(te.dir, "anod-bin")
+	if err := os.WriteFile(bin, []byte("binaire v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootWith(t, te, bin); err != nil {
+		t.Fatalf("genèse : %v", err)
+	}
+	if kv, code, _ := previewOf(t, te, te.cellVKey(), "-binary", bin); code != 0 || kv["state"] != "conforming" {
+		t.Fatalf("binaire inchangé : %d %v", code, kv)
+	}
+	if err := os.WriteFile(bin, []byte("binaire v2"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fromDaemon := conditionOf(t, bootWith(t, te, bin))
+	kv, code, _ := previewOf(t, te, te.cellVKey(), "-binary", bin)
+	if code != 0 || kv["state"] != "divergent" || !strings.Contains(kv["changed"], "anod-binary") || kv["condition"] != fromDaemon {
+		t.Fatalf("binaire modifié : code=%d %v (démon %s)", code, kv, fromDaemon)
+	}
+}
+
+func TestPrintConditionRefusesWhatItCannotVerify(t *testing.T) {
+	te := newTestEnv(t)
+	if err := boot(t, te); err != nil {
+		t.Fatal(err)
+	}
+	if _, code, stderr := previewOf(t, te, te.cellVKey()); code != 0 {
+		t.Fatalf("recalcul nominal refusé : %s", stderr)
+	}
+	var out, errb strings.Builder
+	if code := printProvisioningCondition(nil, te.env.get, &out, &errb); code != 2 || out.Len() != 0 {
+		t.Errorf("sans -cell-vkey : code=%d sortie=%q", code, out.String())
+	}
+	if _, code, _ := previewOf(t, te, filepath.Join(te.dir, "absent.vkey")); code != 2 {
+		t.Errorf("clé absente : code=%d", code)
+	}
+	otherKey := filepath.Join(te.dir, "other.vkey")
+	if _, vk, err := registry.GenerateCellKey("cell-a"); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(otherKey, []byte(vk), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if kv, code, _ := previewOf(t, te, otherKey); code != 1 || kv["condition"] != "" {
+		t.Errorf("témoin vérifié avec une autre clé : code=%d %v", code, kv)
+	}
+	w := te.env["TBP_PROVISIONING_WITNESS_FILE"]
+	raw, _ := os.ReadFile(w)
+	if err := os.WriteFile(w, []byte(strings.Replace(string(raw), `"record":"5442`, `"record":"5443`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if kv, code, _ := previewOf(t, te, te.cellVKey()); code != 1 || kv["condition"] != "" {
+		t.Errorf("témoin altéré : code=%d %v", code, kv)
 	}
 }

@@ -80,6 +80,10 @@ const (
 )
 
 func main() {
+	// #264 : recalcul de la condition de transition hors de la machine contrôlée — rien n'est démarré.
+	if len(os.Args) > 1 && os.Args[1] == pep.PrintConditionFlag {
+		os.Exit(printProvisioningCondition(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Getenv); err != nil {

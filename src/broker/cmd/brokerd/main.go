@@ -240,6 +240,10 @@ const maxPlanSubmitBytes = 1 << 20 // 1 MiB
 const maxPlanApproveBytes = 1 << 16 // 64 KiB
 
 func main() {
+	// #264 : recalcul de la condition de transition hors de la machine contrôlée — rien n'est démarré.
+	if len(os.Args) > 1 && os.Args[1] == pep.PrintConditionFlag {
+		os.Exit(printProvisioningCondition(os.Args[2:], os.Getenv, os.Stat, os.Stdout, os.Stderr))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Getenv, os.Stat); err != nil {
