@@ -50,6 +50,7 @@ import (
 	"time"
 
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
+	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
 
 type sigWire struct {
@@ -273,6 +274,25 @@ func writeProof(path string, pf proofWire) error {
 // cmdKeygen crée une clé d'administrateur logicielle et l'inscrit au trousseau de quorum.
 // Refuse d'écraser une clé existante et d'inscrire deux fois la même clé publique :
 // une clé perdue ne se « régénère » pas sous le même nom, on en épingle une nouvelle.
+// addToKeyring ajoute (kid, clé) au trousseau et rend le JSON à écrire. Le trousseau PRODUIT est vérifié avec le chargeur
+// des démons AVANT d'écrire quoi que ce soit : un kid qui ne diffère d'une entrée existante que par la casse
+// hexadécimale serait sinon écrit puis refusé au démarrage.
+func addToKeyring(ring map[string]string, kidHex, pubHex string) ([]byte, error) {
+	next := make(map[string]string, len(ring)+1)
+	for k, v := range ring {
+		next[k] = v
+	}
+	next[kidHex] = pubHex
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := pep.ParseKeyring(data); err != nil {
+		return nil, fmt.Errorf("le trousseau produit serait refusé par les démons (%v) — rien n'est écrit", err)
+	}
+	return data, nil
+}
+
 func cmdKeygen(args []string, out *os.File) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	keyPath := fs.String("key", "", "fichier de la clé privée à créer (graine hex, 0600)")
@@ -285,8 +305,16 @@ func cmdKeygen(args []string, out *os.File) error {
 	}
 	ring := map[string]string{}
 	if data, err := os.ReadFile(*ringPath); err == nil {
-		if err := json.Unmarshal(data, &ring); err != nil {
+		// MÊME décodeur strict que les démons (pep.ParseKeyring, revue tierce 4.4) : un trousseau que pepd refuserait
+		// (clé JSON dupliquée, kid en double à la casse près, même clé publique sous deux kid) n'est pas « complété »
+		// ici pour être refusé plus tard au démarrage. Un fichier VIDE ({}) reste un point de départ valide.
+		if err := strictjson.Decode(data, &ring); err != nil {
 			return fmt.Errorf("%s : trousseau illisible (%v) — pas de réécriture à l'aveugle", *ringPath, err)
+		}
+		if len(ring) > 0 {
+			if _, err := pep.ParseKeyring(data); err != nil {
+				return fmt.Errorf("%s : trousseau refusé par le chargeur des démons (%v) — pas de réécriture à l'aveugle", *ringPath, err)
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return err
@@ -302,6 +330,10 @@ func cmdKeygen(args []string, out *os.File) error {
 	if _, dup := ring[kidHex]; dup {
 		return fmt.Errorf("kid %s déjà dans le trousseau", kidHex)
 	}
+	data, err := addToKeyring(ring, kidHex, hex.EncodeToString(pub))
+	if err != nil {
+		return err
+	}
 	f, err := os.OpenFile(*keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("%s : %v (une clé existante n'est jamais écrasée)", *keyPath, err)
@@ -313,14 +345,9 @@ func cmdKeygen(args []string, out *os.File) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	ring[kidHex] = hex.EncodeToString(pub)
-	data, err := json.MarshalIndent(ring, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err := os.WriteFile(*ringPath, append(data, '\n'), 0o600); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "kid=%s\npublic=%s\nkeyring=%s (%d clé(s))\n", kidHex, hex.EncodeToString(pub), *ringPath, len(ring))
+	fmt.Fprintf(out, "kid=%s\npublic=%s\nkeyring=%s (%d clé(s))\n", kidHex, hex.EncodeToString(pub), *ringPath, len(ring)+1)
 	return nil
 }

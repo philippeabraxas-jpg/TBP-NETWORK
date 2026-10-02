@@ -56,6 +56,11 @@ func manifestIDs(path string) (map[string]int, error) {
 	}
 	ids := make(map[string]int, len(mf.PubKeys))
 	for i, p := range mf.PubKeys {
+		// la même clé deux fois : la dernière écrasait la première en silence, et le key_id rendu dépendait de l'ordre ;
+		// brokerd refuse un tel manifeste (revue tierce 4.4) — l'outil ne le contourne pas
+		if first, dup := ids[strings.ToLower(p)]; dup {
+			return nil, fmt.Errorf("manifeste de genèse %s : la clé du contrôleur %d est déjà le contrôleur %d", path, i+1, first)
+		}
 		ids[strings.ToLower(p)] = i + 1
 	}
 	return ids, nil
