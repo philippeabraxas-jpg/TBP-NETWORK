@@ -227,6 +227,20 @@ func AppendSealed(ctx context.Context, sink LeafAppender, store *RecordStore, ki
 	return sink.Append(ctx, leaf)
 }
 
+// SealLeaf prépare la feuille (kind, cellID, hash salé de record, ts) pour un producteur qui l'inscrit
+// lui-même (écriture interne qui contourne le backpressure : feuille d'arrêt, épisode de durabilité) :
+// si store != nil, le clair est journalisé D'ABORD ; un journal qui refuse rend une erreur et le
+// producteur n'inscrit rien (même doctrine que AppendSealed).
+func SealLeaf(store *RecordStore, kind byte, cellID string, salt, record []byte, ts int64) (Leaf, error) {
+	leaf := Leaf{Kind: kind, CellID: cellID, PayloadHash: HashPayload(salt, record), Timestamp: ts}
+	if store != nil {
+		if err := store.Put(leaf, salt, record); err != nil {
+			return Leaf{}, fmt.Errorf("journal d'enregistrements : %w (aucune feuille inscrite)", err)
+		}
+	}
+	return leaf, nil
+}
+
 // AppendLeaf inscrit la feuille (kind, cellID, hash salé de record, ts) ; si
 // store != nil, le clair est journalisé d'abord (AppendSealed), sinon c'est la
 // feuille nue historique (bibliothèque, tests). Les producteurs de feuilles

@@ -117,7 +117,7 @@ func printProvisioningCondition(args []string, getenv func(string) string, stat 
 
 // setupProvisioning est appelé juste après l'ouverture du journal de brokerd.
 // Toute erreur est fatale.
-func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellLog, signer note.Signer, verifier note.Verifier, onTrip func(string)) error {
+func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellLog, journal *registry.RecordStore, signer note.Signer, verifier note.Verifier, onTrip func(string)) error {
 	if cfg.provDisabled {
 		log.Printf("brokerd: mesure du provisionnement désactivée EXPLICITEMENT (TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1, issue #192) — DEV/LABO UNIQUEMENT, jamais en production : une édition hors-bande de agents.json, des clés d'opérateurs ou du registre de skills passe sans alarme")
 		return nil
@@ -168,7 +168,7 @@ func setupProvisioning(ctx context.Context, cfg *config, cellLog *registry.CellL
 		Files:       provisioningFiles(cfg),
 		WitnessFile: cfg.provWitnessFile, RegistryDir: cfg.registryDir,
 		Signer: signer, Verifier: verifier,
-		Leaves: cellLog, Log: cellLog, Salt: cfg.salt,
+		Leaves: cellLog, Journal: journal, Log: cellLog, Salt: cfg.salt,
 		AuthorizeTransition: authorize,
 		OnTrip:              onTrip,
 	})

@@ -452,8 +452,11 @@ type ProvisioningGuardOptions struct {
 	// Leaves reçoit la feuille KindManifest de chaque événement (§4.1) ; Log lit la
 	// taille du journal (typiquement le même CellLog).
 	Leaves LeafAppender
-	Log    LogHead
-	Salt   []byte
+	// Journal reçoit le clair de chaque feuille AVANT son inscription (#275, #271).
+	// Optionnel ici (nil = feuille nue, historique) ; les démons le renseignent.
+	Journal *RecordStore
+	Log     LogHead
+	Salt    []byte
 	// AuthorizeTransition autorise un changement délibéré (ou le ré-engagement d'un
 	// témoin effacé). Nil ⇒ toute divergence est refusée. C'est le RÉGLAGE D'ÉCHELLE :
 	// preuve d'un administrateur (k = 1) ou d'un quorum k-of-n.
@@ -778,12 +781,7 @@ func (g *ProvisioningGuard) leaf(ctx context.Context, event byte, digest [32]byt
 	rec = binary.BigEndian.AppendUint64(rec, seq)
 	rec = append(rec, verdict, byte(len(reason)))
 	rec = append(rec, reason...)
-	_, err := g.o.Leaves.Append(ctx, Leaf{
-		Kind:        KindManifest,
-		CellID:      g.o.CellID,
-		PayloadHash: HashPayload(g.salt, rec),
-		Timestamp:   g.now().UnixNano(),
-	})
+	_, err := AppendLeaf(ctx, g.o.Leaves, g.o.Journal, KindManifest, g.o.CellID, g.salt, rec, g.now().UnixNano())
 	if err != nil {
 		g.trip("provisioning-leaf-fault")
 		return fmt.Errorf("%w : %v", ErrProvisioningLeafFault, err)

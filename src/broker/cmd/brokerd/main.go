@@ -601,7 +601,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	// Mesure des fichiers de provisionnement (issue #192) : AVANT que brokerd
 	// n'en charge un seul, et avant toute autre écriture dans son journal (sa
 	// taille distingue un premier démarrage d'un témoin effacé).
-	if err := setupProvisioning(ctx, cfg, cellLog, signer, verifier, onTrip); err != nil {
+	if err := setupProvisioning(ctx, cfg, cellLog, auditStore, signer, verifier, onTrip); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
 	}
 
@@ -698,6 +698,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			CellID:      cfg.cellID,
 			Salt:        cfg.salt,
 			Leaves:      cellLog,
+			Journal:     auditStore,
 			Controllers: controllers,
 			Quorum:      cfg.quorumMin,
 			Members:     cfg.members,

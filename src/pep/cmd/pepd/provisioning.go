@@ -40,6 +40,8 @@ type provisioningInputs struct {
 	// topology : « mono » ou « multi » (TBP_TOPOLOGY) — avec quorumMin, les réglages qui font
 	// l'échelle, engagés dans le témoin (issue #224).
 	topology string
+	// journal : journal d'enregistrements (#275) — le clair des feuilles de provisionnement.
+	journal *registry.RecordStore
 }
 
 // pepdProvisioningFiles : ce que pepd mesure, dérivé de SA configuration. Partagé par le démarrage
@@ -194,7 +196,7 @@ func setupProvisioning(ctx context.Context, in provisioningInputs, signer note.S
 		CellID: in.cellID, Component: "pepd", Files: files,
 		WitnessFile: witness, RegistryDir: in.regDir,
 		Signer: signer, Verifier: verifier,
-		Leaves: cellLog, Log: cellLog, Salt: in.salt,
+		Leaves: cellLog, Journal: in.journal, Log: cellLog, Salt: in.salt,
 		AuthorizeTransition: authorize,
 		OnTrip:              func(reason string) { log.Printf("pepd: ALARME provisionnement: %s", reason) },
 	})

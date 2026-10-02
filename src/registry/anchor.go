@@ -136,6 +136,9 @@ type AnchorerOptions struct {
 	Cell *CellLog
 	// Master est la master chain (destination des feuilles KindAnchor).
 	Master MasterChain
+	// Journal reçoit le clair de chaque feuille d'ancrage AVANT son inscription
+	// (#275, #271). Optionnel ici (nil = feuille nue, historique).
+	Journal *RecordStore
 	// TSA est le client d'horodatage — FallbackTSA de ≥ 2 TSA en
 	// production (§6.2).
 	TSA TSAClient
@@ -171,6 +174,7 @@ type Anchorer struct {
 	onTrip     func(AnchorAlarm)
 	onAlarm    func(AnchorAlarm)
 	salt       []byte
+	journal    *RecordStore
 
 	last    atomic.Value // AnchorSnapshot
 	tripped atomic.Bool
@@ -221,6 +225,7 @@ func NewAnchorer(opts AnchorerOptions) (*Anchorer, error) {
 		cellID:     opts.CellID,
 		cell:       opts.Cell,
 		master:     opts.Master,
+		journal:    opts.Journal,
 		tsa:        opts.TSA,
 		interval:   interval,
 		maxLag:     maxLag,
@@ -322,11 +327,9 @@ func (a *Anchorer) AnchorOnce(ctx context.Context) error {
 // appendAnchor inscrit la feuille KindAnchor dans la master chain et, en
 // cas de succès, met à jour le dernier ancrage vérifié.
 func (a *Anchorer) appendAnchor(ctx context.Context, rec AnchorRecord) (uint64, error) {
-	leaf := Leaf{
-		Kind:        KindAnchor,
-		CellID:      a.cellID,
-		PayloadHash: HashPayload(a.salt, rec.Marshal()),
-		Timestamp:   rec.TSATime.UnixNano(),
+	leaf, err := SealLeaf(a.journal, KindAnchor, a.cellID, a.salt, rec.Marshal(), rec.TSATime.UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("ancreur : %w", err)
 	}
 	idx, err := a.master.Append(ctx, leaf)
 	if err != nil {

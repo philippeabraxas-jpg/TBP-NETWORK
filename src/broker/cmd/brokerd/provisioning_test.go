@@ -876,3 +876,36 @@ func TestBrokerdPrintConditionRefusesWhatItCannotVerify(t *testing.T) {
 		t.Errorf("témoin altéré : code=%d %v", code, kv)
 	}
 }
+
+// #275 : les feuilles de provisionnement et d'époque de brokerd laissent leur clair dans le journal.
+func TestBrokerdProvisioningLeavesAreJournaled(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+	if err := boot(t, fx, sock); err != nil {
+		t.Fatalf("genèse : %v", err)
+	}
+	key, err := registry.LoadRecordKey(fx.env["TBP_AUDIT_RECORDS_KEY_FILE"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(fx.env["TBP_AUDIT_RECORDS"], key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prov, epoch int
+	for _, r := range recs {
+		if r.VerifyHash() != nil {
+			t.Fatalf("hash du clair : %v", r.VerifyHash())
+		}
+		switch {
+		case strings.HasPrefix(string(r.Record), "TBPL3"):
+			prov++
+		case strings.HasPrefix(string(r.Record), "TBPE1"):
+			epoch++
+		}
+	}
+	if prov < 1 || epoch < 1 {
+		t.Fatalf("feuilles journalisées : %d de provisionnement, %d d'époque (%d enregistrements)", prov, epoch, len(recs))
+	}
+}

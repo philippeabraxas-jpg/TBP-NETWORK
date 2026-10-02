@@ -61,7 +61,7 @@ import (
 // setupMeasuredBoot est appelé juste après l'ouverture du CellLog, avant
 // tout le reste de l'assemblage de pepd. Retourner une erreur est fatal :
 // un démarrage refusé par measured boot n'a pas de repli.
-func setupMeasuredBoot(ctx context.Context, cellID string, salt []byte, signer note.Signer, verifier note.Verifier, cellLog *registry.CellLog, quorumKeyring map[[16]byte]ed25519.PublicKey, quorumMin int, getenv func(string) string) error {
+func setupMeasuredBoot(ctx context.Context, cellID string, salt []byte, signer note.Signer, verifier note.Verifier, cellLog *registry.CellLog, journal *registry.RecordStore, quorumKeyring map[[16]byte]ed25519.PublicKey, quorumMin int, getenv func(string) string) error {
 	manifestFile := getenv("TBP_MEASURED_BOOT_MANIFEST_FILE")
 	if manifestFile == "" {
 		if getenv("TBP_MEASURED_BOOT_DISABLED_DEV_UNSAFE") == "1" {
@@ -101,6 +101,7 @@ func setupMeasuredBoot(ctx context.Context, cellID string, salt []byte, signer n
 		Signer:   signer,
 		Verifier: verifier,
 		Leaves:   cellLog,
+		Journal:  journal,
 		Salt:     salt,
 		Last:     last,
 		OnTrip:   func(reason string) { log.Printf("pepd: ALARME measured boot: %s", reason) },

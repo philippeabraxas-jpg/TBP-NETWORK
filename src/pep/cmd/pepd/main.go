@@ -308,6 +308,7 @@ func run() error {
 		cellID: cellID, regDir: regDir, salt: salt,
 		keyringFile: os.Getenv("TBP_KEYRING_FILE"), quorumKeyringFile: os.Getenv("TBP_QUORUM_KEYRING_FILE"),
 		quorumKeyring: quorumKeyring, quorumMin: quorumMin, topology: topologyName(multiTopology),
+		journal: auditStore,
 	}, signer, verifier, cellLog, os.Getenv); err != nil {
 		return fmt.Errorf("provisionnement: %w", err)
 	}
@@ -325,7 +326,7 @@ func run() error {
 	// sécurité #112 (issue #86) — voir measured_boot.go : l'ancien défaut
 	// « désactivé » laissait passer un binaire/config/bundle altéré au
 	// démarrage sans qu'aucun opérateur n'ait rien décidé explicitement.
-	if err := setupMeasuredBoot(ctx, cellID, salt, signer, verifier, cellLog, quorumKeyring, quorumMin, os.Getenv); err != nil {
+	if err := setupMeasuredBoot(ctx, cellID, salt, signer, verifier, cellLog, auditStore, quorumKeyring, quorumMin, os.Getenv); err != nil {
 		return err
 	}
 
@@ -341,9 +342,10 @@ func run() error {
 	var asyncWriter *registry.AsyncWriter
 	if durabilityAsync {
 		asyncWriter, err = registry.NewAsyncWriter(cellLog, registry.AsyncOptions{
-			CellID: cellID,
-			Salt:   salt,
-			Window: durabilityWindow,
+			CellID:  cellID,
+			Salt:    salt,
+			Journal: auditStore,
+			Window:  durabilityWindow,
 			OnTrip: func(detail string) {
 				log.Printf("pepd: ALARME durabilité registre — coupure fail-closed (%s)", detail)
 			},

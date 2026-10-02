@@ -82,9 +82,12 @@ Wired so far:
 | `pepd` — ano rewrite audit (`TBAN1`, #178) | `KindTelemetry` | same journal (shared) |
 | `pepd` / `brokerd` — state and alarm leaves: fail-closed trips and clears (`TBFF1`), clock alarms (`TBPC1`), posture switches (`TBPM1`), OPA revision alarms (`TBPR1`), dry-run telemetry (`TBPF2`) | `KindTelemetry` | same journal (shared) |
 | `brokerd` — decision chain (`TBPD1`), OPA client, plan contracts (`TBPL1`/`TBPL2`, signature included), class-W quorum (`TBPQ1`) | `KindDecision`, `KindContract`, `KindQuorum` | its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: `brokerd` does not start without them). Same fail-closed order: journal refuses ⇒ no leaf ⇒ the emission is refused. |
+| `pepd` / `brokerd` / `anod` — provisioning guard (`TBPL3`: genesis, boot, transition, refusal, re-engagement) | `KindManifest` | same journal (shared); `anod` has its own `TBP_AUDIT_RECORDS` + `TBP_AUDIT_RECORDS_KEY_FILE` (**required**: `anod` does not start without them). A journal that refuses ⇒ no leaf ⇒ the guard refuses the boot. |
+| `pepd` — measured-boot manifest (`TBPL2`) | `KindManifest` | same journal (shared) |
+| `brokerd` — epoch tracker (`TBPE1`), `pepd`'s async writer episode leaf (`TBAD1`) | `KindEpoch`, `KindTelemetry` | same journal (shared) |
+| Library producers with a `Journal` option, wired by the daemon that runs them: promotion controller (`TBPP1`), anchorer, backpressure stop leaf | `KindPromotion`, `KindAnchor`, `KindBackpressure` | `Journal` option (nil = bare leaf). The stop leaf and the episode leaf are written around the backpressure lock: a journal that refuses ⇒ the leaf is skipped (`+leaf-write-failed` in the alarm) and the lock holds. |
 
-Every other producer (supervisord, the epoch tracker, the provisioning guard,
-dev-mode flags, the manifest, anchoring, backpressure and the async writer's own
-leaves, telemetry and translator metrics, …) still appends
+Every other producer (supervisord, dev-mode flags, telemetry and translator
+metrics, …) still appends
 a bare leaf: its leaves have no journal entry and `tbp-audit` has nothing to say
 about them. Wiring them is tracked in #275, one producer at a time.

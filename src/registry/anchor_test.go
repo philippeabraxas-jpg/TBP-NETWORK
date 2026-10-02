@@ -130,13 +130,13 @@ func (l *anchorTripLog) has(reason string) bool { return l.count(reason) > 0 }
 
 // newTestAnchorer câble un ancreur sur des logs réels (cellule + master
 // dans des répertoires distincts) avec horloge et TSA factices.
-func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *fakeTSA, trips, alarms *anchorTripLog) (*Anchorer, *CellLog, *CellLog) {
+func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *fakeTSA, trips, alarms *anchorTripLog, mut ...func(*AnchorerOptions)) (*Anchorer, *CellLog, *CellLog) {
 	t.Helper()
 	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
 	closeTestLogOnCleanup(t, cell)
 	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
 	closeTestLogOnCleanup(t, master)
-	a, err := NewAnchorer(AnchorerOptions{
+	opts := AnchorerOptions{
 		BrokerID: "broker-test",
 		CellID:   "cell-test",
 		Cell:     cell,
@@ -147,7 +147,11 @@ func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *f
 		Clock:    clock.now,
 		OnTrip:   trips.add,
 		OnAlarm:  alarms.add,
-	})
+	}
+	for _, f := range mut {
+		f(&opts)
+	}
+	a, err := NewAnchorer(opts)
 	if err != nil {
 		t.Fatalf("NewAnchorer: %v", err)
 	}

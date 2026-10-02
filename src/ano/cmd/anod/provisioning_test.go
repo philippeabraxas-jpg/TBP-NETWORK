@@ -48,7 +48,12 @@ func bootWith(t *testing.T, te *testEnv, bin string) error {
 		defer cancel()
 		_ = cellLog.Close(cctx)
 	}()
-	return setupProvisioning(ctx, cfg, bin, signer, verifier, cellLog)
+	journal, err := registry.OpenRecordStoreFiles(cfg.auditRecords, cfg.auditKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	return setupProvisioning(ctx, cfg, bin, signer, verifier, cellLog, journal)
 }
 
 func (te *testEnv) write(t *testing.T, key, content string) {
@@ -453,5 +458,41 @@ func TestPrintConditionRefusesWhatItCannotVerify(t *testing.T) {
 	}
 	if kv, code, _ := previewOf(t, te, te.cellVKey()); code != 1 || kv["condition"] != "" {
 		t.Errorf("témoin altéré : code=%d %v", code, kv)
+	}
+}
+
+// --- journal d'enregistrements (#275) -------------------------------------------
+
+// Les feuilles de provisionnement d'anod laissent leur clair dans le journal (genèse, refus), vérifiable
+// avec `tbp-audit verify` ; et sans journal configuré, anod ne démarre pas.
+func TestAnodProvisioningLeavesAreJournaledAndJournalIsRequired(t *testing.T) {
+	te := newTestEnv(t)
+	if err := boot(t, te); err != nil {
+		t.Fatalf("genèse : %v", err)
+	}
+	key, err := registry.LoadRecordKey(te.env["TBP_AUDIT_RECORDS_KEY_FILE"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(te.env["TBP_AUDIT_RECORDS"], key)
+	if err != nil || len(recs) != 1 || !strings.HasPrefix(string(recs[0].Record), "TBPL3") || recs[0].VerifyHash() != nil {
+		t.Fatalf("genèse non journalisée : %d enregistrements, err=%v", len(recs), err)
+	}
+	// un refus laisse aussi son clair
+	te.write(t, "TBP_ANO_RULES_FILE", rulesV2)
+	if err := boot(t, te); err == nil {
+		t.Fatal("règles modifiées acceptées")
+	}
+	if recs, err = registry.ReadRecords(te.env["TBP_AUDIT_RECORDS"], key); err != nil || len(recs) != 2 || !strings.HasPrefix(string(recs[1].Record), "TBPL3") {
+		t.Fatalf("le refus ne laisse pas son clair : %d enregistrements (err=%v)", len(recs), err)
+	}
+
+	// le journal est requis : sans lui, la configuration est refusée avant tout
+	for _, v := range []string{"TBP_AUDIT_RECORDS", "TBP_AUDIT_RECORDS_KEY_FILE"} {
+		te2 := newTestEnv(t)
+		delete(te2.env, v)
+		if _, err := loadConfig(te2.env.get); err == nil || !strings.Contains(err.Error(), v) {
+			t.Errorf("%s absent : %v", v, err)
+		}
 	}
 }

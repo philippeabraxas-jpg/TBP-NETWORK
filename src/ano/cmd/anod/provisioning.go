@@ -67,6 +67,12 @@ func loadProvisioningConfig(getenv func(string) string, cfg *config) error {
 	if cfg.witnessFile, err = envRequiredString(getenv, "TBP_PROVISIONING_WITNESS_FILE"); err != nil {
 		return fmt.Errorf("%w (#272 : les règles, le trousseau et le binaire d'anod sont mesurés au démarrage)", err)
 	}
+	if cfg.auditRecords, err = envRequiredString(getenv, "TBP_AUDIT_RECORDS"); err != nil {
+		return fmt.Errorf("%w (#275 : le clair des feuilles d'anod doit rester vérifiable, tbp-audit verify)", err)
+	}
+	if cfg.auditKeyFile, err = envRequiredString(getenv, "TBP_AUDIT_RECORDS_KEY_FILE"); err != nil {
+		return err
+	}
 	if cfg.quorumKeyringPath, err = envRequiredString(getenv, "TBP_QUORUM_KEYRING_FILE"); err != nil {
 		return err
 	}
@@ -154,7 +160,7 @@ func printProvisioningCondition(args []string, getenv func(string) string, stdou
 
 // setupProvisioning mesure et atteste. Toute erreur est fatale : anod ne sert rien tant que ses
 // règles ne sont pas conformes au témoin (ou qu'une transition prouvée ne les a pas engagées).
-func setupProvisioning(ctx context.Context, cfg config, binary string, signer note.Signer, verifier note.Verifier, cellLog *registry.CellLog) error {
+func setupProvisioning(ctx context.Context, cfg config, binary string, signer note.Signer, verifier note.Verifier, cellLog *registry.CellLog, journal *registry.RecordStore) error {
 	files, err := provisioningFiles(cfg, binary)
 	if err != nil {
 		return err
@@ -163,7 +169,7 @@ func setupProvisioning(ctx context.Context, cfg config, binary string, signer no
 		CellID: cfg.cellID, Component: "anod", Files: files,
 		WitnessFile: cfg.witnessFile, RegistryDir: cfg.registryDir,
 		Signer: signer, Verifier: verifier,
-		Leaves: cellLog, Log: cellLog, Salt: cfg.salt,
+		Leaves: cellLog, Journal: journal, Log: cellLog, Salt: cfg.salt,
 		AuthorizeTransition: pep.NewProvisioningAuthorizer(conditionProvisioningTransition, cfg.cellID, cfg.quorumKeyring, cfg.quorumMin, cfg.proofFile),
 		OnTrip:              func(reason string) { log.Printf("anod: ALARME provisionnement: %s", reason) },
 	})
