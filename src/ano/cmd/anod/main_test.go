@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,7 @@ type testEnv struct {
 	env    env
 	issuer *broker.Issuer
 	dir    string
+	ctl    []ed25519.PrivateKey // contrôleurs du quorum (#272)
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -54,11 +56,45 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := os.WriteFile(rulesPath, []byte(`{"keep_paths":["action"],"mask_paths":["account"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return &testEnv{issuer: issuer, dir: dir, env: env{
-		"TBP_ANO_SOCKET":     filepath.Join(dir, "ano.sock"),
-		"TBP_KEYRING_FILE":   krPath,
-		"TBP_ANO_RULES_FILE": rulesPath,
+	// démarrage mesuré (#272) : deux contrôleurs, k = 2
+	ctl1, ctl2 := controllerKey(1), controllerKey(2)
+	qkPath := filepath.Join(dir, "quorum-keyring.json")
+	if err := os.WriteFile(qkPath, keyringJSON(t, ctl1, ctl2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "witness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &testEnv{issuer: issuer, dir: dir, ctl: []ed25519.PrivateKey{ctl1, ctl2}, env: env{
+		"TBP_ANO_SOCKET":                filepath.Join(dir, "ano.sock"),
+		"TBP_KEYRING_FILE":              krPath,
+		"TBP_ANO_RULES_FILE":            rulesPath,
+		"TBP_CELL_ID":                   "cell-a",
+		"TBP_SALT":                      strings.Repeat("0a", 16),
+		"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
+		"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "witness", "anod-provisioning.json"),
+		"TBP_QUORUM_KEYRING_FILE":       qkPath,
+		"TBP_QUORUM_MIN":                "2",
 	}}
+}
+
+func controllerKey(b byte) ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{b}, 32))
+}
+
+func keyringJSON(t *testing.T, keys ...ed25519.PrivateKey) []byte {
+	t.Helper()
+	raw := map[string]string{}
+	for _, k := range keys {
+		pub := k.Public().(ed25519.PublicKey)
+		kid := pep.KeyIDFromPublicKey(pub)
+		raw[hex.EncodeToString(kid[:])] = hex.EncodeToString(pub)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestLoadConfigFailClosed(t *testing.T) {
@@ -99,6 +135,19 @@ func TestLoadConfigFailClosed(t *testing.T) {
 		"délai non entier":      mutate("TBP_ANO_CLASSIFIER_TIMEOUT_MS", "vite"),
 		"grâce hors bornes":     mutate("TBP_ANO_RESPONSE_GRACE_S", "601"),
 		"max échanges nul":      mutate("TBP_ANO_MAX_EXCHANGES", "0"),
+		// démarrage mesuré (#272) : chaque pièce est requise, aucune valeur par défaut
+		"cellule absente":         mutate("TBP_CELL_ID", ""),
+		"sel absent":              mutate("TBP_SALT", ""),
+		"sel trop court":          mutate("TBP_SALT", "0a0b"),
+		"sel non hex":             mutate("TBP_SALT", strings.Repeat("zz", 16)),
+		"registre absent":         mutate("TBP_REGISTRY_DIR", ""),
+		"témoin absent":           mutate("TBP_PROVISIONING_WITNESS_FILE", ""),
+		"trousseau quorum absent": mutate("TBP_QUORUM_KEYRING_FILE", ""),
+		"trousseau quorum vide":   mutate("TBP_QUORUM_KEYRING_FILE", emptyKR),
+		"k absent":                mutate("TBP_QUORUM_MIN", ""),
+		"k nul":                   mutate("TBP_QUORUM_MIN", "0"),
+		"k > contrôleurs":         mutate("TBP_QUORUM_MIN", "3"),
+		"k non entier":            mutate("TBP_QUORUM_MIN", "deux"),
 	} {
 		if _, err := loadConfig(e.get); err == nil {
 			t.Errorf("%s: la configuration doit être refusée au démarrage", name)

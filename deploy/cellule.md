@@ -633,7 +633,17 @@ scope used to pass without any alarm.
   editing the environment is a divergence, and the change is authorised by the k that was attested.
   Adopting this on a cell that already ran takes one transition proof (the new entry changes the
   digest). Both accept
-  `TBP_PROVISIONING_EXTRA_FILES` (for example the `anod` rules file).
+  `TBP_PROVISIONING_EXTRA_FILES`. **`anod` measures itself** (#272): it restarts independently of
+  `pepd`, so the daemon that decides what leaves the cell cannot be left to someone else's start-up
+  check. `anod` attests its **rules file** (`ano-rules`), issuer keyring, controller keyring
+  (authority), **its own binary** (`anod-binary`), the settings that decide what is released
+  (`ano-settings`: classifier socket, timeout, grace, bounds) and `k` (`quorum-settings`). Removing a
+  pattern, widening `keep_paths` or plugging a classifier between two starts is **refused** without a
+  quorum proof bound to (attested state, target state), condition
+  `provisioning-transition-anod|from=…|to=…` — the refusal prints it. `anod` needs its own chain and
+  witness: `TBP_CELL_ID`, `TBP_SALT`, `TBP_REGISTRY_DIR`, `TBP_PROVISIONING_WITNESS_FILE` (outside the
+  registry directory, which must already exist), `TBP_QUORUM_KEYRING_FILE`, `TBP_QUORUM_MIN`; no
+  "dev disable" escape hatch exists for `anod`. Upgrading an existing `anod` takes one transition proof.
 - **How.** A digest over the sorted (name, SHA-256) list is committed at the first start
   in a witness signed by the cell key, outside `TBP_REGISTRY_DIR`. At each later start the
   digest must match; otherwise the daemon refuses to start, writes a refusal leaf, raises

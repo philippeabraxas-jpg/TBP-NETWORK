@@ -350,6 +350,40 @@ func LoadSigner(dir string) (note.Signer, error) {
 	return note.NewSigner(strings.TrimSpace(string(data)))
 }
 
+// LoadOrGenerateCellKey charge la clef note du CellLog d'un démon ou la génère au premier
+// démarrage : clef signante 0600 (SaveSignerKey), clef de vérification en clair à côté
+// (cell_log.vkey) pour reconstruire le Verifier. Toute incohérence (clef présente mais illisible)
+// est fatale — fail-closed (§1). Même comportement que les copies de pepd et de brokerd.
+func LoadOrGenerateCellKey(dir, cellID string) (note.Signer, string, error) {
+	vkeyPath := filepath.Join(dir, "cell_log.vkey")
+	signer, err := LoadSigner(dir)
+	if err == nil {
+		vkeyB, rerr := os.ReadFile(vkeyPath)
+		if rerr != nil {
+			return nil, "", fmt.Errorf("clef de vérification illisible: %w", rerr)
+		}
+		return signer, string(vkeyB), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
+	skey, vkey, gerr := GenerateCellKey(cellID)
+	if gerr != nil {
+		return nil, "", gerr
+	}
+	if serr := SaveSignerKey(dir, skey); serr != nil {
+		return nil, "", serr
+	}
+	if werr := os.WriteFile(vkeyPath, []byte(vkey), 0o644); werr != nil {
+		return nil, "", werr
+	}
+	ns, nerr := note.NewSigner(skey)
+	if nerr != nil {
+		return nil, "", nerr
+	}
+	return ns, vkey, nil
+}
+
 // NewVerifier construit le vérificateur public à partir de la clé publique note.
 func NewVerifier(vkey string) (note.Verifier, error) {
 	return note.NewVerifier(strings.TrimSpace(vkey))

@@ -23,6 +23,7 @@
 //	quorumproof planapprove | planrevoke | planhash | planbind — approbation, révocation, recalcul du hash et liaison d'un plan (voir plantools.go)
 //
 // Conditions : « provisioning-transition-brokerd », « provisioning-transition-pepd »,
+// « provisioning-transition-anod » (#272),
 // « measured-boot-transition », « mode-closed », « mode-monitor ». La condition est
 // liée par la signature : une preuve ne vaut jamais pour une autre.
 //
