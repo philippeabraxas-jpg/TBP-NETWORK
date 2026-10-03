@@ -751,6 +751,19 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 	_, erUp, errUp := evaluate(pepdURL, tokUp, "read", "doc-1")
 	s.add(ph, "#205: la cellule redécide après la reprise, sans redémarrage de pepd ni quorum",
 		errUp == nil && erUp.Allow, fmt.Sprintf("allow=%v reason=%s", erUp.Allow, erUp.Reason))
+
+	// --- #218 : le trousseau de quorum édité avec les clés de l'attaquant (dernière étape : il réécrit l'autorité) ---
+	_ = pepdCmd.Process.Kill()
+	_, _ = pepdCmd.Process.Wait()
+	honest := []proofKey{{kid: ctrl1KID, priv: ctrl1}}
+	if prof.quorumMin >= 2 {
+		honest = append(honest, proofKey{kid: ctrl2KID, priv: ctrl2})
+	}
+	runPepdTransitionStage(s, ph, pepdBin, pepdEnv, cfg.out, monoCellID, quorumKeyringPath, keys, honest, prof.quorumMin,
+		func() bool {
+			st, _, err := getUnix(adminHC, "http://pepd-admin/healthz")
+			return err == nil && st == http.StatusOK
+		})
 }
 
 // postJSONRaw POSTe un corps déjà sérialisé (postJSON re-marshale).

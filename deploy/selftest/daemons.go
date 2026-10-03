@@ -1337,6 +1337,11 @@ func runDaemons(s *suite, cfg config) {
 			av, _ := pendBody(subject, intent)
 			return av.Reason
 		})
+
+		// --- #218 et #272 : le fichier d'autorité édité avec ses propres clés, et anod mesuré ---------------
+		// Dernière étape : elle réécrit la genèse de la cellule (l'attaquant y ajoute ses clés).
+		brokerd4.stop()
+		runProvisioningTransitionStage(s, cfg, base, brokerdBin, brokerEnv, genesisDir, brokerAdminHC, writeEpoch0, privs)
 	}
 }
 

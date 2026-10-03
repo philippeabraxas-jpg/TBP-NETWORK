@@ -852,7 +852,11 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   ANCIENS contrôleurs ; le nouvel ensemble devient ensuite la référence. Un témoin écrit
   avant ce correctif n'a pas d'instantané : un démarrage sans changement le met à niveau sur
   place, mais un fichier *modifié* est refusé, avec ou sans preuve — ré-engager explicitement
-  (ci-dessous).
+  (ci-dessous). `deploy/selftest` joue l'attaque sur les vrais processus `pepd`, `brokerd` et `anod` :
+  k clés d'attaquant ajoutées au fichier d'autorité et une preuve signée avec elles ⇒ le démon refuse ;
+  la même transition signée par les contrôleurs attestés ⇒ acceptée. Pour `anod` (#272), il joue aussi
+  l'édition du fichier de règles : refusée sans preuve valide, acceptée dès que les contrôleurs signent,
+  et un redémarrage sans changement est accepté.
 - **Ré-engager après un témoin perdu.** Il n'y a rien d'attesté à opposer : la preuve se
   vérifie alors contre le trousseau actuellement sur le disque — confiance à la première
   utilisation, comme au premier démarrage. C'est un acte d'installation de l'administrateur,

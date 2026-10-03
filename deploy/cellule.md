@@ -803,7 +803,11 @@ scope used to pass without any alarm.
   **rotation of the controllers themselves** is signed by the OLD controllers; the new set
   then becomes the reference. Witnesses written before this fix carry no snapshot: an
   unchanged start upgrades them in place, but a *changed* file is refused, with or without
-  a proof — re-engage explicitly (below).
+  a proof — re-engage explicitly (below). `deploy/selftest` plays the attack on the real `pepd`,
+  `brokerd` and `anod` processes: k attacker keys added to the authority file and a proof signed with them
+  ⇒ the daemon refuses; the same transition signed by the attested controllers ⇒ accepted. For `anod`
+  (#272) it also plays the edit of the rules file: refused without a valid proof, accepted once the
+  controllers sign, and an unchanged restart is accepted.
 - **Re-engaging after a lost witness.** There is nothing attested to check against, so the
   proof falls back to the keyring currently on disk: trust on first use, as at a first
   start. This is an installation act by the administrator, not a transition; keep the
