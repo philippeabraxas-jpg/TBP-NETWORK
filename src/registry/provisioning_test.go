@@ -58,7 +58,7 @@ type provEnv struct {
 
 func newProvEnv(t *testing.T, mut func(*ProvisioningGuardOptions)) *provEnv {
 	t.Helper()
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	write := func(name, content string) ProvisioningFile {
 		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
@@ -491,7 +491,7 @@ func TestLeavesAreHashOnlyAndSalted(t *testing.T) {
 
 func TestGuardOnARealCellLog(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	log, verifier := openTestLog(t, ctx, filepath.Join(dir, "registry"), nil)
 	defer func() { _ = log.Close(ctx) }()
 	signer, _ := manifestTestKey(t)

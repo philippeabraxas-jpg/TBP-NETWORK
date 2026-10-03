@@ -142,7 +142,7 @@ func TestAsyncWriterConfigFailClosed(t *testing.T) {
 	if _, err := NewAsyncWriter(nil, AsyncOptions{CellID: "c", Salt: salt}); err == nil {
 		t.Fatal("CellLog nil accepté")
 	}
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -184,7 +184,7 @@ const fastAcceptBudget = 2 * time.Second
 func TestAsyncWriterFastAccept(t *testing.T) {
 	ctx := context.Background()
 	signer, verifier := asyncTestKeys(t)
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -246,7 +246,7 @@ func TestAsyncWriterFastAccept(t *testing.T) {
 func TestAsyncWriterNoSpuriousCut(t *testing.T) {
 	ctx := context.Background()
 	signer, verifier := asyncTestKeys(t)
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -295,7 +295,7 @@ func TestAsyncWriterCutAndRecover(t *testing.T) {
 	ctx := context.Background()
 	rawSigner, verifier := asyncTestKeys(t)
 	signer := &gatedSigner{inner: rawSigner}
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -344,7 +344,11 @@ func TestAsyncWriterCutAndRecover(t *testing.T) {
 		if !errors.Is(err, ErrDurabilityCut) {
 			t.Fatalf("Append en coupure: err=%v, attendu ErrDurabilityCut", err)
 		}
-		if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		// « Immédiat » = ne dépend PAS de la publication : un refus qui l'attendrait resterait bloqué tant que le
+		// signataire est gelé (ici : jusqu'au dégel, plusieurs secondes). La borne est donc 1 s — assez large pour
+		// qu'une machine saturée ne la franchisse pas sur un simple retard d'ordonnancement (50 ms l'était, #266),
+		// assez serrée pour échouer sur un refus qui attend.
+		if elapsed := time.Since(start); elapsed > time.Second {
 			t.Fatalf("refus en coupure en %v — le refus fail-closed doit être immédiat", elapsed)
 		}
 	}
@@ -404,12 +408,12 @@ func TestAsyncWriterBackpressureDrainKeepsStopLeafLast(t *testing.T) {
 	rawSigner, verifier := asyncTestKeys(t)
 	signer := &gatedSigner{inner: rawSigner}
 	mon, err := NewMonitor(MonitorOptions{
-		Dir: t.TempDir(), CellID: "cell-async", QuotaBytes: 1 << 20,
+		Dir: logTempDir(t), CellID: "cell-async", QuotaBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	mon.dir = dir // mesure cohérente avec le log ouvert ensuite
 	log := openAsyncLog(t, ctx, dir, signer, verifier, mon, 100*time.Millisecond)
 	defer func() {
@@ -490,7 +494,7 @@ func TestAsyncWriterBacklogBound(t *testing.T) {
 	ctx := context.Background()
 	rawSigner, verifier := asyncTestKeys(t)
 	signer := &gatedSigner{inner: rawSigner}
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -525,7 +529,7 @@ func TestAsyncWriterBacklogBound(t *testing.T) {
 func TestAsyncWriterConcurrentAndClosed(t *testing.T) {
 	ctx := context.Background()
 	signer, verifier := asyncTestKeys(t)
-	log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+	log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 	// Fenêtre large à dessein : 160 feuilles intégrées une par une
 	// (BatchSize 1) sous -race ne rattrapent pas la fenêtre d'1 s — la
 	// coupure est le sujet de TestAsyncWriterCutAndRecover, pas de ce test

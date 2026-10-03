@@ -202,7 +202,7 @@ func TestRFC6962TreeVectors(t *testing.T) {
 
 func seedRFC6962Log(t *testing.T, ctx context.Context, salt string) (*CellLog, [][]byte, [][32]byte) {
 	t.Helper()
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 
 	kinds := []byte{KindDecision, KindTelemetry, KindBackpressure, KindAnchor,
 		KindDecision, KindAnchor, KindTelemetry, KindBackpressure}

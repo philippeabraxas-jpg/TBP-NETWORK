@@ -15,7 +15,7 @@ import (
 
 func openProducerJournal(t *testing.T) (*RecordStore, string, []byte) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "records.jsonl")
+	path := filepath.Join(logTempDir(t), "records.jsonl")
 	key := bytes.Repeat([]byte{9}, RecordKeyLen)
 	j, err := OpenRecordStore(path, key)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestBackpressureStopLeafIsJournaled(t *testing.T) {
 			_ = j.Close()
 		}
 		var box alarmBox
-		log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+		log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 			CellID: "cell-t5", QuotaBytes: 1 << 40, HostFloorBytes: 1 << 30,
 			Fs: fakeFs{free: 1 << 20}, Interval: 5 * time.Millisecond, Journal: j,
 			OnAlarm: func(a Alarm) { box.store(a) },
@@ -175,7 +175,7 @@ func TestAsyncEpisodeLeafIsJournaled(t *testing.T) {
 		j, path, key := openProducerJournal(t)
 		rawSigner, verifier := asyncTestKeys(t)
 		signer := &gatedSigner{inner: rawSigner}
-		log := openAsyncLog(t, ctx, t.TempDir(), signer, verifier, nil, 100*time.Millisecond)
+		log := openAsyncLog(t, ctx, logTempDir(t), signer, verifier, nil, 100*time.Millisecond)
 		trips := make(chan string, 4)
 		clears := make(chan struct{}, 4)
 		faults := make(chan string, 4)

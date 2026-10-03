@@ -181,7 +181,7 @@ func TestUnmarshalLeafErrors(t *testing.T) {
 
 const testOrigin = "tbp/registry/cell-test"
 
-// openTestLog crée un CellLog dans t.TempDir() avec une clé note fraîche.
+// openTestLog crée un CellLog dans logTempDir(t) avec une clé note fraîche.
 // BatchSize 1 / BatchAge 10 ms : publication rapide des checkpoints en test.
 func openTestLog(t *testing.T, ctx context.Context, dir string, bp BackpressureChecker) (*CellLog, note.Verifier) {
 	t.Helper()
@@ -221,7 +221,7 @@ func TestKeyManagement(t *testing.T) {
 		t.Fatal("origine vide acceptée")
 	}
 
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	if err := SaveSignerKey(dir, skey); err != nil {
 		t.Fatalf("SaveSignerKey: %v", err)
 	}
@@ -252,10 +252,10 @@ func TestOpenValidation(t *testing.T) {
 	if _, err := Open(ctx, Options{Signer: signer, Verifier: verifier}); err == nil {
 		t.Fatal("Dir vide accepté")
 	}
-	if _, err := Open(ctx, Options{Dir: t.TempDir(), Verifier: verifier}); err == nil {
+	if _, err := Open(ctx, Options{Dir: logTempDir(t), Verifier: verifier}); err == nil {
 		t.Fatal("Signer nil accepté")
 	}
-	if _, err := Open(ctx, Options{Dir: t.TempDir(), Signer: signer}); err == nil {
+	if _, err := Open(ctx, Options{Dir: logTempDir(t), Signer: signer}); err == nil {
 		t.Fatal("Verifier nil accepté")
 	}
 }
@@ -264,7 +264,7 @@ func TestCellLogAppendAndHead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	defer log.Close(ctx)
 
 	leaves := []Leaf{
@@ -301,7 +301,7 @@ func TestCellLogCheckpointThirdParty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	log, verifier := openTestLog(t, ctx, dir, nil)
 	defer log.Close(ctx)
 
@@ -356,7 +356,7 @@ func TestCellLogBackpressure(t *testing.T) {
 	defer cancel()
 
 	engaged := false
-	log, _ := openTestLog(t, ctx, t.TempDir(), BackpressureFunc(func() bool { return engaged }))
+	log, _ := openTestLog(t, ctx, logTempDir(t), BackpressureFunc(func() bool { return engaged }))
 	defer log.Close(ctx)
 
 	mk := func(kind byte, ts int64) Leaf {
@@ -397,7 +397,7 @@ func TestCellLogReopen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	skey, vkey, err := GenerateCellKey(testOrigin)
 	if err != nil {
 		t.Fatalf("GenerateCellKey: %v", err)
@@ -463,7 +463,7 @@ func TestAppendDefaultsTimestamp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	defer log.Close(ctx)
 
 	before := time.Now().UTC().UnixNano()
@@ -490,7 +490,7 @@ func TestAppendRejectsInvalidLeaf(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	defer log.Close(ctx)
 
 	if _, err := log.Append(ctx, Leaf{Kind: KindDecision, CellID: "", Timestamp: 1}); err == nil {
@@ -511,7 +511,7 @@ func TestAppendRejectsInvalidLeaf(t *testing.T) {
 // TestAppendCancelledContext : un contexte déjà annulé fait échouer Append
 // explicitement — pas de succès silencieux, pas de blocage.
 func TestAppendCancelledContext(t *testing.T) {
-	log, _ := openTestLog(t, context.Background(), t.TempDir(), nil)
+	log, _ := openTestLog(t, context.Background(), logTempDir(t), nil)
 	defer log.Close(context.Background())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -528,7 +528,7 @@ func TestAppendCancelledContext(t *testing.T) {
 func TestCellLogConcurrentAppend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	defer log.Close(ctx)
 
 	const n = 50
@@ -595,7 +595,7 @@ func TestOpenVerifierMismatch(t *testing.T) {
 	}
 
 	log, err := Open(ctx, Options{
-		Dir: t.TempDir(), Signer: signer, Verifier: wrongVerifier,
+		Dir: logTempDir(t), Signer: signer, Verifier: wrongVerifier,
 		BatchSize: 1, BatchAge: 10 * time.Millisecond, CheckpointInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
