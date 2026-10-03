@@ -33,7 +33,7 @@ just one more pinned controller — and turns B into A.
 
 ## What a lost key had already signed
 
-Nothing it signed is revoked, and nothing it signed stays *usable*:
+Nothing it signed is revoked, and — for a **controller** key — nothing it signed stays *usable*. An **operator** key is the exception (last bullet):
 
 - **Quorum proofs** are bound to one condition and one cell, live 4 minutes by default, and
   (class W) are single-use even across restarts (#206). None outlives the incident.
@@ -41,6 +41,14 @@ Nothing it signed is revoked, and nothing it signed stays *usable*:
   must verify under the manifest in force.
 - **Past decisions** are leaves signed by the *cell* key, not by the controllers. They stay
   verifiable. Removing a controller is not retroactive.
+- **Plan approvals** are the exception, and they are signed by an *operator* key (`TBP_OPERATOR_KEYS_FILE`),
+  not a controller key: an approved plan stays approved until its own expiry — 1 h by default, up to 24 h.
+  If an operator key is lost or stolen, no console view lists *approved* plans (`/v1/supervision/arbitration`
+  shows only those still pending): find them in the log — each approval leaf names the approving operator's
+  key id — and cut each one with `quorumproof planrevoke` ([scale-2.md](scale-2.md), "Cutting a plan approved
+  by mistake"). Before approving anything again, **recompute the plan hash from the plan in clear** with
+  `quorumproof planhash` and sign only a hash you recomputed (#273): in an incident, the hash the broker
+  announces is exactly what you cannot rely on.
 
 So rotating does not rewrite history. If the key was **stolen** rather than lost, history
 matters: see C.

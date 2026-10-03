@@ -33,7 +33,7 @@ contrôleur épinglé de plus — et transforme B en A.
 
 ## Ce qu'une clé perdue avait déjà signé
 
-Rien de ce qu'elle a signé n'est révoqué, et rien de ce qu'elle a signé ne reste *utilisable* :
+Rien de ce qu'elle a signé n'est révoqué, et — pour une clé de **contrôleur** — rien de ce qu'elle a signé ne reste *utilisable*. Une clé d'**opérateur** fait exception (dernier point) :
 
 - **Les preuves de quorum** sont liées à une condition et à une cellule, vivent 4 minutes par
   défaut, et (classe W) sont à usage unique y compris après un redémarrage (#206). Aucune ne survit
@@ -42,6 +42,15 @@ Rien de ce qu'elle a signé n'est révoqué, et rien de ce qu'elle a signé ne r
   (10–300 s) ; un nouveau doit se vérifier sous le manifeste en vigueur.
 - **Les décisions passées** sont des feuilles signées par la clé de la *cellule*, pas par les
   contrôleurs. Elles restent vérifiables. Retirer un contrôleur n'est pas rétroactif.
+- **Les approbations de plan** sont l'exception, et elles sont signées par une clé d'*opérateur*
+  (`TBP_OPERATOR_KEYS_FILE`), pas par une clé de contrôleur : un plan approuvé le reste jusqu'à sa propre
+  expiration — 1 h par défaut, jusqu'à 24 h. Si une clé d'opérateur est perdue ou volée, aucune vue de la
+  console ne liste les plans *approuvés* (`/v1/supervision/arbitration` ne montre que ceux encore en
+  attente) : retrouvez-les dans le journal — chaque feuille d'approbation nomme l'identifiant de la clé de
+  l'opérateur — et coupez chacun avec `quorumproof planrevoke` ([scale-2.fr.md](scale-2.fr.md), « Couper un
+  plan approuvé par erreur »). Avant d'approuver quoi que ce soit à nouveau, **recalculez le hash du plan à
+  partir du plan en clair** avec `quorumproof planhash` et ne signez qu'un hash recalculé (#273) : en
+  incident, le hash que le broker annonce est précisément ce sur quoi on ne peut pas s'appuyer.
 
 Remplacer une clé ne réécrit donc pas l'histoire. Si la clé a été **volée** plutôt que perdue,
 l'histoire compte : voir C.
