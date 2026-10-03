@@ -12,6 +12,15 @@ import check_pinned_actions as c  # noqa: E402
 SHA = "11d5960a326750d5838078e36cf38b85af677262"
 
 
+def perr(text: str) -> list[str]:
+    with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+        fh.write(text)
+    try:
+        return c.check_permissions(fh.name)
+    finally:
+        os.unlink(fh.name)
+
+
 def errs(text: str) -> list[str]:
     with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
         fh.write(text)
@@ -50,6 +59,34 @@ class PinnedActions(unittest.TestCase):
 
     def test_the_repo_workflows_are_pinned(self):
         self.assertEqual(c.main(["x"]), 0)
+
+
+class Permissions(unittest.TestCase):
+    def test_no_block_at_all_is_refused(self):
+        self.assertTrue(perr("name: x\non: push\njobs:\n  a:\n    runs-on: u\n"))
+
+    def test_top_level_block_is_accepted(self):
+        self.assertEqual(perr("name: x\npermissions:\n  contents: read\njobs:\n  a:\n    runs-on: u\n"), [])
+
+    def test_every_job_must_have_its_own_when_no_top_level(self):
+        ok = "jobs:\n  a:\n    permissions:\n      contents: read\n    runs-on: u\n  b:\n    permissions: {}\n    runs-on: u\n"
+        self.assertEqual(perr(ok), [])
+        one_missing = "jobs:\n  a:\n    permissions:\n      contents: read\n    runs-on: u\n  b:\n    runs-on: u\n"
+        r = perr(one_missing)
+        self.assertEqual(len(r), 1)
+        self.assertIn("« b »", r[0])
+
+    def test_write_all_is_refused_even_with_a_block(self):
+        self.assertTrue(perr("permissions: write-all\njobs:\n  a:\n    runs-on: u\n"))
+        self.assertTrue(perr("permissions:\n  write-all\njobs:\n  a:\n    runs-on: u\n"))
+
+    def test_a_commented_block_does_not_count(self):
+        self.assertTrue(perr("# permissions:\n#   contents: read\njobs:\n  a:\n    runs-on: u\n"))
+
+    def test_the_repo_workflows_declare_permissions(self):
+        import glob
+        for f in sorted(glob.glob(".github/workflows/*.yml")):
+            self.assertEqual(c.check_permissions(f), [], f)
 
 
 if __name__ == "__main__":

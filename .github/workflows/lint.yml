@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# #193 : jeton minimal par défaut — ces jobs ne font que lire le dépôt. Sans ce bloc le jeton hérite des
+# droits par défaut du dépôt (écriture possible selon les réglages) pour des jobs qui exécutent du code tiers.
+permissions:
+  contents: read
+
 jobs:
   rego:
     runs-on: ubuntu-latest

@@ -8,6 +8,10 @@ immuable. Ce vérificateur fait échouer la CI dès qu'un `uses:` n'est pas épi
 par un SHA de 40 hexadécimaux, sauf exceptions listées ci-dessous, chacune avec
 sa raison.
 
+Même vérificateur, deuxième volet (#193, point 4) : chaque workflow déclare des `permissions:` — au
+niveau du workflow, ou à défaut sur CHAQUE job — et aucune n'est `write-all`. Un workflow sans bloc
+hérite des droits par défaut du dépôt, réglables hors du code et souvent en écriture.
+
 Usage : python3 .github/scripts/check_pinned_actions.py [fichier.yml …]
         (sans argument : .github/workflows/*.yml)
 """
@@ -52,6 +56,46 @@ def check_file(path: str) -> list[str]:
     return errors
 
 
+TOP_PERMS_RE = re.compile(r"^permissions:")
+JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
+JOB_PERMS_RE = re.compile(r"^    permissions:")
+WRITE_ALL_RE = re.compile(r"^\s*(?:permissions:\s*)?write-all\b|^\s*permissions:\s*write-all\b")
+
+
+def check_permissions(path: str) -> list[str]:
+    """Chaque workflow : `permissions:` en tête, ou sur chaque job ; jamais `write-all`."""
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    errors: list[str] = []
+    for n, line in enumerate(lines, 1):
+        if not line.lstrip().startswith("#") and WRITE_ALL_RE.search(line):
+            errors.append(f"{path}:{n}: « write-all » interdit — déclarer les droits nécessaires un par un (#193)")
+    if any(TOP_PERMS_RE.match(line) for line in lines):
+        return errors
+    jobs: dict[str, bool] = {}
+    in_jobs, cur = False, None
+    for line in lines:
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if line and not line.startswith(" ") and not line.startswith("#"):
+            break  # fin du bloc jobs
+        m = JOB_RE.match(line)
+        if m:
+            cur = m.group(1)
+            jobs[cur] = False
+        elif cur is not None and JOB_PERMS_RE.match(line):
+            jobs[cur] = True
+    if not jobs:
+        errors.append(f"{path}: aucun job reconnu et pas de `permissions:` en tête (#193)")
+    for name, has in jobs.items():
+        if not has:
+            errors.append(f"{path}: le job « {name} » n'a pas de `permissions:` et le workflow n'en déclare pas en tête (#193)")
+    return errors
+
+
 def main(argv: list[str]) -> int:
     files = argv[1:] or sorted(glob.glob(".github/workflows/*.yml"))
     if not files:
@@ -60,12 +104,13 @@ def main(argv: list[str]) -> int:
     errors: list[str] = []
     for f in files:
         errors += check_file(f)
+        errors += check_permissions(f)
     for e in errors:
         print(f"[FAIL] {e}")
     if errors:
-        print(f"check_pinned_actions: {len(errors)} référence(s) mutable(s)")
+        print(f"check_pinned_actions: {len(errors)} faute(s) de chaîne de build (#193)")
         return 1
-    print(f"check_pinned_actions: {len(files)} workflow(s), toutes les actions sont épinglées par SHA")
+    print(f"check_pinned_actions: {len(files)} workflow(s), actions épinglées par SHA, permissions déclarées")
     return 0
 
 
