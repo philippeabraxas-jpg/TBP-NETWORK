@@ -132,9 +132,9 @@ func (l *anchorTripLog) has(reason string) bool { return l.count(reason) > 0 }
 // dans des répertoires distincts) avec horloge et TSA factices.
 func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *fakeTSA, trips, alarms *anchorTripLog, mut ...func(*AnchorerOptions)) (*Anchorer, *CellLog, *CellLog) {
 	t.Helper()
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
-	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	master, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, master)
 	opts := AnchorerOptions{
 		BrokerID: "broker-test",
@@ -161,7 +161,7 @@ func newTestAnchorer(t *testing.T, ctx context.Context, clock *fakeClock, tsa *f
 // closeTestLogOnCleanup ferme log à la fin du test. Chaque CellLog ouvert
 // par ce fichier tient des goroutines Tessera d'arrière-plan (checkpoint
 // périodique) — non fermées, elles continuent d'écrire dans le
-// t.TempDir() déjà supprimé une fois le test terminé (bruit
+// logTempDir(t) déjà supprimé une fois le test terminé (bruit
 // "no such file or directory" observé en CI sous charge : ce fichier
 // ouvrait jusqu'à 22 CellLog réels par exécution du paquet sans jamais en
 // fermer un seul, jusqu'à perturber des tests sans rapport exécutés
@@ -235,7 +235,7 @@ func TestAnchorRecordMarshal(t *testing.T) {
 // TestAnchorerValidation : options invalides refusées à la construction.
 func TestAnchorerValidation(t *testing.T) {
 	ctx := context.Background()
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
 	// Master n'a besoin que d'être non-nil pour cette validation de
 	// construction — jamais lu ni écrit ici. stubMaster (déjà utilisé plus
@@ -476,7 +476,7 @@ func TestAnchorerStoreAndForward(t *testing.T) {
 	tsa := &fakeTSA{genTime: clock.now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
 	master := &stubMaster{}
 	master.failing.Store(true)
@@ -552,7 +552,7 @@ func TestAnchorerBacklogOverflow(t *testing.T) {
 	tsa := &fakeTSA{genTime: clock.now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
 	master := &stubMaster{}
 	master.failing.Store(true)
@@ -652,9 +652,9 @@ func TestAnchorerRun(t *testing.T) {
 	// snapshot (garde monotone), ce qui testerait autre chose que Run.
 	tsa := &fakeTSA{genTime: time.Now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
-	master, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	master, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, master)
 	a, err := NewAnchorer(AnchorerOptions{
 		BrokerID: "broker-test", CellID: "cell-test",
@@ -791,7 +791,7 @@ func TestAnchorerBacklogFlushNoFalseRecovery(t *testing.T) {
 	tsa := &fakeTSA{genTime: clock.now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
 	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+200s].
 	// #3 flush de cette entrée : OK (mais elle reste vieille de 200s par
@@ -864,7 +864,7 @@ func TestAnchorerPartialFlushWithholdsCurrent(t *testing.T) {
 	tsa := &fakeTSA{genTime: clock.now}
 	trips, alarms := &anchorTripLog{}, &anchorTripLog{}
 
-	cell, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	cell, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	closeTestLogOnCleanup(t, cell)
 	// #1 ancrage initial OK. #2 tentative courante échoue -> backlog=[t0+100s].
 	// #3 rejeu de cette entrée échoue À NOUVEAU (panne ponctuelle).

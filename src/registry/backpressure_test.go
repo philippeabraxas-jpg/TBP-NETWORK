@@ -56,7 +56,7 @@ func TestSizeQuotaBytes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDirSampler(t *testing.T) {
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	// Layout arborescent façon tlog-tiles.
 	sub := filepath.Join(dir, "tile", "0", "x000")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -90,7 +90,7 @@ func TestDirSampler(t *testing.T) {
 }
 
 func TestStatfsStats(t *testing.T) {
-	free, err := (StatfsStats{}).FreeBytes(t.TempDir())
+	free, err := (StatfsStats{}).FreeBytes(logTempDir(t))
 	if err != nil {
 		t.Fatalf("FreeBytes: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestMonitorTripAtThreshold(t *testing.T) {
 	// puis on fixe le quota pour que 80 % tombe après ~4 feuilles —
 	// le quota est dimensionné sur une mesure, pas une estimation (critère
 	// d'acceptation).
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	skey, vkey, err := GenerateCellKey(testOrigin)
 	if err != nil {
 		t.Fatalf("GenerateCellKey: %v", err)
@@ -343,7 +343,7 @@ func TestMonitorHostFloor(t *testing.T) {
 	defer cancel()
 
 	var box alarmBox
-	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+	log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 		CellID:         "cell-t5",
 		QuotaBytes:     1 << 40, // quota énorme : seul le plancher hôte peut tirer
 		HostFloorBytes: 1 << 30,
@@ -369,7 +369,7 @@ func TestMonitorSamplerError(t *testing.T) {
 	defer cancel()
 
 	var box alarmBox
-	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+	log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 		CellID:     "cell-t5",
 		QuotaBytes: 1 << 40, Sampler: failingSampler{},
 		Interval: 5 * time.Millisecond,
@@ -390,7 +390,7 @@ func TestMonitorDisengage(t *testing.T) {
 	defer cancel()
 
 	var box alarmBox
-	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+	log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 		CellID:     "cell-t5",
 		QuotaBytes: 1, // déjà dépassé → engagement au premier échantillon
 		Interval:   5 * time.Millisecond,
@@ -420,7 +420,7 @@ func TestMonitorBelowThreshold(t *testing.T) {
 	defer cancel()
 
 	var alarms int32
-	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+	log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 		CellID:     "cell-t5",
 		QuotaBytes: 1 << 40, Interval: 5 * time.Millisecond,
 		Fs:      fakeFs{free: 1 << 40},
@@ -446,7 +446,7 @@ func TestMonitorBelowThreshold(t *testing.T) {
 // TestMonitorValidation : configuration invalide rejetée (fail-closed —
 // pas de moniteur muet).
 func TestMonitorValidation(t *testing.T) {
-	dir := t.TempDir()
+	dir := logTempDir(t)
 
 	cases := map[string]MonitorOptions{
 		"dir vide":       {CellID: "c", QuotaBytes: 1},
@@ -474,7 +474,7 @@ func TestMonitorValidation(t *testing.T) {
 // TestMonitorBind : liaison invalide rejetée ; double liaison refusée.
 func TestMonitorBind(t *testing.T) {
 	ctx := context.Background()
-	mon, err := NewMonitor(MonitorOptions{Dir: t.TempDir(), CellID: "c", QuotaBytes: 1 << 20})
+	mon, err := NewMonitor(MonitorOptions{Dir: logTempDir(t), CellID: "c", QuotaBytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestMonitorBind(t *testing.T) {
 	if err := mon.Run(ctx); !errors.Is(err, ErrMonitorNotBound) {
 		t.Fatalf("Run non lié: err=%v, attendu ErrMonitorNotBound", err)
 	}
-	log, _ := openTestLog(t, ctx, t.TempDir(), mon)
+	log, _ := openTestLog(t, ctx, logTempDir(t), mon)
 	defer log.Close(ctx)
 	if err := mon.Bind(log); err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -517,12 +517,12 @@ func TestMonitorEngageBoundedDuringDurabilityCut(t *testing.T) {
 	rawSigner, verifier := asyncTestKeys(t)
 	signer := &gatedSigner{inner: rawSigner}
 	mon, err := NewMonitor(MonitorOptions{
-		Dir: t.TempDir(), CellID: "cell-async", QuotaBytes: 1 << 20,
+		Dir: logTempDir(t), CellID: "cell-async", QuotaBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("NewMonitor: %v", err)
 	}
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	mon.dir = dir
 	log := openAsyncLog(t, ctx, dir, signer, verifier, mon, 100*time.Millisecond)
 	defer func() {
@@ -581,7 +581,7 @@ func TestMonitorLeafWriteFailureStillTrips(t *testing.T) {
 	defer cancel()
 
 	var box alarmBox
-	log, mon := wireMonitor(t, ctx, t.TempDir(), MonitorOptions{
+	log, mon := wireMonitor(t, ctx, logTempDir(t), MonitorOptions{
 		CellID:     "cell-t5",
 		QuotaBytes: 1, // déjà dépassé
 		Interval:   5 * time.Millisecond,
@@ -603,7 +603,7 @@ func TestMonitorLeafWriteFailureStillTrips(t *testing.T) {
 // TestMonitorClosed : Run sur un moniteur arrêté refuse explicitement.
 func TestMonitorClosed(t *testing.T) {
 	ctx := context.Background()
-	mon, err := NewMonitor(MonitorOptions{Dir: t.TempDir(), CellID: "c", QuotaBytes: 1 << 20})
+	mon, err := NewMonitor(MonitorOptions{Dir: logTempDir(t), CellID: "c", QuotaBytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestMonitorConcurrentAppendersTripAtThreshold(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	skey, vkey, err := GenerateCellKey(testOrigin)
 	if err != nil {
 		t.Fatalf("GenerateCellKey: %v", err)

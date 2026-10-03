@@ -751,7 +751,7 @@ func TestManifestRealCellLog(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log, _ := openTestLog(t, ctx, t.TempDir(), nil)
+	log, _ := openTestLog(t, ctx, logTempDir(t), nil)
 	defer log.Close(ctx)
 
 	signer, verifier := manifestTestKey(t)

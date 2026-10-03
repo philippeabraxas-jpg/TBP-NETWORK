@@ -46,7 +46,7 @@ type bootFixture struct {
 // manifeste à partir des artefacts posés sur disque, horloge fixe.
 func newBootFixture(t *testing.T) bootFixture {
 	t.Helper()
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	contents := map[string]string{
 		"policy": "bundle-de-regles-signe-v1",
 		"opa":    "config-opa-v1",
@@ -308,7 +308,7 @@ func TestCheckBootLeafFaultFailsClosed(t *testing.T) {
 // TestFileRootMeasurer : lecture nominale hex 64, et rejet de toute entrée
 // mal formée (dev/test uniquement — jamais une preuve de machine).
 func TestFileRootMeasurer(t *testing.T) {
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	root := sha256.Sum256([]byte("racine-de-test"))
 
 	good := filepath.Join(dir, "root.hex")
@@ -350,7 +350,7 @@ func TestFileRootMeasurer(t *testing.T) {
 // contenus (doré inline), ChainHead est nul par construction, et un chemin
 // vide est une faute (fail-closed).
 func TestMeasureComponents(t *testing.T) {
-	dir := t.TempDir()
+	dir := logTempDir(t)
 	write := func(name, content string) string {
 		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
