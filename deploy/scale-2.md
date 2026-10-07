@@ -91,6 +91,9 @@ into `operators.json` (`["<public>"]`).
 #   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/brokerd-provisioning-witness.json
+#   TBP_PROVISIONING_POLICY_BUNDLE=/etc/tbp/opa/tbp-example.tar.gz  # #313: the rules THIS machine's OPA serves
+#   TBP_PROVISIONING_OPA_CONFIG=/etc/tbp/opa-config.yaml           # #313: how that OPA is launched (signature check included)
+#   TBP_PROVISIONING_EXTRA_FILES=opa-verification-key=/etc/tbp/policy-verify.pub  # trusting another signer is a change too
 set -a; . /etc/tbp/brokerd.env; set +a
 /usr/local/bin/brokerd &
 curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/stats
@@ -101,7 +104,7 @@ curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision
 written.
 
 **On failure: STOP** — an `AVERTISSEMENT quorum k=1` means the environment says `TBP_QUORUM_MIN=1`: that is
-scale 1, not scale 2. A refusal naming `quorum-settings` or a file means the cell's trust files changed
+scale 1, not scale 2. A refusal naming `quorum-settings`, `policy-bundle`, `opa-config`, `policy-id` or a file means the cell's trust files changed
 since the witness: see [cellule.md](cellule.md), "Provisioning files".
 
 #### Step 4 — A class-W action needs two controllers
@@ -204,6 +207,20 @@ proxy. Each `pepd` starts `refused` after a restart and is reconfirmed by 2 cont
 **On failure: STOP** — do not accept agent traffic before the isolation check passes. *This step is not run
 by the `scale2` selftest phase*: mTLS is covered by the tests of `brokerd` (`net_tls_test.go`) and the
 application servers' `pepd` by the `mono` and `scale1` phases.
+
+## Changing the rules (issue #313)
+
+On this machine OPA is not guarded by a measured `pepd`, so `brokerd` attests what its OPA serves: the signed
+bundle (`policy-bundle`), the OPA configuration (`opa-config`) and `TBP_POLICY_ID` (`policy-id`). The revision
+watcher (#92) only compares the bundle's `--revision` label with `TBP_POLICY_ID`; it does not see an OPA
+launched without verifying the signature. A change to any of them is refused until the attested controllers
+sign it, like any other trust file ([cellule.md](cellule.md), "Provisioning files"). It is a **cold
+operation for the whole cell**: stop every component, change, have k controllers sign the condition `brokerd`
+prints, restart every component. Otherwise the cell runs in a mixed state — `pepd` on the new bundle, `brokerd`
+still expecting the old one — and the revision watcher puts `brokerd` in refusal. The public verification key is
+not in the OPA configuration: list it in `TBP_PROVISIONING_EXTRA_FILES` so that trusting another signer is a
+transition too. The `scale2` phase of the selftest covers a changed OPA configuration and a changed bundle:
+refused without a proof, refused with one signature, accepted with two.
 
 ## Two keys, two places
 

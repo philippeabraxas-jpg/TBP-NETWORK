@@ -303,10 +303,14 @@ type config struct {
 	// provDisabled : échappatoire dev EXPLICITE (sentinelle #113) ; provProof :
 	// preuve de quorum autorisant une transition délibérée ; provExtra : fichiers
 	// de confiance supplémentaires, en plus de ceux que brokerd dérive lui-même.
-	provWitnessFile  string
-	provDisabled     bool
-	provProofFile    string
-	provExtra        []registry.ProvisioningFile
+	provWitnessFile string
+	provDisabled    bool
+	provProofFile   string
+	provExtra       []registry.ProvisioningFile
+	// Règles servies (issue #313) : bundle et configuration de l'OPA de brokerd, mesurés avec
+	// TBP_POLICY_ID ("" seulement si provDisabled).
+	policyBundleFile string
+	opaConfigFile    string
 	translatorGuard  translatorGuardConfig // contrôleur de dégradation (opt-in, T25)
 	mirror           mirrorConfig          // cellule miroir (§7.4, opt-in, avec la garde)
 	arbitration      arbitrationConfig     // arbitrage humain (§4.5, opt-in, avec la garde)
@@ -432,6 +436,10 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		return nil, err
 	}
 	provWitnessFile, provProofFile, provExtra, err := loadProvisioningConfig(getenv, provDisabled)
+	if err != nil {
+		return nil, err
+	}
+	policyBundleFile, opaConfigFile, err := loadProvisioningPolicyPaths(getenv, provDisabled)
 	if err != nil {
 		return nil, err
 	}
@@ -565,6 +573,8 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		provDisabled:         provDisabled,
 		provProofFile:        provProofFile,
 		provExtra:            provExtra,
+		policyBundleFile:     policyBundleFile,
+		opaConfigFile:        opaConfigFile,
 	}, nil
 }
 

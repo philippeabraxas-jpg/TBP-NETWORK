@@ -31,8 +31,19 @@ func TestProvisioningConfigFailClosed(t *testing.T) {
 		t.Fatalf("témoin absent accepté : %v", err)
 	}
 
+	// les règles servies (#313) sont requises dès que la mesure est active : un oubli ne les laisse pas hors du témoin
+	for _, name := range []string{"TBP_PROVISIONING_POLICY_BUNDLE", "TBP_PROVISIONING_OPA_CONFIG"} {
+		missing := validConfigEnv()
+		delete(missing, name)
+		if _, err := loadConfig(mapGetenv(missing), statPresent); err == nil || !strings.Contains(err.Error(), name+" requis") {
+			t.Fatalf("%s absent accepté : %v", name, err)
+		}
+	}
+
 	// l'échappatoire dev EXIGE la sentinelle (#113)
 	env["TBP_PROVISIONING_DISABLED_DEV_UNSAFE"] = "1"
+	delete(env, "TBP_PROVISIONING_POLICY_BUNDLE") // désactivée : rien à mesurer, rien d'exigé
+	delete(env, "TBP_PROVISIONING_OPA_CONFIG")
 	if _, err := loadConfig(mapGetenv(env), statAbsent); err == nil {
 		t.Fatal("désactivation acceptée sans sentinelle d'environnement de dev")
 	}
@@ -84,13 +95,26 @@ func TestProvisioningFilesAreDerivedFromTheConfiguration(t *testing.T) {
 		return m
 	}
 	got := names()
-	for _, want := range []string{"operator-keys", "agent-registry", "genesis-manifest"} {
+	for _, want := range []string{"operator-keys", "agent-registry", "genesis-manifest", "policy-bundle", "opa-config"} {
 		if got[want] == "" {
 			t.Errorf("%s absent de la liste mesurée : %v", want, got)
 		}
 	}
 	if got["agent-registry"] != "/etc/tbp/agents.json" || got["genesis-manifest"] != "/etc/tbp/genesis/manifest.json" {
 		t.Errorf("chemins = %v", got)
+	}
+	// les règles servies (#313) : bundle et configuration de l'OPA par leur contenu, TBP_POLICY_ID par sa valeur
+	if got["policy-bundle"] != "/etc/tbp/opa/bundle.tar.gz" || got["opa-config"] != "/etc/tbp/opa-config.yaml" {
+		t.Errorf("règles servies mal désignées : %v", got)
+	}
+	idFound := false
+	for _, f := range provisioningFiles(cfg) {
+		if f.Name == "policy-id" {
+			idFound = string(f.Content) == strings.Repeat("02", 32)
+		}
+	}
+	if !idFound {
+		t.Error("TBP_POLICY_ID absent des fichiers mesurés, ou autre valeur que celle de l'environnement")
 	}
 	if _, ok := got["skill-registry"]; ok {
 		t.Error("registre de skills mesuré alors qu'il n'est pas configuré")
@@ -363,8 +387,10 @@ func TestBrokerdRefusesToStartOnOneByteChangeInEachMeasuredFile(t *testing.T) {
 		}},
 		{"skill-registry", func(_ *runFixture, _ *brokerTLSFixture, skills string) string { return skills }},
 		{"tls-client-ca", func(_ *runFixture, tls *brokerTLSFixture, _ string) string { return tls.caFile }},
+		{"policy-bundle", func(fx *runFixture, _ *brokerTLSFixture, _ string) string { return fx.bundleFile }},
+		{"opa-config", func(fx *runFixture, _ *brokerTLSFixture, _ string) string { return fx.opaConfigFile }},
 	}
-	all := []string{"operator-keys", "agent-registry", "genesis-manifest", "skill-registry", "tls-client-ca"}
+	all := []string{"operator-keys", "agent-registry", "genesis-manifest", "skill-registry", "tls-client-ca", "policy-bundle", "opa-config", "policy-id"}
 
 	for i, tc := range files {
 		// nom court : le chemin des sockets Unix est borné (≈108 octets) et
@@ -629,6 +655,102 @@ func TestBrokerdLoweringQuorumMinByEnvironmentIsRefused(t *testing.T) {
 	delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
 	if err := boot(t, fx, sock); err != nil {
 		t.Fatalf("nouveau k non retenu : %v", err)
+	}
+}
+
+// --- les règles servies (issue #313) ------------------------------------------------------
+
+// countProvisioningLeaves compte les feuilles de provisionnement (TBPL3) du journal de brokerd.
+func countProvisioningLeaves(t *testing.T, fx *runFixture) int {
+	t.Helper()
+	key, err := registry.LoadRecordKey(fx.env["TBP_AUDIT_RECORDS_KEY_FILE"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := registry.ReadRecords(fx.env["TBP_AUDIT_RECORDS"], key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range recs {
+		if strings.HasPrefix(string(r.Record), "TBPL3") {
+			n++
+		}
+	}
+	return n
+}
+
+// Issue #313 : à l'échelle 2, l'OPA de brokerd n'est gardé par aucun pepd mesuré. Changer le bundle, la
+// configuration de l'OPA ou TBP_POLICY_ID doit être une transition de quorum ATTESTÉ, comme un changement
+// du registre d'agents : refus qui nomme l'élément, refus à une signature (k = 2), départ à deux signatures
+// avec une feuille de transition au journal.
+func TestBrokerdServedRulesChangeNeedsAQuorumProof(t *testing.T) {
+	cases := []struct {
+		name string
+		item string
+		edit func(t *testing.T, fx *runFixture)
+	}{
+		{"bundle", "policy-bundle", func(t *testing.T, fx *runFixture) {
+			if err := os.WriteFile(fx.bundleFile, []byte("bundle de règles v2"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		// le mutant de l'issue : une configuration qui cesse de vérifier la signature du bundle, sous la MÊME
+		// étiquette de révision — le surveillant de révision (#92-A5) ne voit rien, la mesure doit le voir
+		{"config", "opa-config", func(t *testing.T, fx *runFixture) {
+			if err := os.WriteFile(fx.opaConfigFile, []byte("opa run --bundle bundle.tar.gz\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"id", "policy-id", func(t *testing.T, fx *runFixture) {
+			next := strings.Repeat("ab", 32)
+			fx.env["TBP_POLICY_ID"] = next
+			fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, next).URL // l'OPA sert la nouvelle révision : le surveillant est satisfait
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := filepath.Join(t.TempDir(), "broker.sock")
+			fx := newRunFixture(t, sock)
+			fx.env["TBP_OPA_ENDPOINT"] = startStubOPA(t, fx.env["TBP_POLICY_ID"]).URL
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("premier démarrage : %v", err)
+			}
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("redémarrage sans modification refusé : %v", err)
+			}
+
+			tc.edit(t, fx)
+			err := boot(t, fx, sock)
+			if err == nil {
+				t.Fatalf("brokerd a démarré alors que %s a changé sans preuve de quorum", tc.item)
+			}
+			if !strings.Contains(err.Error(), "modifié(s) : "+tc.item) {
+				t.Fatalf("le refus ne nomme pas %s : %v", tc.item, err)
+			}
+
+			proof := filepath.Join(filepath.Dir(fx.env["TBP_PROVISIONING_WITNESS_FILE"]), "transition-proof.json")
+			fx.env["TBP_PROVISIONING_TRANSITION_PROOF_FILE"] = proof
+			signProof(t, fx, proof, conditionProvisioningTransition, 1) // k = 2 : une signature ne suffit pas
+			if err := boot(t, fx, sock); err == nil {
+				t.Fatalf("changement de %s autorisé par une seule signature (k = 2)", tc.item)
+			}
+
+			before := countProvisioningLeaves(t, fx)
+			signProof(t, fx, proof, conditionProvisioningTransition, 2)
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("changement de %s avec la preuve de 2 contrôleurs refusé : %v", tc.item, err)
+			}
+			if after := countProvisioningLeaves(t, fx); after <= before {
+				t.Fatalf("aucune feuille de transition au journal (%d avant, %d après)", before, after)
+			}
+
+			// la nouvelle référence tient sans preuve
+			delete(fx.env, "TBP_PROVISIONING_TRANSITION_PROOF_FILE")
+			if err := boot(t, fx, sock); err != nil {
+				t.Fatalf("nouvelle référence non retenue : %v", err)
+			}
+		})
 	}
 }
 

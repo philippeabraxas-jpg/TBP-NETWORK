@@ -313,6 +313,11 @@ func runDaemons(s *suite, cfg config) {
 	if !buildBundle(s, phaseDaemons, cfg, capsPath, regoPath, bundlePath, hex.EncodeToString(policyID[:]), signingKeyPath) {
 		return
 	}
+	opaConfigPath := filepath.Join(opaDir, "opa-launch.conf")
+	if err := writeOPAConfig(opaConfigPath, daemonsOPAAddr, bundlePath, verificationKeyPath); err != nil {
+		s.fail(phaseDaemons, "configuration de l'OPA (mesurée par brokerd, #313)", err)
+		return
+	}
 	opa, ok := startOPA(s, phaseDaemons, cfg, daemonsOPAAddr, bundlePath, verificationKeyPath, filepath.Join(opaDir, "opa.log"))
 	if !ok {
 		return
@@ -575,6 +580,10 @@ func runDaemons(s *suite, cfg config) {
 		"TBP_AGENT_REGISTRY_FILE="+agentsPath,
 		// Mesure des fichiers de confiance (issue #192) : témoin hors du registre.
 		"TBP_PROVISIONING_WITNESS_FILE="+filepath.Join(base, "brokerd-provisioning-witness.json"),
+		// Les règles servies (issue #313) : bundle et configuration de l'OPA, avec la clé publique qui les vérifie.
+		"TBP_PROVISIONING_POLICY_BUNDLE="+bundlePath,
+		"TBP_PROVISIONING_OPA_CONFIG="+opaConfigPath,
+		"TBP_PROVISIONING_EXTRA_FILES=opa-verification-key="+verificationKeyPath,
 		"TBP_BROKER_SOCKET="+brokerSock,
 		// Plan d'ADMINISTRATION dédié (revue de sécurité #95, finding A10) :
 		// GET /v1/supervision/* n'est plus servi sur le plan de données

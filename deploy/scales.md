@@ -39,6 +39,7 @@ the table, not only those two). Tracked in #86.
 | Per-agent scope | bundle `agent_scope.require_agent_scope` | n/a (no broker) | recommended | required | required |
 | OPA fault handling | `TBP_OPA_TRIP_AFTER`, `TBP_OPA_AUTOCLEAR_PROBES`, `TBP_OPA_MAX_INFLIGHT`, `TBP_OPA_MAX_QUEUE`, `TBP_OPA_SUBJECT_SHARE`, `TBP_OPA_STALL_WINDOW_MS`, `TBP_OPAWD_*` (watchdog) | defaults (3 / 3) | defaults | defaults; a second OPA backend is planned | defined in the handshake (#33) |
 | Provisioning witness | `TBP_PROVISIONING_WITNESS_FILE` | required (admin signs a change) | required | required | required |
+| Served rules at `brokerd` (bundle, OPA config, policy id) | `TBP_PROVISIONING_POLICY_BUNDLE`, `TBP_PROVISIONING_OPA_CONFIG` | n/a (no broker) | required (a change is a quorum transition, #313) | required | required |
 | Measured boot | `TBP_MEASURED_BOOT_*` | required | required | required | required |
 | Supervisor / independent monitor | `superviseur.md` | absent | optional | required | required |
 | Inter-cell encrypted transport | #187 | n/a | n/a | required | required |

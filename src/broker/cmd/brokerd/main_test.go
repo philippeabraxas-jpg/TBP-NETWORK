@@ -88,6 +88,9 @@ func validConfigEnv() map[string]string {
 		"TBP_AGENT_REGISTRY_FILE":    "/etc/tbp/agents.json",
 		// #192 : le témoin de provisionnement est requis (hors du registre)
 		"TBP_PROVISIONING_WITNESS_FILE": "/var/lib/tbp/provisioning-witness.json",
+		// #313 : les règles servies (bundle, configuration de l'OPA) sont mesurées
+		"TBP_PROVISIONING_POLICY_BUNDLE": "/etc/tbp/opa/bundle.tar.gz",
+		"TBP_PROVISIONING_OPA_CONFIG":    "/etc/tbp/opa-config.yaml",
 	}
 }
 
@@ -267,6 +270,8 @@ type runFixture struct {
 	seedFile        string
 	opsFile         string
 	agentsFile      string
+	bundleFile      string // #313 : bundle de règles mesuré (TBP_PROVISIONING_POLICY_BUNDLE)
+	opaConfigFile   string // #313 : configuration de l'OPA mesurée (TBP_PROVISIONING_OPA_CONFIG)
 	adminSock       string
 	sock            string               // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
@@ -410,6 +415,14 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		t.Fatalf("registre d'agents: %v", err)
 	}
 
+	bundleFile := filepath.Join(dir, "bundle.tar.gz")
+	if err := os.WriteFile(bundleFile, []byte("bundle de règles v1"), 0o600); err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	opaConfigFile := filepath.Join(dir, "opa-config.yaml")
+	if err := os.WriteFile(opaConfigFile, []byte("opa run --bundle bundle.tar.gz --verification-key key.pem\n"), 0o600); err != nil {
+		t.Fatalf("configuration OPA: %v", err)
+	}
 	policy := make([]byte, 32)
 	salt := make([]byte, 16)
 	if _, err := rand.Read(policy); err != nil {
@@ -425,28 +438,32 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		seedFile:        seedFile,
 		opsFile:         opsFile,
 		agentsFile:      agentsFile,
+		bundleFile:      bundleFile,
+		opaConfigFile:   opaConfigFile,
 		adminSock:       adminSock,
 		controllerPrivs: controllerPrivs,
 		opPriv:          opPriv,
 		env: map[string]string{
-			"TBP_CELL_ID":                   "cell-a",
-			"TBP_SALT":                      hex.EncodeToString(salt),
-			"TBP_POLICY_ID":                 hex.EncodeToString(policy),
-			"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
-			"TBP_AUDIT_RECORDS":             filepath.Join(dir, "audit-records.jsonl"),
-			"TBP_AUDIT_RECORDS_KEY_FILE":    auditKeyFile(t, dir),
-			"TBP_OPA_ENDPOINT":              "http://127.0.0.1:1/opa", // pas de connexion à la construction
-			"TBP_OPA_INSECURE_TCP_DEV":      "1",                      // §92.A3 : dev/lab
-			"TBP_TRANSLATOR":                "structured",
-			"TBP_ISSUER_SEED_FILE":          seedFile,
-			"TBP_GENESIS_DIR":               genDir,
-			"TBP_TOPOLOGY":                  "multi",
-			"TBP_CLUSTER_MEMBERS":           "cell-a,cell-b",
-			"TBP_OPERATOR_KEYS_FILE":        opsFile,
-			"TBP_AGENT_REGISTRY_FILE":       agentsFile,
-			"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "provisioning-witness.json"),
-			"TBP_BROKER_SOCKET":             sock,
-			"TBP_BROKER_ADMIN_SOCKET":       adminSock,
+			"TBP_CELL_ID":                    "cell-a",
+			"TBP_SALT":                       hex.EncodeToString(salt),
+			"TBP_POLICY_ID":                  hex.EncodeToString(policy),
+			"TBP_REGISTRY_DIR":               filepath.Join(dir, "registry"),
+			"TBP_AUDIT_RECORDS":              filepath.Join(dir, "audit-records.jsonl"),
+			"TBP_AUDIT_RECORDS_KEY_FILE":     auditKeyFile(t, dir),
+			"TBP_OPA_ENDPOINT":               "http://127.0.0.1:1/opa", // pas de connexion à la construction
+			"TBP_OPA_INSECURE_TCP_DEV":       "1",                      // §92.A3 : dev/lab
+			"TBP_TRANSLATOR":                 "structured",
+			"TBP_ISSUER_SEED_FILE":           seedFile,
+			"TBP_GENESIS_DIR":                genDir,
+			"TBP_TOPOLOGY":                   "multi",
+			"TBP_CLUSTER_MEMBERS":            "cell-a,cell-b",
+			"TBP_OPERATOR_KEYS_FILE":         opsFile,
+			"TBP_AGENT_REGISTRY_FILE":        agentsFile,
+			"TBP_PROVISIONING_WITNESS_FILE":  filepath.Join(dir, "provisioning-witness.json"),
+			"TBP_PROVISIONING_POLICY_BUNDLE": bundleFile,
+			"TBP_PROVISIONING_OPA_CONFIG":    opaConfigFile,
+			"TBP_BROKER_SOCKET":              sock,
+			"TBP_BROKER_ADMIN_SOCKET":        adminSock,
 		},
 	}
 }
@@ -880,6 +897,13 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 		t.Fatalf("salt: %v", err)
 	}
 
+	bundleFile := filepath.Join(dir, "bundle.tar.gz")
+	opaConfigFile := filepath.Join(dir, "opa-config.yaml")
+	for _, f := range []string{bundleFile, opaConfigFile} {
+		if err := os.WriteFile(f, []byte("règles servies"), 0o600); err != nil {
+			t.Fatalf("règles: %v", err)
+		}
+	}
 	policyHex := hex.EncodeToString(policy)
 	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -894,25 +918,27 @@ func TestBrokerdMonoCelluleNoEpochLease(t *testing.T) {
 	defer opa.Close()
 
 	env := map[string]string{
-		"TBP_CELL_ID":                   "cell-a",
-		"TBP_SALT":                      hex.EncodeToString(salt),
-		"TBP_POLICY_ID":                 policyHex,
-		"TBP_REGISTRY_DIR":              filepath.Join(dir, "registry"),
-		"TBP_AUDIT_RECORDS":             filepath.Join(dir, "audit-records.jsonl"),
-		"TBP_AUDIT_RECORDS_KEY_FILE":    auditKeyFile(t, dir),
-		"TBP_OPA_ENDPOINT":              opa.URL,
-		"TBP_OPA_INSECURE_TCP_DEV":      "1",
-		"TBP_TRANSLATOR":                "structured",
-		"TBP_ISSUER_SEED_FILE":          seedFile,
-		"TBP_GENESIS_DIR":               genDir,
-		"TBP_QUORUM_MIN":                "1",
-		"TBP_TOPOLOGY":                  "mono",
-		"TBP_CLUSTER_MEMBERS":           "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
-		"TBP_OPERATOR_KEYS_FILE":        opsFile,
-		"TBP_AGENT_REGISTRY_FILE":       agentsFile,
-		"TBP_PROVISIONING_WITNESS_FILE": filepath.Join(dir, "provisioning-witness.json"),
-		"TBP_BROKER_SOCKET":             sock,
-		"TBP_BROKER_ADMIN_SOCKET":       adminSock,
+		"TBP_CELL_ID":                    "cell-a",
+		"TBP_SALT":                       hex.EncodeToString(salt),
+		"TBP_POLICY_ID":                  policyHex,
+		"TBP_REGISTRY_DIR":               filepath.Join(dir, "registry"),
+		"TBP_AUDIT_RECORDS":              filepath.Join(dir, "audit-records.jsonl"),
+		"TBP_AUDIT_RECORDS_KEY_FILE":     auditKeyFile(t, dir),
+		"TBP_OPA_ENDPOINT":               opa.URL,
+		"TBP_OPA_INSECURE_TCP_DEV":       "1",
+		"TBP_TRANSLATOR":                 "structured",
+		"TBP_ISSUER_SEED_FILE":           seedFile,
+		"TBP_GENESIS_DIR":                genDir,
+		"TBP_QUORUM_MIN":                 "1",
+		"TBP_TOPOLOGY":                   "mono",
+		"TBP_CLUSTER_MEMBERS":            "cell-a", // UNE seule cellule ⇒ mono-cellule (#97)
+		"TBP_OPERATOR_KEYS_FILE":         opsFile,
+		"TBP_AGENT_REGISTRY_FILE":        agentsFile,
+		"TBP_PROVISIONING_WITNESS_FILE":  filepath.Join(dir, "provisioning-witness.json"),
+		"TBP_PROVISIONING_POLICY_BUNDLE": bundleFile,
+		"TBP_PROVISIONING_OPA_CONFIG":    opaConfigFile,
+		"TBP_BROKER_SOCKET":              sock,
+		"TBP_BROKER_ADMIN_SOCKET":        adminSock,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
