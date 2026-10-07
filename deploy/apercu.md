@@ -139,8 +139,8 @@ the NAC before fencing would admit clients without epoch
 governance — exactly the defect fencing exists to prevent.
 
 Before touching a real machine: `bash deploy/selftest/selftest.sh`
-— **82 controls** (real single cell, 2-cell fencing, real
-brokerd/supervisord daemons), fail-closed, JSON report in
+— **255 controls** (real single cell, scale 1 and scale 2 guides, 2-cell
+fencing, real brokerd/supervisord daemons), fail-closed, JSON report in
 `deploy/selftest/out/`. Then the per-machine acceptance checklists
 ([checklists/](checklists/)).
 

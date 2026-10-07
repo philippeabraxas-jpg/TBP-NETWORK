@@ -219,7 +219,7 @@ src/
                            stratified human sampling, `TBTM1` registry leaf)
 deploy/                 Multi-machine deployment guides (router, cell, server,
                         supervisor) with per-machine checklists, monitor→closed
-                        posture switch, and an executable selftest (82 controls)
+                        posture switch, and an executable selftest (255 controls)
 scripts/genesis/        Genesis ceremony tooling (epoch 0, controller keys §12)
 lab/                    docker-compose PoC + containerlab P1 topology + netns
                         tests (802.1X fail-closed, MAB/IoT VLAN, OCSP remediation)
@@ -229,28 +229,32 @@ tests/
 .github/                Issue templates, CI (Rego determinism gate + lint)
 ```
 
-**Current status (as of 2026-09-22): the rollout code is implemented and
+**Current status (as of 2026-10-07): the rollout code is implemented and
 tested along the full path — genesis → fencing → registry → broker → PEP →
-supervision → translator → deployment.** Every `src/` package carries its
-own test suite (Go unit/integration tests, Python for the audit and
-measurement tooling), and `deploy/selftest/` executes the deployment
-guides end to end (**82 controls, 0 failures** — a guide that drifts from
-the code breaks there, not at the operator's). No PR is open against this
-repository right now — the backlog that was in flight (T25 controlled
-degradation, T38 bounded-async registry durability, T26 translator
-quality measurement) has all merged. Two items remain open and tracked
-deliberately, neither blocking the pilot: the English translation of the
-remaining French documentation ([#83](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/83),
-in progress — most of `deploy/` and `docs/` already have English
-primaries, see "Note on language" above), and the inter-domain layer
-(spec §13 — deferred by the spec itself, tracked in
+supervision → translator → deployment — and the single-site path is
+packaged: [`deploy/scale-1.md`](deploy/scale-1.md) and
+[`deploy/scale-2.md`](deploy/scale-2.md) are executable guides.** Every
+`src/` package carries its own test suite (Go unit/integration tests,
+Python for the audit and measurement tooling), and `deploy/selftest/`
+executes the deployment guides end to end (**255 controls, 0 failures** at
+the time of writing — a guide that drifts from the code breaks there, not
+at the operator's). Since the first pilot cut the work has been hardening:
+several security reviews and their follow-ups, an encrypted journal of the
+plaintext behind the hash-only leaves, and attestation of the files that
+carry the cell's trust — `pepd`, `brokerd` and `anod` refuse to start on an
+unexplained change, and a deliberate change takes a quorum proof; for
+`brokerd` that now includes the rules its own OPA serves
+([#313](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/313)).
+No release has been tagged yet: the first one is a scale 2 release, see
+the roadmap below. The inter-domain layer (spec §13) is deferred by the spec
+itself and tracked in
 [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33) so
-"deferred" stays visible instead of silently absent). What is
-deliberately **not** here yet beyond that: the native per-language
-translator corpora (to be constituted at the pilot, §15 — the pipeline
-that replays and gates on them is built) and the human-arbitration
-escalation path (brokerd v1 accepts only the `structured` translator).
-Do not deploy `config/` as-is — every file there says so explicitly,
+"deferred" stays visible instead of silently absent. What is deliberately
+**not** here yet beyond that: the native per-language translator corpora
+(to be constituted at the pilot, §15 — the pipeline that replays and gates
+on them is built) and the natural-language translator (`brokerd` accepts
+only the `structured` translator; human arbitration of degraded requests is
+implemented, opt-in). Do not deploy `config/` as-is — every file there says so explicitly,
 worth repeating here too. The protocol this rollout code governs against
 is not a skeleton either: `tbp4.2.1/` vendors the working core (HSM
 signer, Merkle audit chain, OPA policy engine, tests, adversarial review
@@ -319,7 +323,7 @@ measured user-experience regression = 0):
    is the entry point (what, where, why, prerequisites); it synthesizes
    the per-role guides (router, cell, server, supervisor) and their
    per-machine acceptance checklists. `deploy/selftest/` **executes**
-   the guides (`bash deploy/selftest/selftest.sh`, 82 controls,
+   the guides (`bash deploy/selftest/selftest.sh`, 255 controls,
    fail-closed) — run it before touching a real machine.
 
 At every step, measure against the friction budget (§9.1) — see
@@ -334,7 +338,7 @@ an independent supervisor, a hardened translator, an inter-entity
 handshake. Not every deployment needs all of it. A single-server small
 business that wants "no AI agent acts without a provable, logged reason"
 does not need two-cell failover any more than a home network needs a
-SOC. The plan is to package what already exists in this repository into
+SOC. This repository is organized into
 **four deployment scales**, each a strict superset of the previous one —
 same primitives throughout (fail-closed, hash-only leaves, monitor before
 closed), more of them wired together as the scale goes up, and the
@@ -348,62 +352,84 @@ increasing accordingly:
   supervisor daemon. Genesis collapses to a single operator keypair,
   documented as such rather than pretending a quorum ceremony that isn't
   one. Lowest operational complexity: get the OPA rules right, deploy in
-  monitor mode, watch the friction budget, earn `closed`.
+  monitor mode, watch the friction budget, earn `closed`. Guide:
+  [`deploy/scale-1.md`](deploy/scale-1.md), executed by the `scale1`
+  selftest phase.
 - **Scale 2 — Small team / single site.** A handful of machines on one
   LAN behind one `brokerd`, still a single registry (no fencing yet —
-  one authoritative cell is still enough at this size), NAC added
-  (`config/freeradius/`, 802.1X at the switch) to admit machines onto the
-  segment, host hardening applied everywhere. One more daemon, one more
-  subsystem, same registry model as scale 1.
+  one authoritative cell is still enough at this size), host hardening
+  applied everywhere, and a real quorum, k = 2 of 3 controllers, so no
+  single key signs a governed act. NAC (`config/freeradius/`, 802.1X at the
+  switch) can admit machines onto the segment; the scale 2 guide itself
+  relies on [network isolation](deploy/network-isolation.md) of the agents'
+  machines instead. One more daemon, one more subsystem, same registry model as
+  scale 1. Guide: [`deploy/scale-2.md`](deploy/scale-2.md), executed by the
+  `scale2` selftest phase.
 - **Scale 3 — Resilient multi-cell.** What is already fully built and
   documented as the pilot P1 deployment above: 2+ cells, cluster fencing
   (epoch issuance/rotation, k-of-n quorum for class-W actions,
   mirror/canary promotion), an independent supervisor with a read-only
   console, the hardened translator with controlled degradation, the full
-  `deploy/` guide sequence and its 82-control selftest. For organizations
+  `deploy/` guide sequence and its selftest. For organizations
   that can't tolerate a single cell going down, or whose governed agents
-  justify the extra machines.
+  justify the extra machines. Still being developed beyond the pilot cut
+  (stream 2 below).
 - **Scale full — Multi-entity.** The inter-entity handshake (§3):
   proving policy, history continuity, and liveness across organizational
   boundaries, not just across cells of the same organization —
   federation between independently-governed TBP deployments that have to
-  trust each other without trusting each other. Deliberately not started
+  trust each other without trusting each other. No handshake code exists
   yet; tracked in [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)
-  (T32) so it stays visible as a later, distinct phase rather than
-  silently absent. This is genuinely new protocol work, not just more
-  machines running what already exists.
+  (T32). The foundations come first (stream 3 below): one generic handshake
+  package, whose first use is administering a cell from another machine,
+  and whose later profiles are encrypted transport between cells
+  ([#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187))
+  and trust between entities — same code, different profiles. This is
+  genuinely new protocol work, not just more machines running what already
+  exists.
 
-**Honesty about where this stands**: scale 3 is delivered today under
-the pilot-P1 name used throughout this README. Scales 1 and 2 are not
-yet packaged as their own guides — they're reachable today by deploying
-a subset of what's documented (skip cluster fencing and NAC for scale 1,
-add NAC but keep one cell for scale 2), but that path isn't written down
-yet, and nothing currently stops someone from wiring it correctly on
-their own subject to the same doctrine. Scale full requires actual new
-code (§3's three proofs), not just new guides.
+**Honesty about where this stands**: scales 1 and 2 are packaged — guides
+and selftest phases exist — but nothing is tagged or released yet. Scale 3
+is delivered as the pilot-P1 deployment and still has open work. Scale full
+requires actual new code (§3's three proofs), not just new guides.
+
+What a first scale 2 release will give you: one `brokerd`, a real
+k-of-n quorum with a spare, class-W actions that need an approved plan and
+k controllers, trust files measured at every start, and a log you can
+verify yourself. What
+it will **not** give you, by design or not yet:
+- **No external anchoring of the registry.** The anchoring library exists,
+  but no daemon calls it ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265),
+  [#233](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/233),
+  [#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187)).
+- **A single point of unavailability.** With one `brokerd`, governed actions
+  stop within about a minute if it is down (tokens live 30–60 s). That is
+  fail-closed by design — there is no bypass.
+- **Changing the rules is a cold, whole-cell operation**: stop every
+  component, change, have the controllers sign the condition the daemon
+  prints, restart every component
+  ([#315](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/315)
+  plans a single signed act and a script).
+- **Local administration only**: command-line tools (`quorumproof`,
+  `tbp-audit`) and the read-only supervision JSON API; no remote consoles.
+- **One operator signature approves a plan of class I or W**, until
+  [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) is decided.
 
 ### Next planned work
 
-Two work streams, tracked as separate issues because they're different
-kinds of effort:
+Four streams, tracked as separate issues because they are different kinds
+of effort. They run in parallel.
 
-1. **Per-scale deployment guides, plus admin tooling sized to each
-   scale** ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
-   Turning the scales above into `deploy/scale-1.md` /
-   `deploy/scale-2.md` — scale 3 already has its guide sequence, it's
-   `deploy/apercu.md` and the per-role guides it synthesizes — is half
-   of this: a documented, selftest-covered path per scale rather than
-   "the pilot guide, minus what you figure out to skip". The other half
-   is operator-facing tooling, which today is a
-   read-only JSON API (`src/supervision/console.go`: `/v1/arbitration`,
-   `/v1/epoch`, `/v1/indicators`) plus raw files and CLIs (Rego policies
-   edited by hand, `policies/gen_capabilities.sh` /
-   `validate_determinism.go` to validate and strip before deploy; the
-   registry read by `ChainWatcher`'s verified scan, exercised in tests
-   and selftest but with no browsing UI). Three dedicated tools are
-   planned on top of what already exists, each scoped to what a given
-   scale actually needs (a scale-1 operator doesn't need multi-cell
-   arbitration views; a scale-3 one does):
+1. **A deployable scale 2 release** ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
+   The guides and their selftest phases are done. What remains is what lets
+   a stranger deploy it and adopt it — or not: this README; the release
+   workflow (a `vX.Y.Z` tag already produces SLSA provenance for `pepd`,
+   `brokerd` and `supervisord`; `quorumproof`, which the scale 2 guide uses,
+   has to join them); a security-reporting policy, a changelog and the list
+   of known limits above; a run of the guide on a clean Debian machine,
+   beyond the selftest; and the decision on #196. Operator tooling is sized
+   to the scale that uses it — three tools are planned on top of what
+   exists, the first being usable at scale 2:
    - a **supervision dashboard** on top of the existing read-only
      console — human-facing, still read-only by construction (§7.1 "the
      supervisor sees everything, touches nothing" carries over
@@ -422,7 +448,21 @@ kinds of effort:
      same third-party-verifiable checkpoint proof `ChainWatcher` already
      does programmatically, made legible to a human auditor instead of a
      test assertion.
-2. **Standards alignment — from a proprietary policy model to an
+2. **Scale 3, beyond the pilot cut.** Epoch-lease renewal by m-of-n quorum
+   ([#197](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/197)),
+   encrypted transport between cells
+   ([#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187)),
+   the promotion architecture
+   ([#233](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/233)),
+   anchoring ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)),
+   and one cell-level quorum act, with a signed change script, for changing
+   what a cell runs ([#315](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/315)).
+3. **Foundations of the full-scale handshake** ([#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)).
+   One handshake package, with shared wire formats and golden test vectors
+   first, built so that remote administration of a cell is its first profile
+   and inter-cell and inter-entity trust come later on the same code. Remote
+   consoles are designed on that principle; they are not started in code.
+4. **Standards alignment — from a proprietary policy model to an
    interoperable one** ([#87](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/87)).
    TBP's rule taxonomy (classes F/I/W/OUT, §5.3),
    its audit trail (hash-only Merkle-logged leaves, §6.2), and its
