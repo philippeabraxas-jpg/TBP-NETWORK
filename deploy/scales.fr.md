@@ -43,6 +43,7 @@ dans #86.
 | Périmètre par agent | bundle `agent_scope.require_agent_scope` | sans objet (pas de broker) | recommandé | requis | requis |
 | Gestion des fautes OPA | `TBP_OPA_TRIP_AFTER`, `TBP_OPA_AUTOCLEAR_PROBES` | défauts (3 / 3) | défauts | défauts ; un second backend OPA est prévu | défini au handshake (#33) |
 | Témoin de provisionnement | `TBP_PROVISIONING_WITNESS_FILE` | requis (l'admin signe un changement) | requis | requis | requis |
+| Règles servies chez `brokerd` (bundle, config OPA, identifiant de politique) | `TBP_PROVISIONING_POLICY_BUNDLE`, `TBP_PROVISIONING_OPA_CONFIG` | sans objet (pas de broker) | requis (un changement est une transition de quorum, #313) | requis | requis |
 | Démarrage mesuré | `TBP_MEASURED_BOOT_*` | requis | requis | requis | requis |
 | Superviseur / moniteur indépendant | `superviseur.md` | absent | optionnel | requis | requis |
 | Transport inter-cellules chiffré | #187 | sans objet | sans objet | requis | requis |

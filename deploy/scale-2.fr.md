@@ -93,6 +93,9 @@ démarrer :
 #   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json
 #   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
 #   TBP_PROVISIONING_WITNESS_FILE=/var/lib/tbp/brokerd-provisioning-witness.json
+#   TBP_PROVISIONING_POLICY_BUNDLE=/etc/tbp/opa/tbp-example.tar.gz  # #313 : les règles que sert l'OPA de CETTE machine
+#   TBP_PROVISIONING_OPA_CONFIG=/etc/tbp/opa-config.yaml           # #313 : comment cet OPA est lancé (vérification de signature comprise)
+#   TBP_PROVISIONING_EXTRA_FILES=opa-verification-key=/etc/tbp/policy-verify.pub  # faire confiance à un autre signataire est aussi un changement
 set -a; . /etc/tbp/brokerd.env; set +a
 /usr/local/bin/brokerd &
 curl -s --unix-socket /run/tbp/broker-admin.sock http://localhost/v1/supervision/stats
@@ -103,7 +106,7 @@ contient **aucune** ligne `AVERTISSEMENT quorum` (`k = 2` avec une rechange est 
 `TBP_PROVISIONING_WITNESS_FILE` a été écrit.
 
 **En cas d'échec : STOP** — un `AVERTISSEMENT quorum k=1` signifie que l'environnement dit `TBP_QUORUM_MIN=1` :
-c'est l'échelle 1, pas la 2. Un refus nommant `quorum-settings` ou un fichier signifie que les fichiers de
+c'est l'échelle 1, pas la 2. Un refus nommant `quorum-settings`, `policy-bundle`, `opa-config`, `policy-id` ou un fichier signifie que les fichiers de
 confiance de la cellule ont changé depuis le témoin : voir [cellule.fr.md](cellule.fr.md), « Fichiers de
 provisionnement ».
 
@@ -212,6 +215,21 @@ des agents autrement que par TBP : [network-isolation.fr.md](network-isolation.f
 **En cas d'échec : STOP** — ne pas accepter de trafic d'agents avant que le contrôle d'isolation ne passe. *Cette
 étape n'est pas exécutée par la phase de selftest `scale2`* : le mTLS est couvert par les tests de `brokerd`
 (`net_tls_test.go`) et les `pepd` des serveurs applicatifs par les phases `mono` et `scale1`.
+
+## Changer les règles (issue #313)
+
+Sur cette machine, l'OPA n'est gardé par aucun `pepd` mesuré : `brokerd` atteste donc ce que sert son OPA — le
+bundle signé (`policy-bundle`), la configuration de l'OPA (`opa-config`) et `TBP_POLICY_ID` (`policy-id`). Le
+surveillant de révision (#92) ne compare que l'étiquette `--revision` du bundle à `TBP_POLICY_ID` ; il ne voit pas
+un OPA lancé sans vérifier la signature. Un changement de l'un d'eux est refusé tant que les contrôleurs attestés
+ne l'ont pas signé, comme tout autre fichier de confiance ([cellule.fr.md](cellule.fr.md), « Fichiers de
+provisionnement »). C'est une **opération froide de toute la cellule** : tout arrêter, changer, faire signer par k
+contrôleurs la condition qu'affiche `brokerd`, tout redémarrer. Sinon la cellule tourne dans un état mixte —
+`pepd` sur le nouveau bundle, `brokerd` qui attend encore l'ancien — et le surveillant de révision met `brokerd`
+en refus. La clé publique de vérification n'est pas dans la configuration de l'OPA : la lister dans
+`TBP_PROVISIONING_EXTRA_FILES`, pour que faire confiance à un autre signataire soit aussi une transition. La phase
+`scale2` du selftest couvre une configuration d'OPA modifiée et un bundle modifié : refusés sans preuve, refusés
+avec une signature, acceptés avec deux.
 
 ## Deux clés, deux endroits
 

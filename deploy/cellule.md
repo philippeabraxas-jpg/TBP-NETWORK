@@ -626,6 +626,17 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # (dev/lab only, needs the sentinel):
 #                                      # TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1.
 #                                      # See "Provisioning files".
+#   TBP_PROVISIONING_POLICY_BUNDLE=/etc/tbp/opa/tbp-example.tar.gz
+#   TBP_PROVISIONING_OPA_CONFIG=/etc/tbp/opa-config.yaml
+#                                      # issue #313: brokerd also measures the
+#                                      # RULES its OPA serves — the signed bundle
+#                                      # and the OPA configuration (the file that
+#                                      # describes how that OPA is launched,
+#                                      # signature check included) — plus
+#                                      # TBP_POLICY_ID. REQUIRED with the witness.
+#                                      # Put the PUBLIC verification key in
+#                                      # TBP_PROVISIONING_EXTRA_FILES. Changing
+#                                      # any of them is a quorum transition.
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # DATA plane: POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # ADMIN plane
 #                                      # (security review #95, finding
@@ -727,7 +738,15 @@ quorum), adding a key to an operator or controller keyring, or widening a skill'
 scope used to pass without any alarm.
 
 - **What is measured.** `brokerd`: operator keys, agent registry, genesis manifest,
-  skill registry, mTLS client CA. `pepd`: issuer keyring, quorum keyring. Both also attest the
+  skill registry, mTLS client CA, and (#313) the **rules its OPA serves**: the bundle
+  (`policy-bundle`), the OPA configuration (`opa-config`) and `TBP_POLICY_ID` (`policy-id`).
+  The revision watcher (#92) only compares the bundle's `--revision` label with `TBP_POLICY_ID`,
+  which comes from the environment; it does not see an OPA launched without verifying the
+  signature, or an environment and a bundle edited together. Changing the rules is a **cold
+  operation for the whole cell**: stop every component, change, have the controllers sign the
+  condition `brokerd` prints, restart every component — otherwise `pepd` runs the new bundle
+  while `brokerd` still expects the old one. Adopting this on a cell that already ran takes one
+  transition proof (new entries). `pepd`: issuer keyring, quorum keyring. Both also attest the
   **scale settings** (`quorum-settings`: `TBP_QUORUM_MIN` and the topology, #224): lowering k by
   editing the environment is a divergence, and the change is authorised by the k that was attested.
   Adopting this on a cell that already ran takes one transition proof (the new entry changes the

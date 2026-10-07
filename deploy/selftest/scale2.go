@@ -93,6 +93,11 @@ func runScale2(s *suite, cfg config) {
 	if !buildBundle(s, ph, cfg, capsPath, regoPath, bundlePath, policyHex, signingKey) {
 		return
 	}
+	opaConfigPath := filepath.Join(opaDir, "opa-launch.conf")
+	if err := writeOPAConfig(opaConfigPath, scale2OPAAddr, bundlePath, verificationKey); err != nil {
+		s.fail(ph, "configuration de l'OPA (mesurée par brokerd, #313)", err)
+		return
+	}
 	opa, ok := startOPA(s, ph, cfg, scale2OPAAddr, bundlePath, verificationKey, filepath.Join(opaDir, "opa.log"))
 	if !ok {
 		return
@@ -192,6 +197,10 @@ func runScale2(s *suite, cfg config) {
 			"TBP_OPERATOR_KEYS_FILE="+opKeysPath,
 			"TBP_AGENT_REGISTRY_FILE="+agentsPath,
 			"TBP_PROVISIONING_WITNESS_FILE="+witness,
+			// Les règles servies (issue #313) : l'OPA de la machine de brokerd n'est gardé par aucun pepd mesuré.
+			"TBP_PROVISIONING_POLICY_BUNDLE="+bundlePath,
+			"TBP_PROVISIONING_OPA_CONFIG="+opaConfigPath,
+			"TBP_PROVISIONING_EXTRA_FILES=opa-verification-key="+verificationKey,
 			"TBP_BROKER_SOCKET="+brokerSock,
 			"TBP_BROKER_ADMIN_SOCKET="+adminSock,
 		)
@@ -334,7 +343,9 @@ func runScale2(s *suite, cfg config) {
 	// #275 : le clair des décisions, du quorum et des plans de brokerd est vérifiable.
 	verifyAuditJournal(s, ph, "brokerd", regDir, auditJournalPath, auditKeyPath, 2)
 
-	// --- Étape 5 : l'échelle est attestée (#224) ----------------------------------------------
+	// --- Étape 4 bis : les règles servies sont attestées (#313) --------------------------------------
+	// L'OPA de cette machine n'est gardé par aucun pepd mesuré : changer sa configuration ou le bundle est une
+	// transition autorisée par le quorum ATTESTÉ (k = 2), comme un changement du registre d'agents.
 	brokerd.stop()
 	refused := func(env []string, log string) (bool, string) {
 		d, err := start(env, log)
@@ -353,6 +364,62 @@ func runScale2(s *suite, cfg config) {
 		b, _ := os.ReadFile(log)
 		return bad, string(b)
 	}
+	for _, item := range []struct {
+		name, path string
+		edit       func(orig []byte) []byte
+	}{
+		// le mutant de l'issue : le lancement cesse de vérifier la signature du bundle, sous la même révision
+		{"opa-config", opaConfigPath, func(orig []byte) []byte {
+			return []byte(strings.ReplaceAll(string(orig), "--verification-key\n"+verificationKey+"\n--verification-key-id\ndefault\n", ""))
+		}},
+		{"policy-bundle", bundlePath, func(orig []byte) []byte { return append(append([]byte{}, orig...), 0) }},
+	} {
+		orig, err := os.ReadFile(item.path)
+		if err != nil {
+			s.fail(ph, "#313 lecture de "+item.name, err)
+			return
+		}
+		edited := item.edit(orig)
+		if string(edited) == string(orig) {
+			s.fail(ph, "#313 édition de "+item.name, fmt.Errorf("l'édition n'a rien changé"))
+			return
+		}
+		if err := os.WriteFile(item.path, edited, 0o600); err != nil {
+			s.fail(ph, "#313 édition de "+item.name, err)
+			return
+		}
+		bad, badLog := refused(brokerEnv("2"), filepath.Join(base, "brokerd-"+item.name+"-edited.log"))
+		s.add(ph, "#313 : "+item.name+" modifié sans preuve ⇒ brokerd REFUSE de démarrer, en nommant l'élément",
+			bad && strings.Contains(badLog, "modifié(s) : "+item.name), fmt.Sprintf("refusé=%v", bad))
+		ruleCond, ok := conditionToSign(badLog)
+		if !ok {
+			s.fail(ph, "#313 condition à signer annoncée pour "+item.name, fmt.Errorf("absente du refus"))
+			return
+		}
+		oneSig := filepath.Join(base, "rules-proof-"+item.name+"-1sig.json")
+		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", ruleCond, "-cell", scale2CellID, "-key", ctlKeys[0], "-out", oneSig); err != nil {
+			s.fail(ph, "quorumproof sign (1 signature, "+item.name+")", fmt.Errorf("%v — %s", err, errB))
+			return
+		}
+		oneBad, _ := refused(append(brokerEnv("2"), "TBP_PROVISIONING_TRANSITION_PROOF_FILE="+oneSig), filepath.Join(base, "brokerd-"+item.name+"-1sig.log"))
+		s.add(ph, "#313 : une seule signature ne légitime pas le changement de "+item.name+" (k = 2)", oneBad, "")
+		twoSig := filepath.Join(base, "rules-proof-"+item.name+"-2sig.json")
+		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "sign", "-condition", ruleCond, "-cell", scale2CellID, "-key", ctlKeys[0], "-key", ctlKeys[1], "-out", twoSig); err != nil {
+			s.fail(ph, "quorumproof sign (2 signatures, "+item.name+")", fmt.Errorf("%v — %s", err, errB))
+			return
+		}
+		brokerd, err = start(append(brokerEnv("2"), "TBP_PROVISIONING_TRANSITION_PROOF_FILE="+twoSig), filepath.Join(base, "brokerd-"+item.name+"-2sig.log"))
+		if err != nil {
+			s.fail(ph, "brokerd ("+item.name+" signé par 2 contrôleurs)", err)
+			return
+		}
+		up := waitUnix200(adminHC, "http://brokerd/v1/supervision/stats", 20*time.Second) == nil
+		s.add(ph, "#313 : le changement de "+item.name+" signé par 2 contrôleurs est accepté — et brokerd repart", up, "")
+		brokerd.stop()
+	}
+
+	// --- Étape 5 : l'échelle est attestée (#224) ----------------------------------------------
+	brokerd.stop()
 	low, lowLog := refused(brokerEnv("1"), filepath.Join(base, "brokerd-k1.log"))
 	s.add(ph, "#224 : TBP_QUORUM_MIN abaissé à 1 dans l'environnement ⇒ brokerd REFUSE de démarrer, en nommant le réglage",
 		low && strings.Contains(lowLog, "quorum-settings"), fmt.Sprintf("refusé=%v", low))

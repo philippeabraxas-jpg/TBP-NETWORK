@@ -663,6 +663,17 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # pepd. Échappatoire (dev/labo seulement,
 #                                      # exige la sentinelle) :
 #                                      # TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1.
+#   TBP_PROVISIONING_POLICY_BUNDLE=/etc/tbp/opa/tbp-example.tar.gz
+#   TBP_PROVISIONING_OPA_CONFIG=/etc/tbp/opa-config.yaml
+#                                      # issue #313 : brokerd mesure aussi les
+#                                      # RÈGLES que sert son OPA — le bundle signé
+#                                      # et la configuration de l'OPA (le fichier
+#                                      # qui décrit son lancement, vérification de
+#                                      # signature comprise) — plus TBP_POLICY_ID.
+#                                      # REQUIS avec le témoin. Mettre la clé
+#                                      # PUBLIQUE de vérification dans
+#                                      # TBP_PROVISIONING_EXTRA_FILES. Changer
+#                                      # l'un d'eux est une transition de quorum.
 #                                      # Voir « Fichiers de provisionnement ».
 #   TBP_BROKER_SOCKET=/run/tbp/broker.sock  # plan de DONNÉES : POST /v1/actions
 #   TBP_BROKER_ADMIN_SOCKET=/run/tbp/broker-admin.sock  # plan
@@ -774,7 +785,15 @@ quorum), ajouter une clé à un trousseau d'opérateurs ou de contrôleurs, ou �
 périmètre d'un skill passait jusqu'ici sans aucune alarme.
 
 - **Ce qui est mesuré.** `brokerd` : clés d'opérateurs, registre d'agents, manifeste de
-  genèse, registre de skills, CA cliente mTLS. `pepd` : trousseau des émetteurs, trousseau
+  genèse, registre de skills, CA cliente mTLS, et (#313) les **règles que sert son OPA** : le bundle
+  (`policy-bundle`), la configuration de l'OPA (`opa-config`) et `TBP_POLICY_ID` (`policy-id`).
+  Le surveillant de révision (#92) ne compare que l'étiquette `--revision` du bundle à `TBP_POLICY_ID`,
+  qui vient de l'environnement ; il ne voit ni un OPA lancé sans vérifier la signature, ni un
+  environnement et un bundle édités ensemble. Changer les règles est une **opération froide de toute
+  la cellule** : tout arrêter, changer, faire signer par les contrôleurs la condition qu'affiche
+  `brokerd`, tout redémarrer — sinon `pepd` sert le nouveau bundle pendant que `brokerd` attend
+  encore l'ancien. Adopter cela sur une cellule qui a déjà tourné demande une preuve de transition
+  (nouvelles entrées). `pepd` : trousseau des émetteurs, trousseau
   du quorum. Les deux attestent aussi les **réglages d'échelle** (`quorum-settings` : `TBP_QUORUM_MIN` et
   la topologie, #224) : abaisser k en éditant l'environnement est une divergence, et le changement est
   autorisé par le k qui était attesté. Adopter cela sur une cellule qui a déjà tourné demande une preuve de

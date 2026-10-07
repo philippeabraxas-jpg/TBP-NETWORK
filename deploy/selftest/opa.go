@@ -211,6 +211,20 @@ func buildBundle(s *suite, phase string, cfg config, capsPath, regoPath, bundleP
 	return true
 }
 
+// opaRunArgs : les arguments EXACTS de lancement de l'OPA serveur, bundle signé et signature vérifiée.
+func opaRunArgs(addr, bundlePath, verificationKeyPath string) []string {
+	return []string{"run", "--server", "--addr", addr,
+		"--bundle", bundlePath, "--verification-key", verificationKeyPath, "--verification-key-id", "default"}
+}
+
+// writeOPAConfig écrit le fichier que brokerd mesure comme « configuration de l'OPA » (issue #313,
+// TBP_PROVISIONING_OPA_CONFIG) : la description du lancement, vérification de signature comprise. Une
+// édition qui retire --verification-key diverge du témoin. La clé PUBLIQUE de vérification est mesurée à part
+// (TBP_PROVISIONING_EXTRA_FILES) : un autre signataire de confiance est aussi un changement de règles.
+func writeOPAConfig(path, addr, bundlePath, verificationKeyPath string) error {
+	return os.WriteFile(path, []byte(strings.Join(opaRunArgs(addr, bundlePath, verificationKeyPath), "\n")+"\n"), 0o600)
+}
+
 // opaServer est le cycle de vie d'un OPA serveur lancé par le selftest.
 type opaServer struct {
 	cmd  *exec.Cmd
@@ -230,8 +244,7 @@ func startOPA(s *suite, phase string, cfg config, addr, bundlePath, verification
 		s.fail(phase, "opa run", err)
 		return nil, false
 	}
-	opaCmd := exec.Command(cfg.opaBin, "run", "--server", "--addr", addr,
-		"--bundle", bundlePath, "--verification-key", verificationKeyPath, "--verification-key-id", "default")
+	opaCmd := exec.Command(cfg.opaBin, opaRunArgs(addr, bundlePath, verificationKeyPath)...)
 	opaCmd.Stdout, opaCmd.Stderr = opaLog, opaLog
 	if err := opaCmd.Start(); err != nil {
 		_ = opaLog.Close()

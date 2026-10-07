@@ -18,10 +18,19 @@ package main
 //     l'administrateur seul signe —, k-of-n au-dessus). C'est LE réglage d'échelle.
 //   - désactivation : TBP_PROVISIONING_DISABLED_DEV_UNSAFE=1, dev/labo, refusée sans la
 //     sentinelle /etc/tbp/DEV_ENVIRONMENT (#113).
+//
+// Les RÈGLES servies (issue #313) : le bundle, la configuration de l'OPA qui le sert et
+// TBP_POLICY_ID sont dans le témoin. Sans cela, à l'échelle 2 (OPA propre à la machine de brokerd,
+// pas de pepd mesuré à côté), changer les règles ne laissait aucune preuve de quorum : le surveillant
+// de révision (#92-A5) ne compare qu'une ÉTIQUETTE (--revision) à TBP_POLICY_ID, lui-même lu dans
+// l'environnement, et une configuration OPA qui cesse de vérifier la signature n'était mesurée nulle
+// part. Changer l'un des trois est une transition autorisée par k contrôleurs ATTESTÉS ; la procédure
+// est celle d'une opération froide de toute la cellule (tout arrêter, changer, tout redémarrer).
 
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +68,32 @@ func loadProvisioningConfig(getenv func(string) string, disabled bool) (witness,
 	return witness, proof, extra, nil
 }
 
+// Noms, dans le témoin, des entrées qui portent les règles servies (issue #313).
+const (
+	provisioningPolicyBundleName = "policy-bundle"
+	provisioningOPAConfigName    = "opa-config"
+	provisioningPolicyIDName     = "policy-id"
+)
+
+// loadProvisioningPolicyPaths lit les deux artefacts de règles que brokerd mesure (issue #313) : le bundle
+// signé servi par l'OPA de brokerd et la configuration de cet OPA (le fichier de configuration, ou à défaut
+// le fichier qui décrit son lancement — vérification de signature comprise). Requis dès que la mesure est
+// active : un oubli ne doit pas laisser les règles hors du témoin (même doctrine que les autres fichiers).
+func loadProvisioningPolicyPaths(getenv func(string) string, disabled bool) (bundle, opaConfig string, err error) {
+	if disabled {
+		return "", "", nil
+	}
+	bundle = getenv("TBP_PROVISIONING_POLICY_BUNDLE")
+	opaConfig = getenv("TBP_PROVISIONING_OPA_CONFIG")
+	switch {
+	case bundle == "":
+		return "", "", errors.New("TBP_PROVISIONING_POLICY_BUNDLE requis (issue #313 : le bundle de règles servi par l'OPA de brokerd est mesuré — un changement de règles est une transition de quorum)")
+	case opaConfig == "":
+		return "", "", errors.New("TBP_PROVISIONING_OPA_CONFIG requis (issue #313 : la configuration de l'OPA de brokerd est mesurée — une configuration qui cesse de vérifier la signature du bundle est une transition de quorum)")
+	}
+	return bundle, opaConfig, nil
+}
+
 // provisioningFiles rend la liste que brokerd charge, dérivée de sa configuration.
 func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 	files := []registry.ProvisioningFile{
@@ -78,6 +113,14 @@ func provisioningFiles(cfg *config) []registry.ProvisioningFile {
 		// porte sa propre signature de quorum, vérifiée contre le manifeste de genèse ci-dessus)
 		files = append(files, registry.ProvisioningFile{Name: "mirror-cell-keys", Path: cfg.mirror.cellKeysFile})
 	}
+	// les RÈGLES servies (issue #313) : le bundle et la configuration de l'OPA par leur contenu, et
+	// TBP_POLICY_ID, lu dans l'environnement, par sa valeur — comme quorum-settings, pour qu'il ne
+	// puisse ni changer entre deux démarrages sans que la mesure le voie, ni autoriser son propre changement.
+	files = append(files,
+		registry.ProvisioningFile{Name: provisioningPolicyBundleName, Path: cfg.policyBundleFile},
+		registry.ProvisioningFile{Name: provisioningOPAConfigName, Path: cfg.opaConfigFile},
+		registry.ProvisioningFile{Name: provisioningPolicyIDName, Content: []byte(hex.EncodeToString(cfg.policyID[:]))},
+	)
 	// l'ÉCHELLE : k du quorum et topologie, engagés dans le témoin (issue #224) — abaisser
 	// TBP_QUORUM_MIN par l'environnement diverge désormais, et ne s'autorise que par k ATTESTÉ.
 	topology := "mono"
