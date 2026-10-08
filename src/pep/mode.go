@@ -10,6 +10,16 @@ package pep
 // de la même façon : tout changement de posture d'application est un
 // événement de gouvernance, pas un détail d'exploitation.
 //
+// Restreindre n'est pas élargir (revue des consoles, point C1). Passer de monitor à closed RESTREINT : le
+// pire qu'un acte faux puisse faire est d'appliquer les règles que la cellule a déjà. Revenir à monitor, ou sortir de
+// ModeRefused, ÉLARGIT : une preuve de k contrôleurs, toujours. Exiger k signatures pour fermer, c'est rendre
+// l'acte de sécurité le plus simple impossible le jour où deux contrôleurs sur trois sont injoignables. Un second
+// vérifieur (ModeOptions.VerifyRestrict, seuil réglable, 1 par défaut dans pepd) autorise donc la SEULE bascule
+// monitor → closed avec moins de signatures. Ce n'est pas une attestation supprimée : la signature d'un
+// contrôleur du trousseau épinglé reste exigée, fraîche, liée à la cellule et à la condition, rejouable une
+// seule fois, et l'acte laisse sa feuille et son alarme — plus une feuille et une alarme qui disent que le quorum
+// était réduit.
+//
 // Le contrôleur démarre TOUJOURS en monitor : un process qui revient de
 // crash ne « se réveille » jamais en posture bloquante sans décision de
 // gouvernance explicite.
@@ -101,6 +111,12 @@ type ModeOptions struct {
 	// de posture (§5.3). Nil ⇒ toute bascule est refusée (fail-closed) —
 	// remplaçable via SetQuorumVerifier.
 	VerifyQuorum QuorumVerifier
+	// VerifyRestrict, s'il est renseigné, valide la preuve d'une bascule qui RESTREINT — monitor → closed, et
+	// elle seule — avec un seuil plus bas que VerifyQuorum. Il n'est consulté qu'APRÈS que
+	// VerifyQuorum a refusé : une preuve complète passe comme avant, sans trace de réduction. Nil ⇒ aucune
+	// réduction, toute bascule exige VerifyQuorum (comportement historique). Un seuil réduit ne s'applique jamais
+	// au retour à monitor ni à la sortie de ModeRefused (#93) : ce sont des élargissements.
+	VerifyRestrict QuorumVerifier
 	// QuorumState avance le plancher de fraîcheur PERSISTANT par condition
 	// (revue de sécurité #105) : une preuve « mode-monitor »/« mode-closed »
 	// dont l'expiry ne dépasse pas le plancher déjà consommé est un rejeu
@@ -133,6 +149,7 @@ type ModeController struct {
 	mu       sync.Mutex
 	mode     PEPMode
 	verifier QuorumVerifier
+	restrict QuorumVerifier
 	state    QuorumStateStore
 }
 
@@ -165,6 +182,7 @@ func NewModeController(opts ModeOptions) (*ModeController, error) {
 		now:      now,
 		mode:     ModeMonitor,
 		verifier: opts.VerifyQuorum,
+		restrict: opts.VerifyRestrict,
 		state:    opts.QuorumState,
 	}
 	if opts.StartRefused {
@@ -186,6 +204,13 @@ func (c *ModeController) SetQuorumVerifier(v QuorumVerifier) {
 	c.verifier = v
 }
 
+// SetRestrictVerifier (re)branche le vérifieur des bascules qui restreignent. Nil le retire.
+func (c *ModeController) SetRestrictVerifier(v QuorumVerifier) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.restrict = v
+}
+
 // SetQuorumState (re)branche le magasin d'état de quorum (antirejeu
 // persistant, §105).
 func (c *ModeController) SetQuorumState(s QuorumStateStore) {
@@ -204,7 +229,9 @@ func (c *ModeController) Mode() PEPMode {
 // SetMode change la posture — acte GOUVERNÉ : preuve de quorum exigée
 // pour TOUT changement (aller comme retour), feuille tracée et alarme.
 // Redemander la posture courante est un no-op (rien à gouverner, rien à
-// tracer).
+// tracer). Seule la bascule monitor → closed, qui RESTREINT, peut passer avec un quorum réduit quand
+// VerifyRestrict est renseigné ; elle laisse alors une feuille « TBPM2 » et l'alarme
+// « mode-closed-reduced-quorum » en plus des traces habituelles.
 func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 	if m != ModeMonitor && m != ModeClosed {
 		return fmt.Errorf("pep: mode invalide %d", m)
@@ -218,8 +245,14 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 		return fmt.Errorf("%w (bascule → %s)", ErrQuorumVerifierMissing, m)
 	}
 	condition := "mode-" + m.String()
+	reduced := false
 	if !c.verifier(condition, proof) {
-		return fmt.Errorf("%w (bascule → %s)", ErrQuorumRejected, m)
+		// Restreindre n'est pas élargir : monitor → closed, et rien d'autre, peut passer avec le seuil réduit.
+		if c.mode == ModeMonitor && m == ModeClosed && c.restrict != nil && c.restrict(condition, proof) {
+			reduced = true
+		} else {
+			return fmt.Errorf("%w (bascule → %s)", ErrQuorumRejected, m)
+		}
 	}
 	if c.state == nil {
 		return fmt.Errorf("%w (bascule → %s)", ErrQuorumStateMissing, m)
@@ -236,8 +269,17 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 	if c.onAlarm != nil {
 		c.onAlarm("mode-" + m.String())
 	}
+	if reduced {
+		c.writeReducedLeafLocked(m)
+		if c.onAlarm != nil {
+			c.onAlarm(ReasonModeReducedQuorum)
+		}
+	}
 	return nil
 }
+
+// ReasonModeReducedQuorum : la bascule vers closed est passée avec un quorum réduit.
+const ReasonModeReducedQuorum = "mode-closed-reduced-quorum"
 
 // Allows applique la posture au verdict : en monitor, TOUT est forwardé
 // (log seulement, doctrine §5.3) ; en closed, seul un allow passe ; en
@@ -261,6 +303,19 @@ func (c *ModeController) writeLeafLocked(m PEPMode) {
 	if _, err := appendLeaf(context.Background(), c.leaves, c.journal, registry.KindTelemetry, c.cellID, c.salt, modeChangeRecord(m), c.now().UnixNano()); err != nil && c.onAlarm != nil {
 		c.onAlarm(ReasonLeafWriteFailed)
 	}
+}
+
+// writeReducedLeafLocked inscrit, EN PLUS de la feuille de bascule, la trace d'une bascule passée avec un quorum
+// réduit : un auditeur qui relit le journal voit que cette fermeture n'a pas eu le quorum complet.
+func (c *ModeController) writeReducedLeafLocked(m PEPMode) {
+	if _, err := appendLeaf(context.Background(), c.leaves, c.journal, registry.KindTelemetry, c.cellID, c.salt, modeReducedRecord(m), c.now().UnixNano()); err != nil && c.onAlarm != nil {
+		c.onAlarm(ReasonLeafWriteFailed)
+	}
+}
+
+// modeReducedRecord : "TBPM2" ‖ u8 mode ‖ u8 1 (quorum réduit).
+func modeReducedRecord(m PEPMode) []byte {
+	return []byte{'T', 'B', 'P', 'M', '2', byte(m), 1}
 }
 
 // modeChangeRecord sérialise le record de bascule : "TBPM1" ‖ u8 mode.

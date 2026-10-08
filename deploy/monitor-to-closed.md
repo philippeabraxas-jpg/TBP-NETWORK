@@ -7,9 +7,13 @@ posture is monitor everywhere (§5.3); the switch requires the §9.1
 measurement points installed and fed (D100), an observation window, and
 a **quorum** — k Ed25519 signatures from DISTINCT controllers pinned in
 `TBP_QUORUM_KEYRING_FILE`, never a self-declared list of names (security
-review #89) — a single operator cannot close the network (demonstrated by
-the selftest's mono phase: 1 valid signature → 403, k valid signatures →
-200).
+review #89). **Restricting is not widening**: closing the network (monitor →
+closed) is accepted with `TBP_MODE_RESTRICT_QUORUM_MIN` signatures (default 1,
+never more than k, and attested), because it only removes capabilities;
+reopening it, or leaving the post-restart `refused` state, always needs the
+full k. Set it equal to `TBP_QUORUM_MIN` to require k to close as well. The
+selftest's mono phase shows both (k=2: a stranger's signature → 403, one
+controller's signature closes → 200, reopening with one → 403).
 
 > MAB: see [checklists/routeur.md](checklists/routeur.md) — MAB is
 > a NAC/switch matter (router machine), not a PEP posture. The
@@ -83,16 +87,18 @@ public keys; the rollback window (step 4) is decided.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
 # expected: 400 (unknown field). A body in the right shape with no
-# signature gets 403, and one valid signature (k=2) MUST
-# also fail — see deploy/selftest/mono.go's mono phase for the full
-# worked example (signCtrl helper) that produces real per-controller
-# signatures and exercises 1-signature-403 → 2-signature-200:
+# signature gets 403, and a signature by a key that is not a pinned controller
+# fails too. One valid signature closes (TBP_MODE_RESTRICT_QUORUM_MIN=1, the
+# default), but REOPENING with one MUST fail (k=2). See deploy/selftest/mono.go's
+# mono phase for the full worked example (signCtrl helper) with real
+# per-controller signatures:
 go run ./deploy/selftest -phase mono
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Observable success criterion**: 403 without a valid k-of-n proof, 200
-with one (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
+**Observable success criterion**: 403 without a valid proof (at least
+`TBP_MODE_RESTRICT_QUORUM_MIN` distinct controller signatures to close, k to
+reopen), 200 with one (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
 "signature":"…"}, …]}`, hex-encoded, each signature by a DISTINCT
 controller pinned in `TBP_QUORUM_KEYRING_FILE`); `GET /v1/mode` returns
 `{"mode":"closed"}`; the switch leaves a `KindTelemetry` leaf in the

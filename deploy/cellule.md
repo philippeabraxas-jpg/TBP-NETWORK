@@ -235,6 +235,11 @@ here); `/etc/tbp/pepd.env` at 0600, owned by the service.
 #                                  # for the OPA process at EVERY connection
 #   TBP_QUORUM_MIN=2               # k distinct Ed25519 signatures (security
 #                                  # review #89 — no longer a name count)
+#   TBP_MODE_RESTRICT_QUORUM_MIN=1  # signatures needed to CLOSE the network
+#                                  # (monitor → closed only). Default 1,
+#                                  # bounded [1, TBP_QUORUM_MIN]. Restricting
+#                                  # is not widening: reopening or leaving
+#                                  # "refused" always needs the full k
 #   TBP_QUORUM_KEYRING_FILE=/etc/tbp/quorum-keyring.json  # controller
 #                                  # public keys pinned (§12), same JSON
 #                                  # shape as TBP_KEYRING_FILE — required:
@@ -752,14 +757,15 @@ scope used to pass without any alarm.
   editing the environment is a divergence, and the change is authorised by the k that was attested.
   Adopting this on a cell that already ran takes one transition proof (the new entry changes the
   digest). Both also attest the **security switches** (`security-posture`, third-party review 4.6):
-  what is *on*, not how it is tuned. `pepd`: `ano-proxy` (is `TBP_PROXY_ANO_SOCKET` set — removing it
+  what is *on*, not how it is tuned. `pepd`: `mode-restrict-quorum` (`TBP_MODE_RESTRICT_QUORUM_MIN`: raising it is free, lowering it
+  is a governed change), `ano-proxy` (is `TBP_PROXY_ANO_SOCKET` set — removing it
   disables anonymisation), `opa` (not disabled for dev), `opa-trip-after` (raising it weakens the T14
   latch), `opa-autoclear`, `opa-admission` and `opa-stall-detection` (the bounded OPA queue and the
   stall signal are on), `telemetry`, `durability`. `brokerd`: `arbitration`, `translator-guard`,
   `translator`, `opa-admission`, `opa-stall-detection`. Changing any of them by editing the environment
   is a divergence, authorised by the k that was attested. **Tuning values are not attested**
   (queue size, per-subject share, windows, TTLs): an operator adjusts them without a quorum proof.
-  **Upgrading:** the first start after this change refuses on `security-posture` (a new entry); run
+  **Upgrading:** the first start after this change (and, for `pepd`, after `mode-restrict-quorum` joined the posture) refuses on `security-posture` (a new entry); run
   `<daemon> -print-provisioning-condition` and have the controllers sign it once, like any other
   transition. Both accept
   `TBP_PROVISIONING_EXTRA_FILES`. **`anod` measures itself** (#272): it restarts independently of
