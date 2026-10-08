@@ -138,21 +138,26 @@ func runScale2(s *suite, cfg config) {
 	_, _ = rand.Read(cellSalt)
 	issuerSeed := sha256.Sum256([]byte("tbp-scale2-selftest-dev:issuer"))
 	issuerSeedPath := filepath.Join(base, "issuer.seed")
-	// la clé d'OPÉRATEUR (celle qui approuve les plans) est créée par la même commande que les contrôleurs
-	opKeyPath := filepath.Join(keysDir, "operator.key")
-	opOut, opErr, err := runCmd(cfg.repo, nil, qpBin, "keygen", "-key", opKeyPath, "-keyring", filepath.Join(keysDir, "operator-ring.json"))
-	opPub := ""
-	for _, f := range strings.Fields(opOut) {
-		if strings.HasPrefix(f, "public=") {
-			opPub = strings.TrimPrefix(f, "public=")
+	// les clés d'OPÉRATEUR (celles qui approuvent les plans) sont créées par la même commande que les contrôleurs.
+	// #196 : à k = 2, un plan de classe W exige DEUX opérateurs distincts — le trousseau en porte deux.
+	var opKeyPaths, opPubs []string
+	for i := 1; i <= 2; i++ {
+		kp := filepath.Join(keysDir, fmt.Sprintf("operator-%d.key", i))
+		opOut, opErr, err := runCmd(cfg.repo, nil, qpBin, "keygen", "-key", kp, "-keyring", filepath.Join(keysDir, fmt.Sprintf("operator-%d-ring.json", i)))
+		pub := ""
+		for _, f := range strings.Fields(opOut) {
+			if strings.HasPrefix(f, "public=") {
+				pub = strings.TrimPrefix(f, "public=")
+			}
 		}
-	}
-	if err != nil || len(opPub) != 64 {
-		s.fail(ph, "quorumproof keygen (opérateur)", fmt.Errorf("err=%v pub=%q stderr=%s", err, opPub, opErr))
-		return
+		if err != nil || len(pub) != 64 {
+			s.fail(ph, "quorumproof keygen (opérateur)", fmt.Errorf("err=%v pub=%q stderr=%s", err, pub, opErr))
+			return
+		}
+		opKeyPaths, opPubs = append(opKeyPaths, kp), append(opPubs, pub)
 	}
 	opKeysPath := filepath.Join(base, "operators.json")
-	opKeysJSON, _ := json.Marshal([]string{opPub})
+	opKeysJSON, _ := json.Marshal(opPubs)
 	agentsPath := filepath.Join(base, "agents.json")
 	agentsJSON, _ := json.Marshal(map[string]map[string]any{"agent-w": {"class": 2}})
 	for _, f := range []struct {
@@ -289,16 +294,40 @@ func runScale2(s *suite, cfg config) {
 	_, _, err = runCmd(cfg.repo, nil, qpBin, planArgs(forgedFile)...)
 	s.add(ph, "#273 : témoin — un plan en clair différent de celui scellé est refusé par -expect (ne signez pas)", err != nil, "")
 
-	approvalFile := filepath.Join(base, "approval.json")
-	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-key", opKeyPath, "-out", approvalFile); err != nil {
-		s.fail(ph, "quorumproof planapprove", fmt.Errorf("%v — %s", err, errB))
+	// #196 : le plan est de classe W, k = 2. Une seule signature d'opérateur est refusée ; deux opérateurs
+	// distincts qui signent chacun chez eux la MÊME échéance, puis `planassemble`, l'approuvent.
+	postApproval := func(file string) int {
+		raw, _ := os.ReadFile(file)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		st, _, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/approve", body)
+		return st
+	}
+	oneFile := filepath.Join(base, "approval-1.json")
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-key", opKeyPaths[0], "-out", oneFile); err != nil {
+		s.fail(ph, "quorumproof planapprove (opérateur 1)", fmt.Errorf("%v — %s", err, errB))
 		return
 	}
-	approvalRaw, _ := os.ReadFile(approvalFile)
-	var approvalBody map[string]any
-	_ = json.Unmarshal(approvalRaw, &approvalBody)
-	approveStatus, _, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/approve", approvalBody)
-	s.add(ph, "plan soumis, approuvé par l'opérateur (quorumproof planapprove, deploy/scale-2.md étape 4)", approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
+	oneStatus := postApproval(oneFile)
+	s.add(ph, "#196 : une seule signature d'opérateur ne suffit pas pour un plan de classe W à k = 2 — refusé, le plan reste en attente",
+		oneStatus == http.StatusBadRequest, fmt.Sprintf("status=%d", oneStatus))
+	sameExpiry := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
+	var perOperator []string
+	for i, kp := range opKeyPaths {
+		f := filepath.Join(base, fmt.Sprintf("approval-op%d.json", i+1))
+		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-expires-at", sameExpiry, "-key", kp, "-out", f); err != nil {
+			s.fail(ph, "quorumproof planapprove (échéance commune)", fmt.Errorf("%v — %s", err, errB))
+			return
+		}
+		perOperator = append(perOperator, f)
+	}
+	approvalFile := filepath.Join(base, "approval.json")
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planassemble", "-in", perOperator[0], "-in", perOperator[1], "-out", approvalFile); err != nil {
+		s.fail(ph, "quorumproof planassemble", fmt.Errorf("%v — %s", err, errB))
+		return
+	}
+	approveStatus := postApproval(approvalFile)
+	s.add(ph, "plan soumis, approuvé par deux opérateurs distincts (quorumproof planapprove + planassemble, deploy/scale-2.md étape 4, #196)", approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
 	bindOut, errB, err := runCmd(cfg.repo, nil, qpBin, "planbind", "-plan-hash", planSub.PlanHash)
 	binding := strings.TrimSpace(bindOut)
 	if err != nil || binding == "" {

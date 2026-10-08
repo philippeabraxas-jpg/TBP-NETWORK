@@ -2,9 +2,15 @@ package main
 
 // plantools.go — le geste d'opérateur du contrat de plan (§4.2, #177) pour les actions de classe I/W.
 //
-//	quorumproof planapprove -plan-hash HEX64 [-ttl S] -key FILE -out APPROBATION.json
+//	quorumproof planapprove -plan-hash HEX64 [-ttl S | -expires-at T] -key FILE [-key FILE …] -out APPROBATION.json
 //	    signe l'approbation d'un plan avec la clé d'OPÉRATEUR (celle de TBP_OPERATOR_KEYS_FILE) et écrit
-//	    le corps à poster sur POST /v1/supervision/plan/approve (socket d'administration de brokerd)
+//	    le corps à poster sur POST /v1/supervision/plan/approve (socket d'administration de brokerd).
+//	    Un plan de classe F ou W exige k signatures de clés DISTINCTES (#196, k = TBP_QUORUM_MIN) : soit
+//	    plusieurs -key sur la même machine, soit chaque opérateur signe chez lui avec le MÊME -expires-at
+//	    (RFC 3339 : l'échéance est signée, elle doit être commune) puis planassemble les réunit
+//	quorumproof planassemble -in APPROBATION.json -in APPROBATION.json [-in …] -out APPROBATION.json
+//	    réunit les approbations signées séparément par plusieurs opérateurs : même plan, même échéance,
+//	    jamais deux fois la même signature. Ne vérifie pas les clés — c'est brokerd qui exige des clés distinctes
 //	quorumproof planrevoke -plan-hash HEX64 [-ttl S] -key FILE -out REVOCATION.json
 //	    signe la RÉVOCATION d'un plan (soumis ou approuvé, #244) avec la clé d'opérateur et écrit le corps
 //	    à poster sur POST /v1/supervision/plan/revoke (même socket d'administration). Le message signé est
@@ -48,13 +54,15 @@ func cmdPlanApprove(args []string) error {
 	fs := flag.NewFlagSet("planapprove", flag.ContinueOnError)
 	planHash := fs.String("plan-hash", "", "hash du plan (hex 64)")
 	ttl := fs.Int("ttl", 300, "durée de validité de l'approbation, en secondes")
-	keyFile := fs.String("key", "", "clé d'opérateur (fichier de graine ou de clé, hex)")
+	expiresAt := fs.String("expires-at", "", "échéance (RFC 3339) à signer — commune à tous les opérateurs d'un même plan (#196) ; remplace -ttl")
+	var keyFiles multi
+	fs.Var(&keyFiles, "key", "clé d'opérateur (fichier de graine ou de clé, hex ; répétable)")
 	out := fs.String("out", "", "corps JSON à écrire (0600)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *planHash == "" || *keyFile == "" || *out == "" {
-		return errors.New("-plan-hash, -key et -out requis")
+	if *planHash == "" || len(keyFiles) == 0 || *out == "" {
+		return errors.New("-plan-hash, au moins un -key et -out requis")
 	}
 	if *ttl < 10 || *ttl > 3600 {
 		return errors.New("-ttl hors bornes [10, 3600] s")
@@ -63,18 +71,97 @@ func cmdPlanApprove(args []string) error {
 	if err != nil {
 		return err
 	}
-	key, err := loadKey(*keyFile)
-	if err != nil {
+	exp := time.Now().Add(time.Duration(*ttl) * time.Second).UTC()
+	if *expiresAt != "" {
+		t, err := time.Parse(time.RFC3339, *expiresAt)
+		if err != nil {
+			return errors.New("-expires-at : date RFC 3339 attendue (ex. 2026-10-08T14:30:00Z)")
+		}
+		if d := time.Until(t); d < 10*time.Second || d > time.Hour {
+			return errors.New("-expires-at hors bornes [dans 10 s, dans 1 h]")
+		}
+		exp = t.UTC()
+	}
+	sigs := make([]string, 0, len(keyFiles))
+	for _, f := range keyFiles {
+		key, err := loadKey(f)
+		if err != nil {
+			return err
+		}
+		sigs = append(sigs, hex.EncodeToString(ed25519.Sign(key, pep.ApprovalMessage(h, exp))))
+	}
+	fmt.Fprintf(os.Stderr, "quorumproof: approbation du plan %s signée par %d clé(s), expire %s — l'avez-vous recalculé (planhash) ?\n", *planHash, len(sigs), exp.Format(time.RFC3339))
+	body := map[string]any{"plan_hash": *planHash, "expires_at": exp.Format(time.RFC3339)}
+	if len(sigs) == 1 {
+		body["signature"] = sigs[0] // forme historique : un opérateur, une signature
+	} else {
+		body["signatures"] = sigs
+	}
+	return writeJSON0600(*out, body)
+}
+
+// planApprovalBody est un corps d'approbation, tel que planapprove l'écrit et que brokerd le lit.
+type planApprovalBody struct {
+	PlanHash   string   `json:"plan_hash"`
+	ExpiresAt  string   `json:"expires_at"`
+	Signature  string   `json:"signature,omitempty"`
+	Signatures []string `json:"signatures,omitempty"`
+}
+
+// cmdPlanAssemble réunit les approbations signées séparément (#196) en un seul corps à poster.
+func cmdPlanAssemble(args []string) error {
+	fs := flag.NewFlagSet("planassemble", flag.ContinueOnError)
+	var in multi
+	fs.Var(&in, "in", "corps d'approbation d'un opérateur (répétable, au moins deux)")
+	out := fs.String("out", "", "corps JSON à écrire (0600)")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	exp := time.Now().Add(time.Duration(*ttl) * time.Second).UTC()
-	sig := ed25519.Sign(key, pep.ApprovalMessage(h, exp))
-	fmt.Fprintf(os.Stderr, "quorumproof: approbation du plan %s signée, expire %s — l'avez-vous recalculé (planhash) ?\n", *planHash, exp.Format(time.RFC3339))
-	return writeJSON0600(*out, map[string]string{
-		"plan_hash":  *planHash,
-		"expires_at": exp.Format(time.RFC3339),
-		"signature":  hex.EncodeToString(sig),
-	})
+	if len(in) < 2 || *out == "" {
+		return errors.New("-out et au moins deux -in requis")
+	}
+	var merged planApprovalBody
+	seen := map[string]bool{}
+	for n, f := range in {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		var b planApprovalBody
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&b); err != nil {
+			return fmt.Errorf("%s : corps d'approbation illisible : %w", f, err)
+		}
+		exp, err := time.Parse(time.RFC3339, b.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("%s : expires_at illisible", f)
+		}
+		if n == 0 {
+			merged.PlanHash, merged.ExpiresAt = b.PlanHash, exp.UTC().Format(time.RFC3339)
+		} else if b.PlanHash != merged.PlanHash || exp.UTC().Format(time.RFC3339) != merged.ExpiresAt {
+			return fmt.Errorf("%s : autre plan ou autre échéance que %s — chaque opérateur doit signer le même plan avec le même -expires-at (#196)", f, in[0])
+		}
+		sigs := b.Signatures
+		if b.Signature != "" {
+			if len(sigs) > 0 {
+				return fmt.Errorf("%s : « signature » et « signatures » à la fois", f)
+			}
+			sigs = []string{b.Signature}
+		}
+		if len(sigs) == 0 {
+			return fmt.Errorf("%s : aucune signature", f)
+		}
+		for _, sg := range sigs {
+			if seen[sg] {
+				return fmt.Errorf("%s : signature déjà présente — deux fois la même signature n'est pas un quorum", f)
+			}
+			seen[sg] = true
+			merged.Signatures = append(merged.Signatures, sg)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "quorumproof: %d signatures réunies pour le plan %s, expire %s\n", len(merged.Signatures), merged.PlanHash, merged.ExpiresAt)
+	return writeJSON0600(*out, merged)
 }
 
 func cmdPlanRevoke(args []string) error {

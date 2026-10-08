@@ -77,10 +77,13 @@ la cellule (`brokerd` le dit au démarrage). Ne pas continuer avec `n ≤ k`.
 **Prérequis vérifiable** : étapes 1 et 2 vertes ; le registre d'agents (`agents.json` : chaque agent et sa
 classe), les clés d'opérateurs (`operators.json`, les clés qui approuvent les plans), la graine de l'émetteur et
 le sel de la cellule préparés comme en [cellule.fr.md](cellule.fr.md) étape 7 ; `TBP_PROVISIONING_WITNESS_FILE`
-hors de `TBP_REGISTRY_DIR`. La **clé d'opérateur** se crée comme une clé de contrôleur — c'est une autre clé,
-détenue par celui qui approuve les plans :
-`quorumproof keygen -key /etc/tbp/keys/operator.key -keyring /tmp/operator-ring.json`, et son `public=` va dans
-`operators.json` (`["<public>"]`).
+hors de `TBP_REGISTRY_DIR`. Les **clés d'opérateur** se créent comme des clés de contrôleur — ce sont d'autres
+clés, détenues chacune par une personne différente qui approuve les plans : à k = 2 il en faut **au moins deux**
+(#196), car un plan pour un agent de classe F ou W exige k signatures distinctes d'opérateurs (la classe I en
+exige une) :
+`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (et `operator-2`), et
+leurs `public=` vont dans `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuse de démarrer si
+le registre contient un agent de classe F ou W et que le trousseau a moins de k clés distinctes.
 
 **Commande** : écrire `/etc/tbp/brokerd.env` comme en cellule.fr.md étape 7 avec ces valeurs d'échelle 2, puis le
 démarrer :
@@ -128,8 +131,12 @@ curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
 #     de la vue d'arbitrage du broker (GET /v1/supervision/arbitration → pending[].submitted_at) (#273)
 quorumproof planhash -cell cell-s2 -policy-id "$TBP_POLICY_ID" -submitted-at <submitted_at> -plan plan.json -expect <plan_hash>
 #     « conforme » → signer. « plan_hash DIFFÉRENT » (code 1) → NE PAS SIGNER : le plan scellé par le broker n'est pas celui-ci
-# 2b. l'opérateur l'approuve avec la clé d'opérateur, puis le corps est posté
-quorumproof planapprove -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/approval.json
+# 2b. k = 2 opérateurs l'approuvent (#196). Chacun signe avec sa clé sur la MÊME échéance (elle est signée),
+#     ici chez soi ; les corps sont ensuite réunis puis postés
+quorumproof planapprove -plan-hash <plan_hash> -expires-at <RFC 3339, dans l'heure> -key /etc/tbp/keys/operator-1.key -out /tmp/approval-1.json
+quorumproof planapprove -plan-hash <plan_hash> -expires-at <même> -key /etc/tbp/keys/operator-2.key -out /tmp/approval-2.json
+quorumproof planassemble -in /tmp/approval-1.json -in /tmp/approval-2.json -out /tmp/approval.json
+#     (les deux clés sur une même machine : planapprove ... -key operator-1.key -key operator-2.key -out /tmp/approval.json)
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/approval.json \
   http://localhost/v1/supervision/plan/approve
 BINDING=$(quorumproof planbind -plan-hash <plan_hash>)
@@ -144,7 +151,7 @@ révoque, signé comme une approbation — le message signé est différent (`TB
 d'approbation ne révoque jamais :
 
 ```bash
-quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/revocation.json
+quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator-1.key -out /tmp/revocation.json
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.json \
   http://localhost/v1/supervision/plan/revoke
 ```
@@ -153,13 +160,15 @@ L'étape suivante de l'agent est alors refusée `plan-revoked` ; une révocation
 refusée et laisse une feuille de refus, une valide laisse une feuille qui nomme l'opérateur. Vaut aussi pour un
 plan en attente.
 
-**Critère de succès observable** : la même action est **refusée** sans preuve (`quorum-required`) et avec la
-preuve d'un seul contrôleur (`quorum-insufficient`), et **autorisée avec un jeton** avec deux — ici les
-contrôleurs 1 et 3, parce que le 2 est indisponible : c'est à cela que sert la rechange. La preuve ne vaut pas
-une seconde fois.
+**Critère de succès observable** : un plan approuvé par **une seule** signature d'opérateur est refusé (HTTP
+400, « approbation insuffisante ») et reste en attente, puis il est approuvé par deux opérateurs distincts. La
+même action est **refusée** sans preuve (`quorum-required`) et avec la preuve d'un seul contrôleur
+(`quorum-insufficient`), et **autorisée avec un jeton** avec deux — ici les contrôleurs 1 et 3, parce que le 2
+est indisponible : c'est à cela que sert la rechange. La preuve ne vaut pas une seconde fois.
 
 **En cas d'échec : STOP** — un allow avec une seule signature signifie que `TBP_QUORUM_MIN` n'est pas 2 ; ne pas
-continuer. Les contrôleurs dont la clé est dans un HSM utilisent `quorumproof wmessage` (ce qu'il faut signer)
+continuer. Un plan approuvé par un seul opérateur, ou deux fois par la même clé, signifie que le quorum
+d'approbation n'est pas en vigueur. Les contrôleurs dont la clé est dans un HSM utilisent `quorumproof wmessage` (ce qu'il faut signer)
 puis `quorumproof wassemble`.
 
 #### Étape 5 — L'échelle est attestée
