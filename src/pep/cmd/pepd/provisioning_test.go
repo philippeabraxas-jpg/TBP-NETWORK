@@ -553,7 +553,7 @@ func TestPepdPostureReadsTheSameValuesAsTheDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"ano-proxy=off\n", "opa=on\n", "opa-trip-after=3\n", "opa-autoclear=on\n", "opa-admission=on\n", "opa-stall-detection=on\n", "telemetry=off\n", "durability=async-bounded\n"} {
+	for _, want := range []string{"ano-proxy=off\n", "opa=on\n", "opa-trip-after=3\n", "opa-autoclear=on\n", "opa-admission=on\n", "opa-stall-detection=on\n", "telemetry=off\n", "durability=async-bounded\n", "mode-restrict-quorum=1\n"} {
 		if !strings.Contains(string(def), want) {
 			t.Errorf("posture par défaut sans %q :\n%s", want, def)
 		}
@@ -567,6 +567,8 @@ func TestPepdPostureReadsTheSameValuesAsTheDaemon(t *testing.T) {
 		"télémétrie invalide": {"TBP_TELEMETRY": "peut-etre"},
 		"durabilité inconnue": {"TBP_DURABILITY": "magique"},
 		"autoclear illisible": {"TBP_OPA_AUTOCLEAR_PROBES": "x"},
+		"restriction nulle":   {"TBP_MODE_RESTRICT_QUORUM_MIN": "0"},
+		"restriction texte":   {"TBP_MODE_RESTRICT_QUORUM_MIN": "un"},
 	} {
 		if _, err := pepdPosture(get(m)); err == nil {
 			t.Errorf("%s : erreur attendue", name)
@@ -777,5 +779,32 @@ func TestPepdProvisioningAndMeasuredBootLeavesAreJournaled(t *testing.T) {
 	}
 	if prov != 1 || boot != 1 {
 		t.Fatalf("%d feuille(s) de provisionnement et %d de démarrage mesuré journalisées, attendu 1 et 1 (%d enregistrements)", prov, boot, len(recs))
+	}
+}
+
+// Qui peut FERMER la cellule est un réglage de sécurité (revue des consoles, point C1) : engagé dans la posture,
+// donc le changer entre deux démarrages diverge du témoin et ne s'autorise que par le quorum attesté.
+func TestPepdRestrictQuorumIsAttestedAndBounded(t *testing.T) {
+	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	def, err := pepdPosture(get(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := pepdPosture(get(map[string]string{"TBP_MODE_RESTRICT_QUORUM_MIN": "2"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(def) == string(two) || !strings.Contains(string(two), "mode-restrict-quorum=2\n") {
+		t.Fatalf("le seuil de restriction n'entre pas dans la posture attestée :\n%s", two)
+	}
+	for name, c := range map[string]struct {
+		env  string
+		want int
+		bad  bool
+	}{"défaut": {"", 1, false}, "égal à 1": {"1", 1, false}, "égal à 3": {"3", 3, false}, "zéro": {"0", 0, true}, "négatif": {"-1", 0, true}, "texte": {"x", 0, true}} {
+		got, err := restrictQuorumFromEnv(get(map[string]string{"TBP_MODE_RESTRICT_QUORUM_MIN": c.env}))
+		if c.bad != (err != nil) || (!c.bad && got != c.want) {
+			t.Errorf("%s : %d, %v", name, got, err)
+		}
 	}
 }

@@ -44,6 +44,13 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   otherwise `brokerd` refuses to start and names the agent. `plan/approve` accepts `signature` (one) or
   `signatures` (a list), never both.
 
+- **Closing the network is no longer as hard as reopening it** ("restricting is not widening"): `pepd` accepts
+  the switch monitor → closed with `TBP_MODE_RESTRICT_QUORUM_MIN` distinct controller signatures (default 1,
+  bounded by k and attested as `mode-restrict-quorum`); reopening and leaving `refused` always need k. A
+  reduced-quorum closing leaves its own leaf and raises `mode-closed-reduced-quorum`. Set the variable equal to
+  `TBP_QUORUM_MIN` to keep the previous behaviour. **Upgrading:** `pepd`'s first start refuses on
+  `security-posture`; one transition proof adopts it.
+
 ### Fixed
 - Flaky teardown of the Tessera POSIX logs in tests
   ([#266](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/266),

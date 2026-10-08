@@ -492,12 +492,32 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		unsigned == http.StatusForbidden, fmt.Sprintf("status=%d", unsigned))
 
 	if prof.quorumMin >= 2 {
+		// Restreindre n'est pas élargir (revue des consoles, point C1) : une signature d'un contrôleur du
+		// trousseau suffit à FERMER, une signature d'un inconnu non, et ROUVRIR exige encore le quorum.
+		stranger := devKey("not-in-keyring")
 		status, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
+			"mode": "closed", "expiry": expiry.Unix(),
+			"signatures": []map[string]string{signCtrl(stranger, ctrl1KID)},
+		})
+		s.add(ph, "bascule closed: 1 signature d'une clé hors trousseau → 403", status == http.StatusForbidden,
+			fmt.Sprintf("status=%d", status))
+		status, _, _ = postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
 			"mode": "closed", "expiry": expiry.Unix(),
 			"signatures": []map[string]string{signCtrl(ctrl1, ctrl1KID)},
 		})
-		s.add(ph, "bascule closed: 1 signature valide < quorum 2 → 403", status == http.StatusForbidden,
-			fmt.Sprintf("status=%d", status))
+		s.add(ph, fmt.Sprintf("bascule closed: UNE signature valide suffit (restreindre n'est pas élargir, quorum %d) → 200", prof.quorumMin),
+			status == http.StatusOK, fmt.Sprintf("status=%d", status))
+		expiryOpen := time.Now().Add(1 * time.Minute)
+		openSig := func(priv ed25519.PrivateKey, kid [16]byte) map[string]string {
+			sig := ed25519.Sign(priv, pep.QuorumMessage("mode-monitor", monoCellID, expiryOpen))
+			return map[string]string{"key_id": hex.EncodeToString(kid[:]), "signature": hex.EncodeToString(sig)}
+		}
+		status, _, _ = postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
+			"mode": "monitor", "expiry": expiryOpen.Unix(),
+			"signatures": []map[string]string{openSig(ctrl1, ctrl1KID)},
+		})
+		s.add(ph, fmt.Sprintf("retour à monitor avec UNE signature (< quorum %d) → 403 : élargir exige le quorum", prof.quorumMin),
+			status == http.StatusForbidden, fmt.Sprintf("status=%d", status))
 	} else {
 		// Échelle 1 : l'admin est le quorum (k=1) — mais « k=1 » ne veut
 		// PAS dire « sans signature » : zéro signature, ou une signature
@@ -514,13 +534,13 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		})
 		s.add(ph, "échelle 1: bascule closed signée par une clé hors trousseau → 403", status == http.StatusForbidden,
 			fmt.Sprintf("status=%d", status))
+		status, _, _ = postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
+			"mode": "closed", "expiry": expiry.Unix(),
+			"signatures": signAll(signCtrl),
+		})
+		s.add(ph, fmt.Sprintf("bascule closed: quorum %d/%d signatures valides → 200", prof.quorumMin, prof.quorumMin), status == http.StatusOK,
+			fmt.Sprintf("status=%d", status))
 	}
-	status, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{
-		"mode": "closed", "expiry": expiry.Unix(),
-		"signatures": signAll(signCtrl),
-	})
-	s.add(ph, fmt.Sprintf("bascule closed: quorum %d/%d signatures valides → 200", prof.quorumMin, prof.quorumMin), status == http.StatusOK,
-		fmt.Sprintf("status=%d", status))
 	_, raw, err = getUnix(adminHC, "http://pepd-admin/v1/mode")
 	if err == nil {
 		_ = json.Unmarshal(raw, &modeView)

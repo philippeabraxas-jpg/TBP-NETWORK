@@ -81,7 +81,28 @@ func pepdPosture(getenv func(string) string) ([]byte, error) {
 	} else {
 		p["durability"] = "sync"
 	}
+	restrict, err := restrictQuorumFromEnv(getenv)
+	if err != nil {
+		return nil, err
+	}
+	p["mode-restrict-quorum"] = strconv.Itoa(restrict) // l'abaisser… ou le relever, c'est changer qui peut fermer
 	return p.Bytes(), nil
+}
+
+// restrictQuorumFromEnv lit TBP_MODE_RESTRICT_QUORUM_MIN : le nombre de signatures de contrôleurs qui suffit à
+// RESTREINDRE la posture (monitor → closed). 1 par défaut : restreindre n'est pas élargir, et fermer ne doit pas
+// devenir impossible le jour où deux contrôleurs sur trois sont injoignables. Le retour à monitor et la sortie de
+// l'état refusé gardent TBP_QUORUM_MIN. La borne haute (≤ TBP_QUORUM_MIN) se vérifie là où k est connu.
+func restrictQuorumFromEnv(getenv func(string) string) (int, error) {
+	s := getenv("TBP_MODE_RESTRICT_QUORUM_MIN")
+	if s == "" {
+		return 1, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("TBP_MODE_RESTRICT_QUORUM_MIN invalide %q (entier ≥ 1)", s)
+	}
+	return n, nil
 }
 
 // pepdProvisioningFiles : ce que pepd mesure, dérivé de SA configuration. Partagé par le démarrage

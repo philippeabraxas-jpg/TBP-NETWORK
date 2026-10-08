@@ -139,7 +139,7 @@ le NAC avant le fencing laisserait des clients admis sans gouvernance
 d'époque — exactement le défaut que le fencing existe pour empêcher.
 
 Avant de toucher une machine réelle : `bash deploy/selftest/selftest.sh`
-— **255 contrôles** (cellule mono réelle, guides échelle 1 et échelle 2, fencing
+— **258 contrôles** (cellule mono réelle, guides échelle 1 et échelle 2, fencing
 2 cellules, démons brokerd/supervisord réels), fail-closed, rapport JSON dans
 `deploy/selftest/out/`. Puis les checklists de recette par machine
 ([checklists/](checklists/)).

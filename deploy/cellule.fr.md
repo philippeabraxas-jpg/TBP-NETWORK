@@ -244,6 +244,12 @@ service.
 #   TBP_QUORUM_MIN=2               # k signatures Ed25519 DISTINCTES (revue de
 #                                  # sécurité #89 — plus un simple compte de
 #                                  # noms)
+#   TBP_MODE_RESTRICT_QUORUM_MIN=1  # signatures requises pour FERMER le
+#                                  # réseau (monitor → closed seulement).
+#                                  # Défaut 1, borné [1, TBP_QUORUM_MIN].
+#                                  # Restreindre n'est pas élargir : rouvrir
+#                                  # ou sortir de « refused » exige toujours
+#                                  # les k complets
 #   TBP_QUORUM_KEYRING_FILE=/etc/tbp/quorum-keyring.json  # clés publiques des
 #                                  # contrôleurs épinglées (§12), même forme
 #                                  # JSON que TBP_KEYRING_FILE — requis : sans
@@ -799,7 +805,8 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   la topologie, #224) : abaisser k en éditant l'environnement est une divergence, et le changement est
   autorisé par le k qui était attesté. Adopter cela sur une cellule qui a déjà tourné demande une preuve de
   transition (la nouvelle entrée change le condensé). Les deux attestent aussi les **interrupteurs de sécurité**
-  (`security-posture`, revue tierce 4.6) : ce qui est *actif*, pas comment c'est réglé. `pepd` : `ano-proxy`
+  (`security-posture`, revue tierce 4.6) : ce qui est *actif*, pas comment c'est réglé. `pepd` : `mode-restrict-quorum`
+  (`TBP_MODE_RESTRICT_QUORUM_MIN` : le relever est libre, l'abaisser est un changement gouverné), `ano-proxy`
   (`TBP_PROXY_ANO_SOCKET` est-il posé — le retirer désactive l'anonymisation), `opa` (non désactivé en dev),
   `opa-trip-after` (le relever affaiblit le verrou T14), `opa-autoclear`, `opa-admission` et
   `opa-stall-detection` (la file bornée devant OPA et le signal de blocage sont actifs), `telemetry`,
@@ -807,7 +814,7 @@ périmètre d'un skill passait jusqu'ici sans aucune alarme.
   `opa-stall-detection`. En changer un en éditant l'environnement est une divergence, autorisée par le k qui
   était attesté. **Les valeurs de réglage fin ne sont pas attestées** (taille de file, part par sujet, fenêtres,
   TTL) : un opérateur les ajuste sans preuve de quorum. **Mise à niveau :** le premier démarrage après ce
-  changement refuse sur `security-posture` (nouvelle entrée) ; lancer `<démon> -print-provisioning-condition`
+  changement (et, pour `pepd`, après l'entrée `mode-restrict-quorum`) refuse sur `security-posture` (nouvelle entrée) ; lancer `<démon> -print-provisioning-condition`
   et faire signer la condition une fois par les contrôleurs, comme toute transition. Les deux acceptent
   `TBP_PROVISIONING_EXTRA_FILES`. **`anod` se mesure
   lui-même** (#272) : il redémarre indépendamment de `pepd`, donc le démon qui décide ce qui sort de la

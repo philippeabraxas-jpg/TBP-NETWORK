@@ -56,6 +56,10 @@
 //	                   dev/lab uniquement, jamais en production : aucun
 //	                   arbitrage de règles, mutuellement exclusif avec
 //	                   TBP_OPA_ENDPOINT
+//	TBP_MODE_RESTRICT_QUORUM_MIN  optionnel (défaut 1, borné [1, TBP_QUORUM_MIN]) : signatures de
+//	                   contrôleurs qui suffisent à RESTREINDRE la posture (monitor → closed). Le retour
+//	                   à monitor et la sortie de l'état refusé exigent TBP_QUORUM_MIN. Engagé dans la
+//	                   posture attestée du témoin de provisionnement.
 //	TBP_QUORUM_MIN     signatures Ed25519 DISTINCTES exigées pour les actes
 //	                   gouvernés (bascule de posture, levée classe W) —
 //	                   défaut 2. Vérifié cryptographiquement contre
@@ -572,15 +576,33 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("quorum: %w", err)
 	}
+	// Restreindre n'est pas élargir (revue des consoles, point C1) : passer de monitor à closed peut se
+	// faire avec TBP_MODE_RESTRICT_QUORUM_MIN signatures (1 par défaut) ; le retour à monitor et la sortie de
+	// l'état refusé gardent TBP_QUORUM_MIN. Le réglage est dans la posture attestée du témoin.
+	restrictMin, err := restrictQuorumFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if restrictMin > quorumMin {
+		return fmt.Errorf("TBP_MODE_RESTRICT_QUORUM_MIN=%d > TBP_QUORUM_MIN=%d : restreindre ne peut pas exiger plus que d'élargir", restrictMin, quorumMin)
+	}
+	var restrictQuorum pep.QuorumVerifier // nil quand le seuil réduit égale le seuil complet : rien à réduire
+	if restrictMin < quorumMin {
+		restrictQuorum, err = pep.NewSignatureQuorumVerifier(cellID, quorumKeyring, restrictMin, pep.DefaultQuorumProofTTL, nil)
+		if err != nil {
+			return fmt.Errorf("quorum (restriction): %w", err)
+		}
+	}
 	mode, err := pep.NewModeController(pep.ModeOptions{
-		CellID:       cellID,
-		Salt:         salt,
-		Leaves:       cellLog,
-		Journal:      auditStore,
-		OnAlarm:      func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
-		VerifyQuorum: quorum,
-		QuorumState:  quorumState,
-		StartRefused: isRestart, // revue de sécurité #93 : jamais au premier déploiement
+		CellID:         cellID,
+		Salt:           salt,
+		Leaves:         cellLog,
+		Journal:        auditStore,
+		OnAlarm:        func(name string) { log.Printf("pepd: ALARME posture: %s", name) },
+		VerifyQuorum:   quorum,
+		VerifyRestrict: restrictQuorum,
+		QuorumState:    quorumState,
+		StartRefused:   isRestart, // revue de sécurité #93 : jamais au premier déploiement
 	})
 	if err != nil {
 		return err

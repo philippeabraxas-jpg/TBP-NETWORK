@@ -7,9 +7,13 @@ démarrage est monitor partout (§5.3) ; la bascule exige les points de
 mesure §9.1 installés et alimentés (D100), une fenêtre d'observation, et
 un **quorum** — k signatures Ed25519 de contrôleurs DISTINCTS épinglés dans
 `TBP_QUORUM_KEYRING_FILE`, jamais une liste de noms auto-déclarée (revue de
-sécurité #89) — un opérateur seul ne peut pas fermer le réseau
-(démontré par la phase mono du selftest : 1 signature valide → 403, k
-signatures valides → 200).
+sécurité #89). **Restreindre n'est pas élargir** : fermer le réseau
+(monitor → closed) est accepté avec `TBP_MODE_RESTRICT_QUORUM_MIN` signatures
+(défaut 1, jamais plus que k, et attesté), parce que cela ne fait que retirer
+des capacités ; le rouvrir, ou sortir de l'état `refused` d'après redémarrage,
+exige toujours les k complets. Le poser égal à `TBP_QUORUM_MIN` exige k aussi
+pour fermer. La phase mono du selftest montre les deux (k=2 : signature d'un
+inconnu → 403, une signature de contrôleur ferme → 200, rouvrir avec une → 403).
 
 > MAB : voir [checklists/routeur.md](checklists/routeur.fr.md) — le MAB est
 > une affaire NAC/switch (machine routeur), pas de posture PEP. La
@@ -82,16 +86,18 @@ clés publiques ; la fenêtre de rollback (étape 4) est décidée.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
 # attendu : 400 (champ inconnu). Un corps de la bonne forme sans aucune
-# signature rend 403, et une seule signature valide (k=2) DOIT
-# aussi échouer — voir la phase mono de deploy/selftest/mono.go pour
-# l'exemple complet (helper signCtrl) qui produit de vraies signatures par
-# contrôleur et exerce 1 signature-403 → 2 signatures-200 :
+# signature rend 403, de même qu'une signature d'une clé qui n'est pas un
+# contrôleur épinglé. Une signature valide ferme (TBP_MODE_RESTRICT_QUORUM_MIN=1,
+# le défaut), mais ROUVRIR avec une seule DOIT échouer (k=2). Voir la phase
+# mono de deploy/selftest/mono.go pour l'exemple complet (helper signCtrl) avec
+# de vraies signatures par contrôleur :
 go run ./deploy/selftest -phase mono
 curl -s http://127.0.0.1:8443/v1/mode
 ```
 
-**Critère de succès observable** : 403 sans preuve k-of-n valide, 200
-avec une (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
+**Critère de succès observable** : 403 sans preuve valide (au moins
+`TBP_MODE_RESTRICT_QUORUM_MIN` signatures de contrôleurs distincts pour fermer,
+k pour rouvrir), 200 avec une (`{"mode":"closed","expiry":<unix>,"signatures":[{"key_id":"…",
 "signature":"…"}, …]}`, en hexadécimal, chaque signature par un contrôleur
 DISTINCT épinglé dans `TBP_QUORUM_KEYRING_FILE`) ; `GET /v1/mode` rend
 `{"mode":"closed"}` ; la bascule laisse une feuille `KindTelemetry` dans le
