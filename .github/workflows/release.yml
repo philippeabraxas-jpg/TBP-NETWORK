@@ -1,7 +1,9 @@
 name: release
 
 # Provenance de build SLSA v1.0 (catalogue de conformité #156) pour les
-# trois binaires démons du dépôt — pepd/brokerd/supervisord. TBP y est
+# binaires du dépôt — démons (pepd, brokerd, anod, supervisord, opawatchdog) et outils d'opérateur
+# (quorumproof, tbp-audit), plus le SBOM CycloneDX : la liste vit dans scripts/release/build.sh, que la CI
+# compile aussi à chaque PR. Vérification par un tiers : SECURITY.md, « Verifying a release ». TBP y est
 # évalué comme PRODUCTEUR d'artefacts, jamais comme consommateur de
 # skills tiers (angle distinct du trou SkillRegistry, #165).
 #
@@ -40,17 +42,17 @@ jobs:
           # Go différente à chaque exécution, y compris pour la release. La monter est
           # une décision délibérée (govulncheck dit quand), jamais un effet de bord.
           go-version: "1.27.1"
-      - name: "build pepd/brokerd/supervisord"
+      - name: "build des binaires (scripts/release/build.sh)"
+        run: bash scripts/release/build.sh dist
+      - name: "SBOM CycloneDX (épinglé, comme le job sbom de lint.yml)"
         run: |
-          mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o dist/pepd ./src/pep/cmd/pepd
-          go build -trimpath -ldflags="-s -w" -o dist/brokerd ./src/broker/cmd/brokerd
-          go build -trimpath -ldflags="-s -w" -o dist/supervisord ./src/supervision/cmd/supervisord
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+          cyclonedx-gomod mod -json -output dist/tbp-network.sbom.cdx.json .
       - name: "sha256 des artefacts (sujets de la provenance SLSA)"
         id: hash
         run: |
           cd dist
-          echo "hashes=$(sha256sum pepd brokerd supervisord | base64 -w0)" >> "$GITHUB_OUTPUT"
+          echo "hashes=$(sha256sum * | base64 -w0)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: tbp-binaries
@@ -90,3 +92,4 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           files: dist/*
+          fail_on_unmatched_files: true
