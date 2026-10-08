@@ -359,7 +359,8 @@ that follows declares `TBP_TOPOLOGY=multi` and still needs its
 `epoch0.json`; security review post-#86, issue #128: the two settings are
 checked for consistency, so declaring one without the matching other
 refuses to start); PUBLIC operator keys from the contract store installed
-(T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1); issuer custody provisioned —
+(T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1; at least `TBP_QUORUM_MIN` distinct keys when the registry holds a
+class-F or class-W agent, #196); issuer custody provisioned —
 EITHER a DEV issuer seed at 0600 (P1 lab/CI only) OR a real HSM/SoftHSM2
 token with an Ed25519 key pair generated inside it and its PIN at 0600
 (security review #90, point 5 — the private key never leaves the module;

@@ -822,13 +822,23 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 			return err
 		}
 	}
+	// Issue #196 : combien d'opérateurs approuvent un plan — k pour les classes F et W, 1 pour I. Un
+	// quorum d'approbation impossible à atteindre (moins de clés distinctes que k) refuse le démarrage.
+	distinctOperators := make(map[[16]byte]bool, len(operatorKeys))
+	for _, k := range operatorKeys {
+		distinctOperators[pep.KeyIDFromPublicKey(k)] = true
+	}
+	if err := checkOperatorQuorum(agentRegistry, cfg.quorumMin, len(distinctOperators)); err != nil {
+		return err
+	}
 	contracts, err := pep.NewContractStore(pep.ContractOptions{
-		CellID:       cfg.cellID,
-		PolicyID:     cfg.policyID,
-		OperatorKeys: operatorKeys,
-		Salt:         cfg.salt,
-		Leaves:       cellLog,
-		Journal:      auditStore,
+		CellID:            cfg.cellID,
+		PolicyID:          cfg.policyID,
+		OperatorKeys:      operatorKeys,
+		ApprovalsRequired: planApprovalsRequired(agentRegistry, cfg.quorumMin),
+		Salt:              cfg.salt,
+		Leaves:            cellLog,
+		Journal:           auditStore,
 	})
 	if err != nil {
 		return fmt.Errorf("contract store: %w", err)
@@ -1066,12 +1076,28 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
-		sig, err := hex.DecodeString(req.Signature)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+		if (req.Signature != "") == (len(req.Signatures) > 0) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "exactement l'un de « signature » ou « signatures » est requis (#196)"})
 			return
 		}
-		if err := contracts.Approve(r.Context(), hash, req.ExpiresAt, sig); err != nil {
+		raw := req.Signatures
+		if req.Signature != "" {
+			raw = []string{req.Signature}
+		}
+		if len(raw) > pep.MaxPlanApprovalSignatures {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "trop de signatures"})
+			return
+		}
+		sigs := make([][]byte, 0, len(raw))
+		for _, h := range raw {
+			sig, err := hex.DecodeString(h)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature invalide (hex)"})
+				return
+			}
+			sigs = append(sigs, sig)
+		}
+		if err := contracts.ApproveAll(r.Context(), hash, req.ExpiresAt, sigs); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1454,8 +1480,12 @@ type planSubmitResponse struct {
 
 type planApproveRequest struct {
 	PlanHash  string    `json:"plan_hash"`  // hex, 32 octets
-	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans ApprovalMessage (D59)
-	Signature string    `json:"signature"`  // hex Ed25519, trousseau opérateur épinglé (§12)
+	ExpiresAt time.Time `json:"expires_at"` // RFC3339 — entre dans ApprovalMessage (D59) ; commun à toutes les signatures
+	// Une signature (forme historique) OU la liste des signatures (#196), jamais les deux : chaque
+	// signature est un Ed25519 hex sur ApprovalMessage(plan_hash, expires_at), d'une clé DISTINCTE du
+	// trousseau d'opérateurs épinglé (§12). Un plan de classe F ou W en exige k.
+	Signature  string   `json:"signature,omitempty"`
+	Signatures []string `json:"signatures,omitempty"`
 }
 
 // planRevokeRequest est le corps de POST /v1/supervision/plan/revoke (#244) : même forme

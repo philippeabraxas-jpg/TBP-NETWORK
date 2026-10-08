@@ -66,7 +66,10 @@ Local policy enforcement point. Responsibilities, per the technical note:
   the exact binding is refused `plan-subject-mismatch`) + ordered bounded
   list of steps `(action, resource, params_hash)`, ≤ 64 steps); approval is an
   Ed25519 **operator signature** over « TBPA1 » ‖ planHash ‖ expiry
-  (pinned operator keyring, TTL ∈ [60 s, 24 h], default 1 h) —
+  (pinned operator keyring, TTL ∈ [60 s, 24 h], default 1 h) — **k distinct
+  operators** for a plan whose agent is class F or W (k = the attested quorum,
+  fixed at submission; one for class I; refusal at submission when the keyring
+  holds fewer than k distinct keys, #196) —
   "arbitration is a signature, not a read". Execution presents an
   opaque binding (« TBPB1 » ‖ planHash ‖ params, ≤ 4096 o) verified
   against the sealed plan with a **strict cursor**: action, resource and

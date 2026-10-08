@@ -734,3 +734,124 @@ func TestManifestIDsRefusesADuplicatedController(t *testing.T) {
 		}
 	}
 }
+
+// --- approbation de plan par k opérateurs : planapprove -key -key / planassemble (#196) ---------------
+
+type approvalBody struct {
+	PlanHash   string   `json:"plan_hash"`
+	ExpiresAt  string   `json:"expires_at"`
+	Signature  string   `json:"signature"`
+	Signatures []string `json:"signatures"`
+}
+
+func readApproval(t *testing.T, path string) approvalBody {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b approvalBody
+	if err := json.Unmarshal(raw, &b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestPlanApproveSeveralKeysWritesSignaturesThatBrokerdVerifies(t *testing.T) {
+	dir := t.TempDir()
+	op1, f1 := keyFile(t, dir, "op1", 11)
+	op2, f2 := keyFile(t, dir, "op2", 12)
+	var h [32]byte
+	h[0] = 0x42
+	hexHash := hex.EncodeToString(h[:])
+	out := filepath.Join(dir, "approve2.json")
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-key", f1, "-key", f2, "-out", out}); err != nil {
+		t.Fatal(err)
+	}
+	b := readApproval(t, out)
+	if b.Signature != "" || len(b.Signatures) != 2 {
+		t.Fatalf("deux clés ⇒ « signatures » à deux entrées, pas « signature » : %+v", b)
+	}
+	exp, err := time.Parse(time.RFC3339, b.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, op := range []ed25519.PrivateKey{op1, op2} {
+		sig, _ := hex.DecodeString(b.Signatures[i])
+		if !ed25519.Verify(op.Public().(ed25519.PublicKey), pep.ApprovalMessage(h, exp), sig) {
+			t.Fatalf("la signature %d n'est pas celle que brokerd vérifie", i)
+		}
+	}
+	// une seule clé : la forme historique, inchangée
+	one := filepath.Join(dir, "approve1.json")
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-key", f1, "-out", one}); err != nil {
+		t.Fatal(err)
+	}
+	if b1 := readApproval(t, one); b1.Signature == "" || len(b1.Signatures) != 0 {
+		t.Fatalf("une clé ⇒ « signature » : %+v", b1)
+	}
+}
+
+func TestPlanAssembleMergesSeparatelySignedApprovals(t *testing.T) {
+	dir := t.TempDir()
+	op1, f1 := keyFile(t, dir, "op1", 21)
+	op2, f2 := keyFile(t, dir, "op2", 22)
+	var h [32]byte
+	h[0] = 0x43
+	hexHash := hex.EncodeToString(h[:])
+	at := time.Now().Add(20 * time.Minute).UTC().Format(time.RFC3339)
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-expires-at", at, "-key", f1, "-out", a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-expires-at", at, "-key", f2, "-out", b}); err != nil {
+		t.Fatal(err)
+	}
+	merged := filepath.Join(dir, "merged.json")
+	if err := cmdPlanAssemble([]string{"-in", a, "-in", b, "-out", merged}); err != nil {
+		t.Fatal(err)
+	}
+	m := readApproval(t, merged)
+	exp, _ := time.Parse(time.RFC3339, m.ExpiresAt)
+	if m.PlanHash != hexHash || len(m.Signatures) != 2 || m.Signature != "" {
+		t.Fatalf("corps réuni : %+v", m)
+	}
+	for i, op := range []ed25519.PrivateKey{op1, op2} {
+		sig, _ := hex.DecodeString(m.Signatures[i])
+		if !ed25519.Verify(op.Public().(ed25519.PublicKey), pep.ApprovalMessage(h, exp), sig) {
+			t.Fatalf("signature %d réunie invalide", i)
+		}
+	}
+
+	// refus : autre échéance (chaque opérateur doit signer le MÊME -expires-at)
+	other := filepath.Join(dir, "other-expiry.json")
+	at2 := time.Now().Add(25 * time.Minute).UTC().Format(time.RFC3339)
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-expires-at", at2, "-key", f2, "-out", other}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdPlanAssemble([]string{"-in", a, "-in", other, "-out", filepath.Join(dir, "x.json")}); err == nil {
+		t.Fatal("deux échéances différentes réunies")
+	}
+	// refus : autre plan
+	var h2 [32]byte
+	h2[0] = 0x44
+	otherPlan := filepath.Join(dir, "other-plan.json")
+	if err := cmdPlanApprove([]string{"-plan-hash", hex.EncodeToString(h2[:]), "-expires-at", at, "-key", f2, "-out", otherPlan}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdPlanAssemble([]string{"-in", a, "-in", otherPlan, "-out", filepath.Join(dir, "x.json")}); err == nil {
+		t.Fatal("deux plans différents réunis")
+	}
+	// refus : la même approbation deux fois (deux fois la même signature n'est pas un quorum)
+	if err := cmdPlanAssemble([]string{"-in", a, "-in", a, "-out", filepath.Join(dir, "x.json")}); err == nil {
+		t.Fatal("la même signature réunie deux fois")
+	}
+	// refus : une seule entrée
+	if err := cmdPlanAssemble([]string{"-in", a, "-out", filepath.Join(dir, "x.json")}); err == nil {
+		t.Fatal("un seul corps réuni")
+	}
+	// refus : une échéance hors bornes pour -expires-at
+	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-expires-at", time.Now().Add(5 * time.Hour).UTC().Format(time.RFC3339), "-key", f1, "-out", filepath.Join(dir, "y.json")}); err == nil {
+		t.Fatal("-expires-at à 5 h accepté")
+	}
+}

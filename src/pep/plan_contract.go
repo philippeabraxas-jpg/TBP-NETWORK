@@ -47,6 +47,9 @@ import (
 const (
 	// MaxPlanSteps borne le nombre d'étapes d'un plan (§4.3 : état borné).
 	MaxPlanSteps = 64
+	// MaxPlanApprovalSignatures borne le nombre de signatures d'une approbation (#196) : au-delà,
+	// le corps n'est pas lu — un trousseau d'opérateurs n'approche pas cette taille.
+	MaxPlanApprovalSignatures = 64
 	// MaxPlanParamsBytes borne le blob de paramètres opaque d'une étape
 	// (no-DPI — même borne que quorum_proof côté broker).
 	MaxPlanParamsBytes = 4096
@@ -107,6 +110,9 @@ var (
 	ErrPlanRevocationExpiryInvalid = errors.New("pep: expiry de révocation hors bornes ]maintenant, TTL configuré] (#244)")
 	ErrPlanApprovalExpiryInvalid   = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
 	ErrPlanApprovalSignature       = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
+	ErrPlanApprovalQuorum          = errors.New("pep: approbation insuffisante : k signatures distinctes d'opérateurs exigées pour ce plan (#196)")
+	ErrPlanApprovalDuplicateSigner = errors.New("pep: deux signatures de la même clé d'opérateur (#196 : des clés distinctes, sinon ce n'est pas un quorum)")
+	ErrPlanApprovalUnreachable     = errors.New("pep: le trousseau d'opérateurs compte moins de clés que d'approbations exigées pour ce plan (#196)")
 	ErrPlanStoreSaturated          = errors.New("pep: store de plans saturé (§4.3 : refus + alarme, jamais d'éviction)")
 	ErrPlanStoreFault              = errors.New("pep: faute du store de plans (feuille impossible — pas de preuve, pas de contrat)")
 )
@@ -226,6 +232,7 @@ type planEntry struct {
 	submittedAt time.Time
 	expiresAt   time.Time // pending : soumission + PendingTTL ; approved : expiry signé
 	status      byte
+	required    int  // approbations distinctes exigées (#196) : fixé à la soumission, d'après la classe de l'agent
 	cursor      int  // prochaine étape exigible (consommation à l'émission, D61)
 	expired     bool // feuille d'expiration déjà écrite (une seule fois)
 }
@@ -240,8 +247,16 @@ type ContractOptions struct {
 	// sceau de plan l'inclut — un plan approuvé sous P meurt avec P.
 	PolicyID [32]byte
 	// OperatorKeys est le trousseau d'opérateurs ÉPINGLÉ (Ed25519, §12) :
-	// une seule signature valide suffit à approuver. Requis, ≥ 1.
+	// approuver exige ApprovalsRequired(sujet) signatures valides de CLÉS DISTINCTES
+	// de ce trousseau (1 par défaut). Requis, ≥ 1.
 	OperatorKeys []ed25519.PublicKey
+	// ApprovalsRequired rend, pour l'agent destinataire d'un plan, le nombre de signatures
+	// distinctes d'opérateurs qui l'approuvent (#196) : k pour les classes F et W, 1 pour I.
+	// Évaluée À LA SOUMISSION et scellée dans le plan (un changement de classe ne baisse pas
+	// l'exigence d'un plan déjà soumis). Nil ⇒ 1 (historique). Une valeur < 1 vaut 1 ; une valeur
+	// supérieure au nombre de clés du trousseau refuse la soumission (ErrPlanApprovalUnreachable) :
+	// un plan qu'aucun ensemble de signataires ne peut approuver n'est pas mis en attente.
+	ApprovalsRequired func(subject string) int
 	// Salt est le sel des feuilles (§6.2) : ≥ 16 octets, reste chez le
 	// producteur. Requis.
 	Salt []byte
@@ -287,6 +302,8 @@ type ContractStore struct {
 	cellID        string
 	policyID      [32]byte
 	operatorKeys  []ed25519.PublicKey
+	approvalsReq  func(subject string) int
+	distinctKeys  int // clés DISTINCTES du trousseau : borne haute d'un quorum d'approbation atteignable
 	salt          []byte
 	leaves        LeafSink
 	journal       *registry.RecordStore
@@ -361,6 +378,8 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 		cellID:        opts.CellID,
 		policyID:      opts.PolicyID,
 		operatorKeys:  keys,
+		approvalsReq:  opts.ApprovalsRequired,
+		distinctKeys:  countDistinctKeys(keys),
 		salt:          salt,
 		leaves:        opts.Leaves,
 		journal:       opts.Journal,
@@ -418,6 +437,21 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 	now := s.clock()
 	s.expireLocked(ctx, now)
 	hash := HashPlan(s.cellID, subject, now, s.policyID, steps)
+	required := 1
+	if s.approvalsReq != nil {
+		if r := s.approvalsReq(subject); r > 1 {
+			required = r
+		}
+	}
+	if required > s.distinctKeys {
+		// #196 : un plan qu'aucun ensemble de signataires ne peut approuver ne part pas en attente —
+		// refus net à la soumission, pas un plan qui expire sans raison lisible.
+		if err := s.writeLeafLocked(ctx, planEventSubmit, hash, uint16(len(steps)), 0, "plan-approval-unreachable", now); err != nil {
+			s.tripStoreFault()
+			return [32]byte{}, ErrPlanStoreFault
+		}
+		return [32]byte{}, ErrPlanApprovalUnreachable
+	}
 	// Même cellule, même instant, mêmes étapes = même contrat : la
 	// soumission en double est idempotente — tracée (chaque événement de
 	// contrat laisse une feuille, §4.1), sans créer de second plan.
@@ -445,16 +479,32 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 		submittedAt: now,
 		expiresAt:   now.Add(s.pendingTTL),
 		status:      planStatusPending,
+		required:    required,
 	}
 	return hash, nil
 }
 
-// Approve valide la signature de l'opérateur (D59) et active le contrat.
-// expiry est choisi par l'outil d'approbation et SIGNÉ (il entre dans
-// ApprovalMessage) ; le store borne expiry − now ∈ [60 s, ApprovalTTL].
-// Toute tentative invalide laisse une feuille de refus — une approbation
-// forgée ou hors bornes est un événement de sécurité, pas du bruit.
+// Approve valide UNE signature d'opérateur (D59) : l'approbation d'un plan qui n'exige qu'une
+// approbation (classe I, ou échelle 1 où k = 1). Pour un plan qui en exige k > 1 (#196), une seule
+// signature est refusée (ErrPlanApprovalQuorum) — utiliser ApproveAll.
 func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry time.Time, sig []byte) error {
+	return s.ApproveAll(ctx, planHash, expiry, [][]byte{sig})
+}
+
+// ApproveAll valide les signatures d'opérateurs (D59, #196) et active le contrat. Toutes portent
+// sur le MÊME message ApprovalMessage(planHash, expiry) : expiry est choisi par l'outil d'approbation,
+// SIGNÉ, et borné par le store à [60 s, ApprovalTTL] après now. Le plan s'active quand au moins
+// `required` clés DISTINCTES du trousseau épinglé ont signé (required est fixé à la soumission, d'après la
+// classe de l'agent : k pour F et W, 1 pour I). Fail-closed :
+//   - une signature qui ne vérifie contre aucune clé du trousseau refuse l'ensemble ;
+//   - deux signatures de la même clé refusent l'ensemble (des clés distinctes, sinon ce n'est pas
+//     un quorum) ;
+//   - moins de `required` signatures distinctes : refus, le plan reste en attente.
+//
+// Toute tentative invalide laisse une feuille de refus — une approbation forgée ou hors bornes est
+// un événement de sécurité, pas du bruit. Un succès laisse UNE feuille « TBPL2 » ATTRIBUÉE par signataire
+// (kid, expiry, signature), écrites avant l'activation : pas de preuve, pas de contrat.
+func (s *ContractStore) ApproveAll(ctx context.Context, planHash [32]byte, expiry time.Time, sigs [][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock()
@@ -475,18 +525,36 @@ func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry t
 	if ttl < MinApprovalTTL || ttl > s.approvalTTL {
 		return s.refuseApprovalLocked(ctx, planHash, "plan-approval-expiry-invalid", ErrPlanApprovalExpiryInvalid, now)
 	}
-	msg := ApprovalMessage(planHash, expiry)
-	signed := false
-	var approver [16]byte // kid de l'opérateur dont la signature a vérifié
-	for _, pub := range s.operatorKeys {
-		if ed25519.Verify(pub, msg, sig) {
-			signed = true
-			approver = KeyIDFromPublicKey(pub)
-			break
-		}
-	}
-	if !signed {
+	// Aucune signature, ou plus que la borne : refus avant toute vérification (borne le travail
+	// d'un corps hostile ; un corps honnête porte au plus une signature par clé du trousseau).
+	if len(sigs) == 0 || len(sigs) > MaxPlanApprovalSignatures {
 		return s.refuseApprovalLocked(ctx, planHash, "plan-approval-signature-invalid", ErrPlanApprovalSignature, now)
+	}
+	msg := ApprovalMessage(planHash, expiry)
+	approvers := make([][16]byte, 0, len(sigs))
+	seen := make(map[[16]byte]bool, len(sigs))
+	for _, sig := range sigs {
+		var kid [16]byte
+		signed := false
+		for _, pub := range s.operatorKeys {
+			if ed25519.Verify(pub, msg, sig) {
+				signed = true
+				kid = KeyIDFromPublicKey(pub)
+				break
+			}
+		}
+		if !signed {
+			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-signature-invalid", ErrPlanApprovalSignature, now)
+		}
+		if seen[kid] {
+			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-duplicate-signer", ErrPlanApprovalDuplicateSigner, now)
+		}
+		seen[kid] = true
+		approvers = append(approvers, kid)
+	}
+	if len(approvers) < e.required {
+		return s.refuseApprovalLocked(ctx, planHash, "plan-approval-quorum-insufficient",
+			fmt.Errorf("%w (%d distincte(s) sur %d exigée(s))", ErrPlanApprovalQuorum, len(approvers), e.required), now)
 	}
 	if s.countStatusLocked(planStatusApproved) >= s.maxApproved {
 		if s.onTrip != nil {
@@ -494,14 +562,25 @@ func (s *ContractStore) Approve(ctx context.Context, planHash [32]byte, expiry t
 		}
 		return s.refuseApprovalLocked(ctx, planHash, "plan-store-saturated", ErrPlanStoreSaturated, now)
 	}
-	if err := s.writeApprovalLeafLocked(ctx, planHash, approver, expiry, sig, now); err != nil {
-		s.tripStoreFault()
-		return ErrPlanStoreFault
+	for i, sig := range sigs {
+		if err := s.writeApprovalLeafLocked(ctx, planHash, approvers[i], expiry, sig, now); err != nil {
+			s.tripStoreFault()
+			return ErrPlanStoreFault
+		}
 	}
 	e.status = planStatusApproved
 	e.expiresAt = expiry
 	e.cursor = 0
 	return nil
+}
+
+// countDistinctKeys compte les clés distinctes d'un trousseau (par identifiant de clé).
+func countDistinctKeys(keys []ed25519.PublicKey) int {
+	seen := make(map[[16]byte]bool, len(keys))
+	for _, k := range keys {
+		seen[KeyIDFromPublicKey(k)] = true
+	}
+	return len(seen)
 }
 
 // Revoke retire un plan (soumis ou approuvé) : la discrétion humaine coupe

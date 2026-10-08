@@ -76,10 +76,12 @@ overwritten).
 **Verifiable prerequisite**: steps 1 and 2 green; the agent registry (`agents.json`: each agent and its
 class), the operator keys (`operators.json`, the keys that approve plans), the issuer seed and the cell salt
 prepared as in [cellule.md](cellule.md) step 7; `TBP_PROVISIONING_WITNESS_FILE` outside
-`TBP_REGISTRY_DIR`. The **operator key** is created like a controller key — it is a different key, held by
-the person who approves plans:
-`quorumproof keygen -key /etc/tbp/keys/operator.key -keyring /tmp/operator-ring.json`, and its `public=` goes
-into `operators.json` (`["<public>"]`).
+`TBP_REGISTRY_DIR`. The **operator keys** are created like controller keys — they are different keys, each held
+by a different person who approves plans: at k = 2 you need **at least two** (#196), because a plan for a
+class-F or class-W agent takes k distinct operator signatures (class I takes one):
+`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (and `operator-2`),
+and their `public=` values go into `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuses to
+start if the registry holds a class-F or class-W agent and the keyring has fewer than k distinct keys.
 
 **Command**: write `/etc/tbp/brokerd.env` as in cellule.md step 7 with these scale-2 values, then start it:
 
@@ -125,8 +127,12 @@ curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
 #     from the broker's arbitration view (GET /v1/supervision/arbitration → pending[].submitted_at) (#273)
 quorumproof planhash -cell cell-s2 -policy-id "$TBP_POLICY_ID" -submitted-at <submitted_at> -plan plan.json -expect <plan_hash>
 #     "conforme" → sign. "plan_hash DIFFÉRENT" (exit 1) → DO NOT SIGN: the plan the broker sealed is not this one
-# 2b. the operator approves it with the operator key, then the body is posted
-quorumproof planapprove -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/approval.json
+# 2b. k = 2 operators approve it (#196). Each signs with their own key on the SAME expiry (it is signed),
+#     here on their own machine; the bodies are then assembled and posted
+quorumproof planapprove -plan-hash <plan_hash> -expires-at <RFC 3339, within the hour> -key /etc/tbp/keys/operator-1.key -out /tmp/approval-1.json
+quorumproof planapprove -plan-hash <plan_hash> -expires-at <same> -key /etc/tbp/keys/operator-2.key -out /tmp/approval-2.json
+quorumproof planassemble -in /tmp/approval-1.json -in /tmp/approval-2.json -out /tmp/approval.json
+#     (both keys on one machine: planapprove ... -key operator-1.key -key operator-2.key -out /tmp/approval.json)
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/approval.json \
   http://localhost/v1/supervision/plan/approve
 BINDING=$(quorumproof planbind -plan-hash <plan_hash>)
@@ -140,7 +146,7 @@ quorumproof wproof -manifest /etc/tbp/genesis/manifest.json -action read -resour
 signed like an approval — the signed message is different (`TBPR1`), so an approval signature never revokes:
 
 ```bash
-quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator.key -out /tmp/revocation.json
+quorumproof planrevoke -plan-hash <plan_hash> -key /etc/tbp/keys/operator-1.key -out /tmp/revocation.json
 curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.json \
   http://localhost/v1/supervision/plan/revoke
 ```
@@ -148,11 +154,14 @@ curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.jso
 The agent's next step is then refused `plan-revoked`; an unsigned or wrongly signed revocation is refused and
 leaves a refusal leaf, a valid one leaves a leaf naming the operator. Works on a pending plan too.
 
-**Observable success criterion**: the same action is **refused** with no proof (`quorum-required`) and with
-one controller's proof (`quorum-insufficient`), and **allowed with a token** with two — here controllers 1 and
-3, because 2 is unavailable: that is what the spare is for. The proof does not work a second time.
+**Observable success criterion**: a plan approved with **one** operator signature is refused (HTTP 400,
+"approbation insuffisante") and stays pending, then is approved by two distinct operators. The same action is
+**refused** with no proof (`quorum-required`) and with one controller's proof (`quorum-insufficient`), and
+**allowed with a token** with two — here controllers 1 and 3, because 2 is unavailable: that is what the spare
+is for. The proof does not work a second time.
 
-**On failure: STOP** — an allow with one signature means `TBP_QUORUM_MIN` is not 2; do not go on. Controllers
+**On failure: STOP** — an allow with one signature means `TBP_QUORUM_MIN` is not 2; do not go on. A plan
+approved by a single operator, or by the same key twice, means the approval quorum is not in force. Controllers
 whose keys live in an HSM use `quorumproof wmessage` (what to sign) and `quorumproof wassemble`.
 
 #### Step 5 — The scale is attested

@@ -44,7 +44,9 @@ Rien de ce qu'elle a signé n'est révoqué, et — pour une clé de **contrôle
   contrôleurs. Elles restent vérifiables. Retirer un contrôleur n'est pas rétroactif.
 - **Les approbations de plan** sont l'exception, et elles sont signées par une clé d'*opérateur*
   (`TBP_OPERATOR_KEYS_FILE`), pas par une clé de contrôleur : un plan approuvé le reste jusqu'à sa propre
-  expiration — 1 h par défaut, jusqu'à 24 h. Si une clé d'opérateur est perdue ou volée, aucune vue de la
+  expiration — 1 h par défaut, jusqu'à 24 h. Depuis #196, un plan pour un agent de classe F ou W exige k
+  signatures distinctes d'opérateurs : une clé volée n'approuve plus seule un tel plan (la classe I en exige
+  toujours une). Si une clé d'opérateur est perdue ou volée, aucune vue de la
   console ne liste les plans *approuvés* (`/v1/supervision/arbitration` ne montre que ceux encore en
   attente) : retrouvez-les dans le journal — chaque feuille d'approbation nomme l'identifiant de la clé de
   l'opérateur — et coupez chacun avec `quorumproof planrevoke` ([scale-2.fr.md](scale-2.fr.md), « Couper un

@@ -502,9 +502,12 @@ func runDaemons(s *suite, cfg config) {
 		s.fail(phaseDaemons, "seed émetteur DEV", err)
 		return
 	}
+	// #196 : "agent-1" est de classe W et la cellule est à k = 2 : approuver un plan de cet agent exige DEUX
+	// clés d'opérateurs distinctes — le trousseau en porte deux (sinon brokerd refuse de démarrer).
 	opPub := devKey("operator-1").Public().(ed25519.PublicKey)
+	opPub2 := devKey("operator-2").Public().(ed25519.PublicKey)
 	opKeysPath := filepath.Join(base, "operators.json")
-	opKeysJSON, _ := json.Marshal([]string{hex.EncodeToString(opPub)})
+	opKeysJSON, _ := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2)})
 	if err := os.WriteFile(opKeysPath, opKeysJSON, 0o600); err != nil {
 		s.fail(phaseDaemons, "clés d'opérateurs", err)
 		return
@@ -755,12 +758,21 @@ func runDaemons(s *suite, cfg config) {
 	copy(planHash[:], planHashBytes)
 	approvalExpiry := time.Now().Add(5 * time.Minute)
 	approvalSig := ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(planHash, approvalExpiry))
-	approveStatus, _, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
+	approvalSig2 := ed25519.Sign(devKey("operator-2"), pep.ApprovalMessage(planHash, approvalExpiry))
+	// #196 : un plan de classe W exige k = 2 opérateurs — une seule signature est refusée, le plan reste en attente
+	oneSigStatus, _, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
 		"plan_hash":  planSub.PlanHash,
 		"expires_at": approvalExpiry.UTC().Format(time.RFC3339),
 		"signature":  hex.EncodeToString(approvalSig),
 	})
-	s.add(phaseDaemons, "brokerd: plan approuvé (signature opérateur Ed25519 — #177)",
+	s.add(phaseDaemons, "brokerd: une seule signature d'opérateur ne suffit pas pour un plan de classe W à k = 2 (#196)",
+		oneSigStatus == http.StatusBadRequest, fmt.Sprintf("status=%d", oneSigStatus))
+	approveStatus, _, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
+		"plan_hash":  planSub.PlanHash,
+		"expires_at": approvalExpiry.UTC().Format(time.RFC3339),
+		"signatures": []string{hex.EncodeToString(approvalSig), hex.EncodeToString(approvalSig2)},
+	})
+	s.add(phaseDaemons, "brokerd: plan approuvé par deux opérateurs distincts (signatures Ed25519 — #177, #196)",
 		approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
 
 	// --- #244 : la révocation d'un plan est un acte d'opérateur signé -------------
@@ -788,7 +800,10 @@ func runDaemons(s *suite, cfg config) {
 		apSt, _, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/approve", map[string]any{
 			"plan_hash":  sub2.PlanHash,
 			"expires_at": exp2.UTC().Format(time.RFC3339),
-			"signature":  hex.EncodeToString(ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(h2, exp2))),
+			"signatures": []string{
+				hex.EncodeToString(ed25519.Sign(devKey("operator-1"), pep.ApprovalMessage(h2, exp2))),
+				hex.EncodeToString(ed25519.Sign(devKey("operator-2"), pep.ApprovalMessage(h2, exp2))),
+			},
 		})
 		revoke := func(sig []byte) int {
 			st, _, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/revoke", map[string]any{

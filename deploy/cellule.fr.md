@@ -376,7 +376,8 @@ déclare `TBP_TOPOLOGY=multi` et a toujours besoin de son `epoch0.json` ;
 revue de sécurité post-#86, issue #128 : les deux réglages sont vérifiés
 pour cohérence, donc en déclarer un sans l'autre correspondant refuse de
 démarrer) ; clés PUBLIQUES d'opérateurs du store de contrats installées
-(T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1) ; custody de l'émetteur
+(T30 — JSON `["pubkey_ed25519_hex", …]`, ≥ 1 ; au moins `TBP_QUORUM_MIN` clés distinctes quand le registre contient
+un agent de classe F ou W, #196) ; custody de l'émetteur
 provisionnée — SOIT un seed émetteur de DEV en 0600 (labo/CI P1
 seulement) SOIT un vrai token HSM/SoftHSM2 avec une paire de clés Ed25519
 générée à l'intérieur et son PIN en 0600 (revue de sécurité #90, point 5

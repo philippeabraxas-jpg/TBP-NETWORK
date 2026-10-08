@@ -395,8 +395,10 @@ requires actual new code (§3's three proofs), not just new guides.
 
 What a first scale 2 release will give you: one `brokerd`, a real
 k-of-n quorum with a spare, class-W actions that need an approved plan and
-k controllers, trust files measured at every start, and a log you can
-verify yourself. What
+k controllers, plans for class F and W agents approved by k distinct
+operators (one for class I; k = 1 at scale 1, 2 at scale 2 —
+[#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196)),
+trust files measured at every start, and a log you can verify yourself. What
 it will **not** give you, by design or not yet:
 - **No external anchoring of the registry.** The anchoring library exists,
   but no daemon calls it ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265),
@@ -412,8 +414,6 @@ it will **not** give you, by design or not yet:
   plans a single signed act and a script).
 - **Local administration only**: command-line tools (`quorumproof`,
   `tbp-audit`) and the read-only supervision JSON API; no remote consoles.
-- **One operator signature approves a plan of class I or W**, until
-  [#196](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/196) is decided.
 
 ### Next planned work
 
@@ -426,8 +426,8 @@ of effort. They run in parallel.
    workflow (a `vX.Y.Z` tag already produces SLSA provenance for `pepd`,
    `brokerd` and `supervisord`; `quorumproof`, which the scale 2 guide uses,
    has to join them); a security-reporting policy, a changelog and the list
-   of known limits above; a run of the guide on a clean Debian machine,
-   beyond the selftest; and the decision on #196. Operator tooling is sized
+   of known limits above; and a run of the guide on a clean Debian machine,
+   beyond the selftest. Operator tooling is sized
    to the scale that uses it — three tools are planned on top of what
    exists, the first being usable at scale 2:
    - a **supervision dashboard** on top of the existing read-only

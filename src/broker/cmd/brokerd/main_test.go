@@ -276,6 +276,7 @@ type runFixture struct {
 	sock            string               // socket de service : boot() l'attend (signProof y lit la condition annoncée par le refus)
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
 	opPriv          ed25519.PrivateKey   // clé de l'opérateur épinglé : signe approbation et révocation de plan (#274)
+	opPriv2         ed25519.PrivateKey   // seconde clé d'opérateur (#196) : un plan F ou W exige k = 2 clés distinctes
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -383,8 +384,14 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	if err != nil {
 		t.Fatalf("operateur: %v", err)
 	}
+	// #196 : la cellule de test est à k = 2 (TBP_QUORUM_MIN par défaut) et enregistre des agents de classe W :
+	// approuver leurs plans exige 2 clés distinctes, donc le trousseau en a deux (sinon brokerd refuse de démarrer).
+	opPub2, opPriv2, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("operateur 2: %v", err)
+	}
 	opsFile := filepath.Join(dir, "operators.json")
-	ops, err := json.Marshal([]string{hex.EncodeToString(opPub)})
+	ops, err := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2)})
 	if err != nil {
 		t.Fatalf("operateurs: %v", err)
 	}
@@ -443,6 +450,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		adminSock:       adminSock,
 		controllerPrivs: controllerPrivs,
 		opPriv:          opPriv,
+		opPriv2:         opPriv2,
 		env: map[string]string{
 			"TBP_CELL_ID":                    "cell-a",
 			"TBP_SALT":                       hex.EncodeToString(salt),
