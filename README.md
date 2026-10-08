@@ -422,12 +422,14 @@ of effort. They run in parallel.
 
 1. **A deployable scale 2 release** ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
    The guides and their selftest phases are done. What remains is what lets
-   a stranger deploy it and adopt it — or not: this README; the release
-   workflow (a `vX.Y.Z` tag already produces SLSA provenance for `pepd`,
-   `brokerd` and `supervisord`; `quorumproof`, which the scale 2 guide uses,
-   has to join them); a security-reporting policy, a changelog and the list
-   of known limits above; and a run of the guide on a clean Debian machine,
-   beyond the selftest. Operator tooling is sized
+   a stranger deploy it and adopt it — or not. Done: this README; the release
+   machinery (`scripts/release/build.sh`, checked on every pull request,
+   builds `pepd`, `brokerd`, `anod`, `supervisord`, `opawatchdog`,
+   `quorumproof` and `tbp-audit`; a `vX.Y.Z` tag publishes them with SLSA
+   provenance and an SBOM); [`SECURITY.md`](SECURITY.md) and
+   [`CHANGELOG.md`](CHANGELOG.md), which carries the list of known limits.
+   Remaining: choosing the version and cutting the first tag, and a run of
+   the guide on a clean Debian machine, beyond the selftest. Operator tooling is sized
    to the scale that uses it — three tools are planned on top of what
    exists, the first being usable at scale 2:
    - a **supervision dashboard** on top of the existing read-only

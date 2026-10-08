@@ -39,6 +39,10 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
 ```
 
+Quand une release sera publiée, vous pourrez prendre `brokerd` et `quorumproof` sur sa page au lieu de les
+compiler, après avoir vérifié leur provenance ([SECURITY.md](../SECURITY.md), « Verifying a release »). Les
+binaires visent Debian 12.
+
 **Critère de succès observable** : `curl -s --unix-socket /run/tbp/opa.sock http://localhost/health` répond 200
 avec la signature du bundle vérifiée ; les deux binaires sont en place.
 

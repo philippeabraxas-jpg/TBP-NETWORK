@@ -39,6 +39,10 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 go build -o /usr/local/bin/quorumproof ./src/pep/cmd/quorumproof
 ```
 
+Once a release is published you can take `brokerd` and `quorumproof` from its page instead of building them,
+after checking their provenance ([SECURITY.md](../SECURITY.md), "Verifying a release"). The binaries target
+Debian 12.
+
 **Observable success criterion**: `curl -s --unix-socket /run/tbp/opa.sock http://localhost/health`
 answers 200 with the bundle's signature verified; both binaries are in place.
 
