@@ -69,7 +69,7 @@ governance — exactly the defect fencing exists to prevent.
 **Command**:
 
 ```bash
-go version    # ≥ 1.24
+go version    # ≥ 1.26 (go.mod; CI pins 1.27.2)
 opa version   # ≥ 1.0
 python3 --version
 ```
@@ -90,9 +90,9 @@ conforming versions.
 bash deploy/selftest/selftest.sh
 ```
 
-**Observable success criterion**: `selftest.sh: tout est vert` — 82
-controls (real single cell, 2-cell fencing, real
-brokerd/supervisord daemons) and the formal guide verification
+**Observable success criterion**: `selftest.sh: tout est vert`, and the Go
+selftest's last line reads `selftest: N contrôles, 0 échecs` — every control (real single cell, scale 1 and
+scale 2 guides, 2-cell fencing, real daemons) and the formal guide verification
 pass; report in `deploy/selftest/out/selftest-report.json`.
 
 **On failure: STOP** — the guide you read has drifted from the code; read the

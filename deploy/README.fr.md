@@ -69,7 +69,7 @@ d'époque — exactement le défaut que le fencing existe pour empêcher.
 **Commande** :
 
 ```bash
-go version    # ≥ 1.24
+go version    # ≥ 1.26 (go.mod ; la CI épingle 1.27.2)
 opa version   # ≥ 1.0
 python3 --version
 ```
@@ -90,9 +90,9 @@ jamais « adapter » une étape suivante pour contourner un prérequis rouge.
 bash deploy/selftest/selftest.sh
 ```
 
-**Critère de succès observable** : `selftest.sh: tout est vert` — 82
-contrôles (cellule mono réelle, fencing 2-cellules, démons
-brokerd/supervisord réels) et la vérification formelle des guides
+**Critère de succès observable** : `selftest.sh: tout est vert`, et la
+dernière ligne du selftest Go dit `selftest: N contrôles, 0 échecs` — tous les contrôles (cellule mono réelle,
+guides échelle 1 et 2, fencing 2-cellules, démons réels) et la vérification formelle des guides
 passent ; rapport dans `deploy/selftest/out/selftest-report.json`.
 
 **En cas d'échec : STOP** — le guide lu dérive du code ; lire le contrôle

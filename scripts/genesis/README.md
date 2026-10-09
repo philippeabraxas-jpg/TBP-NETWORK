@@ -139,7 +139,7 @@ reste procédural.
 
 ## Dépendances
 
-- Go ≥ 1.23, CGO
+- Go ≥ 1.26 (celle de `go.mod`), CGO
 - SoftHSM2 (`softhsm2-util`, `libsofthsm2.so`)
 - `github.com/miekg/pkcs11` v1.1.1 (voir `go.mod` / `go.sum`)
 

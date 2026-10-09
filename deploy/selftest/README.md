@@ -8,7 +8,7 @@ non-auteur déroule le guide ».
 ## Lancer
 
 ```bash
-# depuis la racine du dépôt ; prérequis : go ≥ 1.24, opa ≥ 1.0, python3
+# depuis la racine du dépôt ; prérequis : go ≥ 1.26, opa ≥ 1.0, python3
 bash deploy/selftest/selftest.sh
 ```
 

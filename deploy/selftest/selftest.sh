@@ -4,7 +4,7 @@
 #
 #     bash deploy/selftest/selftest.sh
 #
-# Prérequis vérifiables : binaires `go` (≥ 1.24) et `opa` (≥ 1.0) dans le
+# Prérequis vérifiables : binaires `go` (≥ 1.26) et `opa` (≥ 1.0) dans le
 # PATH, python3. En cas d'absence : STOP — le script sort en erreur avant
 # tout test (fail-closed, pas de « skipped » silencieux).
 #

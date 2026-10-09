@@ -22,7 +22,7 @@ go version
 getent hosts cell-a   # ou IP : joignabilité de la cellule de rattachement
 ```
 
-**Critère de succès observable** : go ≥ 1.24 ; la cellule répond au nom
+**Critère de succès observable** : go ≥ 1.26 ; la cellule répond au nom
 ou à l'IP prévue.
 
 **En cas d'échec : STOP** — pas de cellule joignable, pas de PEP utile ;
