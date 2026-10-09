@@ -57,6 +57,11 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   approve (and, from k = 2, a submitter apart from them: see "Submitter ≠ approver" above), otherwise `brokerd`
   refuses to start and names what is missing. `plan/approve` accepts `signature` (one) or `signatures` (a list),
   never both.
+- **Refusing a degraded request is open to more keys than approving it** ("restricting is not widening"): with
+  roles in `operators.json`, a key that holds `revoke` can refuse a degraded request without being able to approve
+  it; approving stays with `arbitrate`. Cells on the plain list of keys are unchanged. The new page
+  `deploy/governed-acts.md` lists every governed act, which side it is on and what it takes, and what is not
+  asymmetric yet (tightening the trust files costs as much as loosening them).
 - **Request bodies are decoded strictly** on the data planes and the operator routes
   ([#289](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/289), after
   [#241](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/241) and

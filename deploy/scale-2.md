@@ -93,7 +93,9 @@ approve it, or if every key that can submit would have to approve its own plan (
 arbitrate degraded requests. To separate those gestures, write each entry as `{"key": "<public>", "roles":
 ["submit", "approve", "revoke", "arbitrate"]}` and give each key only the roles it needs: approving *widens* what
 the cell allows, cutting *narrows* it, so a night-duty key can hold `revoke` and `arbitrate` without being able to
-approve anything, and a submitting desk can hold `submit` alone. The two forms are never mixed in one file,
+approve anything, and a submitting desk can hold `submit` alone. Refusing a degraded request restricts like
+revoking a plan, so a key that holds `revoke` may also refuse one; approving it stays with `arbitrate`
+([governed-acts.md](governed-acts.md)). The two forms are never mixed in one file,
 `approve`, `revoke` and `arbitrate` must each be held by at least one key, and the k signatures of a class-F or
 class-W approval must come from keys that hold `approve`. A key that signs an act for a role it does not hold is
 refused with a named reason (`plan-approval-role-denied`, `plan-revocation-role-denied`,

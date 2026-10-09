@@ -25,7 +25,7 @@ Proving that no route out exists except through TBP: [network-isolation.md](netw
 
 Where the cleartext behind a hash-only leaf lives and how to verify it (record journal, `tbp-audit`, #271): [audit.md](audit.md).
 
-Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md).
+Posture switch (monitor → closed, §5.3): [monitor-to-closed.md](monitor-to-closed.md). What each governed act costs, and why restricting is cheaper than widening: [governed-acts.md](governed-acts.md).
 Per-machine acceptance checklists: [checklists/](checklists/).
 
 ## Key custody (decision D97 — "no governance key outside its role")

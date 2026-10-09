@@ -150,6 +150,11 @@ type Options struct {
 	// trousseau (historique). Non nil, il ne peut pas être vide et chaque clé doit être dans OperatorKeys. Une clé du
 	// trousseau sans ce rôle est refusée avec ErrRoleDenied, pas confondue avec une signature inconnue.
 	ArbiterKeys []ed25519.PublicKey
+	// RefuserKeys : qui peut REFUSER une demande dégradée. Refuser restreint (la demande reste bloquée), approuver élargit
+	// (elle est admise) : le refus est ouvert à plus de clés que l'approbation. Nil ⇒ les mêmes que ArbiterKeys
+	// (historique) ; sinon un sous-ensemble du trousseau OperatorKeys, non vide, qui contient ArbiterKeys. Une clé qui
+	// peut refuser sans pouvoir approuver et qui tente d'approuver est refusée avec ErrRoleDenied.
+	RefuserKeys []ed25519.PublicKey
 	PresenceTTL time.Duration // 0 ⇒ DefaultPresenceTTL
 	EntryTTL    time.Duration // 0 ⇒ DefaultEntryTTL
 	MaxEntries  int           // 0 ⇒ DefaultMaxEntries
@@ -180,7 +185,8 @@ type Queue struct {
 	salt    []byte
 	leaves  translator.LeafSink
 	journal *registry.RecordStore
-	keys    []ed25519.PublicKey // clés ayant le rôle d'arbitrage
+	keys    []ed25519.PublicKey // clés ayant le rôle d'arbitrage (présence, approbation, refus)
+	refuse  []ed25519.PublicKey // clés qui peuvent REFUSER : les arbitres, et celles que la configuration y ajoute
 	allKeys []ed25519.PublicKey // tout le trousseau : sert à nommer un refus de rôle
 	presTTL time.Duration
 	entTTL  time.Duration
@@ -231,6 +237,31 @@ func NewQueue(o Options) (*Queue, error) {
 			arb[i] = append(ed25519.PublicKey(nil), k...)
 		}
 	}
+	refusers := arb
+	if o.RefuserKeys != nil {
+		if len(o.RefuserKeys) == 0 {
+			return nil, errors.New("arbiter: RefuserKeys vide — la file ne pourrait jamais être refusée")
+		}
+		known := make(map[[16]byte]bool, len(keys))
+		for _, k := range keys {
+			known[pep.KeyIDFromPublicKey(k)] = true
+		}
+		refusers = make([]ed25519.PublicKey, len(o.RefuserKeys))
+		have := make(map[[16]byte]bool, len(o.RefuserKeys))
+		for i, k := range o.RefuserKeys {
+			kid := pep.KeyIDFromPublicKey(k)
+			if !known[kid] {
+				return nil, fmt.Errorf("arbiter: la clé %d du rôle de refus n'est pas dans le trousseau d'opérateurs épinglé", i)
+			}
+			have[kid] = true
+			refusers[i] = append(ed25519.PublicKey(nil), k...)
+		}
+		for _, k := range arb {
+			if !have[pep.KeyIDFromPublicKey(k)] {
+				return nil, errors.New("arbiter: un arbitre doit pouvoir refuser — RefuserKeys contient ArbiterKeys (refuser restreint, approuver élargit : jamais l'inverse)")
+			}
+		}
+	}
 	pt := o.PresenceTTL
 	if pt == 0 {
 		pt = DefaultPresenceTTL
@@ -258,7 +289,7 @@ func NewQueue(o Options) (*Queue, error) {
 	}
 	salt := append([]byte(nil), o.Salt...)
 	return &Queue{
-		cellID: o.CellID, salt: salt, leaves: o.Leaves, journal: o.Journal, keys: arb, allKeys: keys,
+		cellID: o.CellID, salt: salt, leaves: o.Leaves, journal: o.Journal, keys: arb, refuse: refusers, allKeys: keys,
 		presTTL: pt, entTTL: et, max: mx, alarm: o.OnAlarm, now: now,
 		entries: make(map[[32]byte]*entry),
 	}, nil
@@ -267,7 +298,12 @@ func NewQueue(o Options) (*Queue, error) {
 // kidOf identifie le signataire d'un acte d'arbitrage : sa clé si elle tient le rôle ; ErrRoleDenied si elle est du
 // trousseau sans ce rôle ; ErrBadSignature sinon.
 func (q *Queue) kidOf(msg, sig []byte) ([16]byte, error) {
-	for _, pub := range q.keys {
+	return q.kidOfIn(q.keys, msg, sig)
+}
+
+// kidOfIn est kidOf pour un ensemble de clés donné : le refus accepte plus de clés que l'approbation.
+func (q *Queue) kidOfIn(keys []ed25519.PublicKey, msg, sig []byte) ([16]byte, error) {
+	for _, pub := range keys {
 		if ed25519.Verify(pub, msg, sig) {
 			return pep.KeyIDFromPublicKey(pub), nil
 		}
@@ -356,7 +392,12 @@ func (q *Queue) Decide(ctx context.Context, id [32]byte, v Verdict, expiry time.
 	if ttl := expiry.Sub(now); ttl < MinDecisionTTL || ttl > q.entTTL {
 		return ErrDecisionExpiry
 	}
-	kid, err := q.kidOf(DecisionMessage(q.cellID, id, e.ticket, v, expiry), sig)
+	// Refuser restreint, approuver élargit : le refus est ouvert à plus de clés que l'approbation.
+	allowed := q.keys
+	if v == VerdictRefuse {
+		allowed = q.refuse
+	}
+	kid, err := q.kidOfIn(allowed, DecisionMessage(q.cellID, id, e.ticket, v, expiry), sig)
 	if err != nil {
 		return err
 	}

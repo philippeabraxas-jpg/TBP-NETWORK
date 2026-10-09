@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -397,4 +399,107 @@ func queueDecisionMsg(t *testing.T, q *arbiter.Queue, id [32]byte, v arbiter.Ver
 	}
 	t.Fatalf("aucune mise en file vivante pour %x", id[:4])
 	return nil
+}
+
+// Refuser restreint, approuver élargit : avec des rôles, une clé qui ne fait que COUPER (« revoke ») refuse une demande dégradée
+// sans pouvoir l'approuver ni signaler sa présence — l'approbation reste aux arbitres.
+func TestBrokerdRefusingADegradedRequestIsOpenToRevokers(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "broker.sock")
+	fx := newRunFixture(t, sock)
+	_, cutter, _ := ed25519.GenerateKey(rand.Reader)
+	entry := func(pub ed25519.PublicKey, roles ...string) map[string]any {
+		return map[string]any{"key": hex.EncodeToString(pub), "roles": roles}
+	}
+	body, _ := json.Marshal([]map[string]any{
+		entry(fx.opPriv.Public().(ed25519.PublicKey), "approve", "arbitrate"),
+		entry(fx.opPriv2.Public().(ed25519.PublicKey), "approve"),
+		entry(fx.opPriv3.Public().(ed25519.PublicKey), "submit"),
+		entry(cutter.Public().(ed25519.PublicKey), "revoke"),
+	})
+	if err := os.WriteFile(fx.opsFile, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("provenance") == "true" {
+			_, _ = w.Write([]byte(`{"result":{"allow":true},"provenance":{"bundles":{"/opa/bundle.tar.gz":{"revision":"` + fx.env["TBP_POLICY_ID"] + `"}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"result":{"allow":true}}`))
+	}))
+	defer opa.Close()
+	fx.env["TBP_OPA_ENDPOINT"] = opa.URL
+	tr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer tr.Close()
+	fx.env["TBP_TRANSLATOR_GUARD"] = "1"
+	fx.env["TBP_TRANSLATOR_PROBE_URL"] = tr.URL + "/health"
+	fx.env["TBP_TRANSLATOR_PROBE_INTERVAL_MS"] = "500"
+	fx.env["TBP_ARBITRATION"] = "1"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, mapGetenv(fx.env), statPresent) }()
+	waitSocket(t, sock)
+	waitSocket(t, fx.adminSock)
+	hc := unixClient(t, sock)
+	adminHC := unixClient(t, fx.adminSock)
+	const intent = `{"action":"read","resource":"doc-1","class":0}`
+	post := func(path string, v any) (int, string) {
+		b, _ := json.Marshal(v)
+		resp, err := adminHC.Post("http://brokerd"+path, "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out bytes.Buffer
+		_, _ = out.ReadFrom(resp.Body)
+		return resp.StatusCode, out.String()
+	}
+	act := func() map[string]any {
+		b, _ := json.Marshal(map[string]string{"subject": "agent-1", "intent": intent})
+		resp, err := hc.Post("http://brokerd/v1/actions", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&m)
+		return m
+	}
+	id := arbiter.IntentID("agent-1", []byte(intent))
+	hexID := hex.EncodeToString(id[:])
+
+	// la clé qui ne fait que couper ne signale pas la présence ; l'arbitre, si
+	now := time.Now().UTC().Truncate(time.Second)
+	if code, out := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(cutter, arbiter.PresenceMessage("cell-a", now)))}); code != http.StatusBadRequest || !strings.Contains(out, "rôle d'arbitrage") {
+		t.Fatalf("présence par une clé qui ne fait que couper : %d %s", code, out)
+	}
+	if code, out := post("/v1/supervision/degraded/presence", arbPresenceRequest{At: now, Signature: hex.EncodeToString(ed25519.Sign(fx.opPriv, arbiter.PresenceMessage("cell-a", now)))}); code != http.StatusOK {
+		t.Fatalf("présence de l'arbitre : %d %s", code, out)
+	}
+	if m := act(); m["reason"] != "arbitration-pending" {
+		t.Fatalf("verdict différé attendu : %v", m)
+	}
+	exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+	sign := func(priv ed25519.PrivateKey, v arbiter.Verdict) string {
+		return hex.EncodeToString(ed25519.Sign(priv, arbiter.DecisionMessage("cell-a", id, httpTicket(t, adminHC, hexID), v, exp)))
+	}
+	// approuver élargit : refusé à la clé qui ne fait que couper
+	if code, out := post("/v1/supervision/degraded/decide", arbDecideRequest{ID: hexID, Verdict: "approve", ExpiresAt: exp, Signature: sign(cutter, arbiter.VerdictApprove)}); code != http.StatusBadRequest || !strings.Contains(out, "rôle d'arbitrage") {
+		t.Fatalf("approbation par une clé qui ne fait que couper : %d %s", code, out)
+	}
+	if m := act(); m["reason"] != "arbitration-pending" {
+		t.Fatalf("une approbation refusée ne doit rien débloquer : %v", m)
+	}
+	// refuser restreint : ouvert à la même clé
+	if code, out := post("/v1/supervision/degraded/decide", arbDecideRequest{ID: hexID, Verdict: "refuse", ExpiresAt: exp, Signature: sign(cutter, arbiter.VerdictRefuse)}); code != http.StatusOK {
+		t.Fatalf("refus par une clé qui peut couper : %d %s", code, out)
+	}
+	if m := act(); m["reason"] != "arbitration-refused" || m["allow"] != false {
+		t.Fatalf("la demande refusée doit l'être : %v", m)
+	}
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run: %v", err)
+	}
 }

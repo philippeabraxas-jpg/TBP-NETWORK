@@ -915,7 +915,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	var arbQueue *arbiter.Queue
 	if cfg.arbitration.enabled {
 		arbQueue, err = arbiter.NewQueue(arbiter.Options{
-			CellID: cfg.cellID, Salt: cfg.salt, Leaves: cellLog, Journal: auditStore, OperatorKeys: operators.All, ArbiterKeys: operators.Arbiters,
+			CellID: cfg.cellID, Salt: cfg.salt, Leaves: cellLog, Journal: auditStore, OperatorKeys: operators.All, ArbiterKeys: operators.Arbiters, RefuserKeys: operators.Refusers,
 			PresenceTTL: cfg.arbitration.presenceTTL, EntryTTL: cfg.arbitration.entryTTL, MaxEntries: cfg.arbitration.maxPending,
 			OnAlarm: onTrip,
 		})

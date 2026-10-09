@@ -50,6 +50,9 @@ type operatorKeyring struct {
 	Approvers  []ed25519.PublicKey
 	Revokers   []ed25519.PublicKey
 	Arbiters   []ed25519.PublicKey
+	// Refusers peut REFUSER une demande dégradée : les arbitres, et les clés qui tiennent « revoke ». Refuser restreint
+	// comme révoquer ; approuver élargit, et reste réservé aux arbitres.
+	Refusers []ed25519.PublicKey
 }
 
 type operatorEntry struct {
@@ -124,6 +127,15 @@ func loadOperatorKeyring(path string) (operatorKeyring, error) {
 				ring.Arbiters = append(ring.Arbiters, key)
 			default:
 				return ring, fmt.Errorf("clé d'opérateur %q : rôle inconnu %q (attendus : %v)", pubHex, r, operatorRoles)
+			}
+		}
+	}
+	seenRefuser := map[string]bool{}
+	for _, group := range [][]ed25519.PublicKey{ring.Arbiters, ring.Revokers} {
+		for _, k := range group {
+			if !seenRefuser[string(k)] {
+				seenRefuser[string(k)] = true
+				ring.Refusers = append(ring.Refusers, k)
 			}
 		}
 	}
