@@ -84,7 +84,7 @@ func pendingHashes(t *testing.T, hc *http.Client) map[string]bool {
 const goodSubmit = `{"subject":"agent-1","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}`
 
 func TestPlanSubmitIsStrict(t *testing.T) {
-	_, hc := startPlanBrokerd(t)
+	fx, hc := startPlanBrokerd(t)
 	for name, body := range map[string]string{
 		"clé en double à la racine (sujet : dernier gagne)": `{"subject":"agent-2","subject":"agent-1","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}`,
 		"clé en double dans une étape":                      `{"subject":"agent-1","steps":[{"action":"read","action":"write","resource":"doc-1","params_hex":""}]}`,
@@ -103,8 +103,8 @@ func TestPlanSubmitIsStrict(t *testing.T) {
 			t.Errorf("%s : un plan a été scellé malgré le refus (%d → %d)", name, len(before), len(after))
 		}
 	}
-	// voisin : le même plan, propre, est scellé
-	code, out := postBody(t, hc, "/v1/supervision/plan/submit", goodSubmit)
+	// voisin : le même plan, propre (et signé : la cellule est à k = 2), est scellé
+	code, out := postBody(t, hc, "/v1/supervision/plan/submit", fx.signedSubmitBody("agent-1", []planSubmitStepRequest{{Action: "read", Resource: "doc-1"}}))
 	if code != http.StatusOK || !strings.Contains(out, `"plan_hash"`) {
 		t.Fatalf("plan valide refusé : %d %s", code, out)
 	}
@@ -112,7 +112,7 @@ func TestPlanSubmitIsStrict(t *testing.T) {
 
 func TestPlanApproveAndRevokeAreStrict(t *testing.T) {
 	fx, hc := startPlanBrokerd(t)
-	code, out := postBody(t, hc, "/v1/supervision/plan/submit", goodSubmit)
+	code, out := postBody(t, hc, "/v1/supervision/plan/submit", fx.signedSubmitBody("agent-1", []planSubmitStepRequest{{Action: "read", Resource: "doc-1"}}))
 	if code != http.StatusOK {
 		t.Fatalf("soumission : %d %s", code, out)
 	}

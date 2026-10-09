@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -853,5 +854,101 @@ func TestPlanAssembleMergesSeparatelySignedApprovals(t *testing.T) {
 	// refus : une échéance hors bornes pour -expires-at
 	if err := cmdPlanApprove([]string{"-plan-hash", hexHash, "-expires-at", time.Now().Add(5 * time.Hour).UTC().Format(time.RFC3339), "-key", f1, "-out", filepath.Join(dir, "y.json")}); err == nil {
 		t.Fatal("-expires-at à 5 h accepté")
+	}
+}
+
+// La soumission que plansubmit écrit est EXACTEMENT celle que le vrai ContractStore vérifie : mêmes octets signés, même
+// cellule. Chaque champ du message la casse (cellule, contenu), et l'outil refuse les bornes de l'échéance.
+func TestPlanSubmitSignsWhatTheBrokerVerifies(t *testing.T) {
+	dir := t.TempDir()
+	subKey, subPath := keyFile(t, dir, "submitter", 5)
+	appKey, _ := keyFile(t, dir, "approver", 6)
+	now := time.Now()
+	store, err := pep.NewContractStore(pep.ContractOptions{
+		CellID: "cell-s2", OperatorKeys: []ed25519.PublicKey{subKey.Public().(ed25519.PublicKey), appKey.Public().(ed25519.PublicKey)},
+		SubmitterKeys: []ed25519.PublicKey{subKey.Public().(ed25519.PublicKey)}, SeparateDuties: true,
+		Salt: []byte("sel-de-test-16-octets+"), Leaves: nopSink{}, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPath := writePlan(t, dir, planJSON)
+	submit := func(cell string, plan string, extra ...string) (map[string]any, error) {
+		out := filepath.Join(dir, "submission-"+cell+".json")
+		args := append([]string{"-cell", cell, "-plan", plan, "-key", subPath, "-out", out}, extra...)
+		if err := cmdPlanSubmit(args); err != nil {
+			return nil, err
+		}
+		raw, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		return body, nil
+	}
+	// ce que brokerd fait du corps : les étapes en clair, l'échéance, la signature
+	post := func(body map[string]any) error {
+		raw, _ := json.Marshal(body)
+		var req struct {
+			Subject string `json:"subject"`
+			Steps   []struct {
+				Action, Resource string
+				ParamsHex        string `json:"params_hex"`
+			} `json:"steps"`
+			ExpiresAt time.Time `json:"expires_at"`
+			Signature string    `json:"signature"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			t.Fatal(err)
+		}
+		steps := make([]pep.PlanStep, 0, len(req.Steps))
+		for _, s := range req.Steps {
+			params, _ := hex.DecodeString(s.ParamsHex)
+			steps = append(steps, pep.PlanStep{Action: s.Action, Resource: s.Resource, ParamsHash: pep.HashParams(params)})
+		}
+		sig, _ := hex.DecodeString(req.Signature)
+		_, err := store.SubmitSigned(context.Background(), req.Subject, steps, req.ExpiresAt, sig)
+		return err
+	}
+
+	// signée pour une AUTRE cellule : refusée
+	other, err := submit("cell-autre", planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := post(other); !errors.Is(err, pep.ErrPlanSubmissionSignature) {
+		t.Fatalf("soumission signée pour une autre cellule : %v", err)
+	}
+	// le contenu modifié après la signature : refusé
+	body, err := submit("cell-s2", planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := map[string]any{}
+	for k, v := range body {
+		tampered[k] = v
+	}
+	tampered["subject"] = "agent-x"
+	if err := post(tampered); !errors.Is(err, pep.ErrPlanSubmissionSignature) {
+		t.Fatalf("plan modifié après la signature : %v", err)
+	}
+	// voisin autorisé : la soumission telle que l'outil l'écrit
+	if err := post(body); err != nil {
+		t.Fatalf("la soumission écrite par plansubmit est refusée par le store : %v", err)
+	}
+	// bornes de l'échéance et arguments requis
+	for name, args := range map[string][]string{
+		"ttl trop court": {"-ttl", "1"},
+		"ttl trop long":  {"-ttl", "601"},
+	} {
+		if _, err := submit("cell-s2", planPath, args...); err == nil {
+			t.Errorf("%s : accepté", name)
+		}
+	}
+	if err := cmdPlanSubmit([]string{"-cell", "cell-s2"}); err == nil {
+		t.Error("arguments manquants : accepté")
 	}
 }

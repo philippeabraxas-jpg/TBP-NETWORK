@@ -92,6 +92,7 @@ func TestOperatorRolesThroughTheAdminSocket(t *testing.T) {
 		body, _ := json.Marshal([]map[string]any{
 			entry(fx.opPriv.Public().(ed25519.PublicKey), "approve"),
 			entry(fx.opPriv2.Public().(ed25519.PublicKey), "approve"),
+			entry(fx.opPriv3.Public().(ed25519.PublicKey), "submit"),
 			entry(nightPub, "revoke", "arbitrate"),
 		})
 		if err := os.WriteFile(fx.opsFile, body, 0o600); err != nil {
@@ -113,7 +114,12 @@ func TestOperatorRolesThroughTheAdminSocket(t *testing.T) {
 		return postBody(t, hc, "/v1/supervision/plan/revoke", fmt.Sprintf(`{"plan_hash":%q,"expires_at":%q,"signature":%q}`, hash, ts, sig))
 	}
 
-	hash, h := submitPlanFor(t, hc, "agent-w") // k = 2
+	// un approbateur n'a pas le rôle de soumission : sa soumission signée est refusée, avec un refus nommé
+	if code, out := postBody(t, hc, "/v1/supervision/plan/submit",
+		fx.signedSubmitBodyBy(fx.opPriv, "agent-w", []planSubmitStepRequest{{Action: "pay", Resource: "invoice-42"}})); code != http.StatusBadRequest || !strings.Contains(out, "rôle de soumission") {
+		t.Fatalf("soumission par une clé qui ne fait qu'approuver : %d %s", code, out)
+	}
+	hash, h := submitPlanFor(t, fx, hc, "agent-w") // k = 2
 	// l'astreinte de nuit ne complète pas un quorum d'approbation
 	if code, out := approve(hash, h, fx.opPriv, nightPriv); code != http.StatusBadRequest || !strings.Contains(out, "rôle d'approbation") {
 		t.Fatalf("quorum complété par la clé de nuit : %d %s", code, out)

@@ -2,6 +2,11 @@ package main
 
 // plantools.go — le geste d'opérateur du contrat de plan (§4.2, #177) pour les actions de classe I/W.
 //
+//	quorumproof plansubmit -cell ID -plan PLAN.json [-ttl S] -key FILE -out SOUMISSION.json
+//	    signe la SOUMISSION d'un plan avec la clé d'opérateur qui tient le rôle « submit » et écrit le corps à poster sur
+//	    POST /v1/supervision/plan/submit : le plan en clair, une échéance signée et la signature. Le broker sait alors QUI
+//	    a soumis, et le soumetteur n'approuve pas son propre plan (une cellule à k ≥ 2 refuse la soumission non signée).
+//	    -cell est TBP_CELL_ID : le message signé le porte, une signature ne vaut que pour une cellule
 //	quorumproof planapprove -plan-hash HEX64 [-ttl S | -expires-at T] -key FILE [-key FILE …] -out APPROBATION.json
 //	    signe l'approbation d'un plan avec la clé d'OPÉRATEUR (celle de TBP_OPERATOR_KEYS_FILE) et écrit
 //	    le corps à poster sur POST /v1/supervision/plan/approve (socket d'administration de brokerd).
@@ -164,6 +169,44 @@ func cmdPlanAssemble(args []string) error {
 	return writeJSON0600(*out, merged)
 }
 
+func cmdPlanSubmit(args []string) error {
+	fs := flag.NewFlagSet("plansubmit", flag.ContinueOnError)
+	cell := fs.String("cell", "", "identité de la cellule du broker (TBP_CELL_ID)")
+	planPath := fs.String("plan", "", "le plan en clair : le corps de plan/submit (subject + steps)")
+	ttl := fs.Int("ttl", 300, "durée de validité de la soumission, en secondes")
+	keyFile := fs.String("key", "", "clé d'opérateur qui tient le rôle « submit » (fichier de graine ou de clé, hex)")
+	out := fs.String("out", "", "corps JSON à écrire (0600)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cell == "" || *planPath == "" || *keyFile == "" || *out == "" {
+		return errors.New("-cell, -plan, -key et -out requis")
+	}
+	if len(*cell) > 255 {
+		return errors.New("-cell : 255 octets au plus")
+	}
+	if *ttl < 10 || *ttl > int(pep.MaxSubmissionTTL/time.Second) {
+		return fmt.Errorf("-ttl hors bornes [10, %d] s", int(pep.MaxSubmissionTTL/time.Second))
+	}
+	pf, subject, steps, err := readPlanFileFull(*planPath)
+	if err != nil {
+		return err
+	}
+	key, err := loadKey(*keyFile)
+	if err != nil {
+		return err
+	}
+	exp := time.Now().Add(time.Duration(*ttl) * time.Second).UTC()
+	sig := ed25519.Sign(key, pep.SubmissionMessage(*cell, subject, steps, exp))
+	fmt.Fprintf(os.Stderr, "quorumproof: soumission du plan pour %s (%d étape(s)) signée pour la cellule %s, expire %s\n", subject, len(steps), *cell, exp.Format(time.RFC3339))
+	return writeJSON0600(*out, map[string]any{
+		"subject":    pf.Subject,
+		"steps":      pf.Steps,
+		"expires_at": exp.Format(time.RFC3339),
+		"signature":  hex.EncodeToString(sig),
+	})
+}
+
 func cmdPlanRevoke(args []string) error {
 	fs := flag.NewFlagSet("planrevoke", flag.ContinueOnError)
 	planHash := fs.String("plan-hash", "", "hash du plan (hex 64)")
@@ -234,19 +277,31 @@ type planFile struct {
 // readPlanFile décode STRICTEMENT le plan (champ inconnu, contenu après l'objet : refus) et
 // applique les bornes du broker (pep.ValidatePlan).
 func readPlanFile(path string) (string, []pep.PlanStep, error) {
+	_, subject, steps, err := readPlanFileFull(path)
+	return subject, steps, err
+}
+
+// readPlanFileFull rend aussi le plan tel qu'il est écrit, pour le ré-émettre à l'identique dans une soumission signée.
+func readPlanFileFull(path string) (planFile, string, []pep.PlanStep, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", nil, err
+		return planFile{}, "", nil, err
 	}
 	var pf planFile
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&pf); err != nil {
-		return "", nil, fmt.Errorf("-plan %s : %w", path, err)
+		return planFile{}, "", nil, fmt.Errorf("-plan %s : %w", path, err)
 	}
 	if dec.More() {
-		return "", nil, fmt.Errorf("-plan %s : contenu après l'objet JSON", path)
+		return planFile{}, "", nil, fmt.Errorf("-plan %s : contenu après l'objet JSON", path)
 	}
+	subject, steps, err := planSteps(pf)
+	return pf, subject, steps, err
+}
+
+// planSteps convertit le plan lu en étapes scellables et applique les bornes du broker.
+func planSteps(pf planFile) (string, []pep.PlanStep, error) {
 	steps := make([]pep.PlanStep, 0, len(pf.Steps))
 	for i, s := range pf.Steps {
 		params, err := hex.DecodeString(s.ParamsHex)
