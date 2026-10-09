@@ -93,7 +93,7 @@ feuilles chez le producteur, clé du moniteur au superviseur.
 
 ### Logiciel — chaque machine
 
-- Debian 12 (bookworm, cible du dépôt), **Go ≥ 1.24**, **OPA ≥ 1.0**,
+- Debian 12 (bookworm, cible du dépôt), **Go ≥ 1.26**, **OPA ≥ 1.0**,
   python3 — vérifiés à l'étape commune 1 de [README.md](README.fr.md).
 - Routeur : `nftables`, `freeradius`, `hostapd`.
 - Superviseur : `softhsm2-util` (dev) ou le PKCS#11 du HSM (prod).

@@ -93,7 +93,7 @@ producer, monitor key with the supervisor.
 
 ### Software — every machine
 
-- Debian 12 (bookworm, the repo's target), **Go ≥ 1.24**, **OPA ≥ 1.0**,
+- Debian 12 (bookworm, the repo's target), **Go ≥ 1.26**, **OPA ≥ 1.0**,
   python3 — verified in common step 1 of [README.md](README.md).
 - Router: `nftables`, `freeradius`, `hostapd`.
 - Supervisor: `softhsm2-util` (dev) or the HSM's PKCS#11 (prod).

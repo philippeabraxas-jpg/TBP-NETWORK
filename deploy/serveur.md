@@ -22,7 +22,7 @@ go version
 getent hosts cell-a   # or IP: reachability of the attachment cell
 ```
 
-**Observable success criterion**: go ≥ 1.24; the cell answers at the
+**Observable success criterion**: go ≥ 1.26; the cell answers at the
 expected name or IP.
 
 **On failure: STOP** — no reachable cell, no useful PEP;
