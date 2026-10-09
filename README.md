@@ -461,9 +461,7 @@ of effort. They run in parallel.
    what a cell runs ([#315](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/315)).
 3. **Foundations of the full-scale handshake** ([#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)).
    One handshake package, with shared wire formats and golden test vectors
-   first, built so that remote administration of a cell is its first profile
-   and inter-cell and inter-entity trust come later on the same code. Remote
-   consoles are designed on that principle; they are not started in code.
+   first; inter-cell and inter-entity trust come later on the same code.
 4. **Standards alignment — from a proprietary policy model to an
    interoperable one** ([#87](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/87)).
    TBP's rule taxonomy (classes F/I/W/OUT, §5.3),

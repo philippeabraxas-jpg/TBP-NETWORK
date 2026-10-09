@@ -492,7 +492,7 @@ func runCell(s *suite, cfg config, prof cellProfile) {
 		unsigned == http.StatusForbidden, fmt.Sprintf("status=%d", unsigned))
 
 	if prof.quorumMin >= 2 {
-		// Restreindre n'est pas élargir (revue des consoles, point C1) : une signature d'un contrôleur du
+		// Restreindre n'est pas élargir : une signature d'un contrôleur du
 		// trousseau suffit à FERMER, une signature d'un inconnu non, et ROUVRIR exige encore le quorum.
 		stranger := devKey("not-in-keyring")
 		status, _, _ := postUnixJSON(adminHC, "http://pepd-admin/v1/mode", map[string]any{

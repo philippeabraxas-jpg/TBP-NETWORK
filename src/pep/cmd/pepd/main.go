@@ -576,7 +576,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("quorum: %w", err)
 	}
-	// Restreindre n'est pas élargir (revue des consoles, point C1) : passer de monitor à closed peut se
+	// Restreindre n'est pas élargir : passer de monitor à closed peut se
 	// faire avec TBP_MODE_RESTRICT_QUORUM_MIN signatures (1 par défaut) ; le retour à monitor et la sortie de
 	// l'état refusé gardent TBP_QUORUM_MIN. Le réglage est dans la posture attestée du témoin.
 	restrictMin, err := restrictQuorumFromEnv(os.Getenv)
