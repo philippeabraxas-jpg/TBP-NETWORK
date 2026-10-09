@@ -87,7 +87,16 @@ clés, détenues chacune par une personne différente qui approuve les plans : �
 exige une) :
 `quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (et `operator-2`), et
 leurs `public=` vont dans `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuse de démarrer si
-le registre contient un agent de classe F ou W et que le trousseau a moins de k clés distinctes.
+le registre contient un agent de classe F ou W et que moins de k clés distinctes peuvent approuver.
+
+**Rôles (facultatif).** Avec la liste simple ci-dessus, toute clé peut approuver un plan, en révoquer un et
+arbitrer les demandes dégradées. Pour séparer ces gestes, écrire chaque entrée sous la forme `{"key": "<public>",
+"roles": ["approve", "revoke", "arbitrate"]}` et ne donner à chaque clé que les rôles dont elle a besoin :
+approuver *élargit* ce que la cellule autorise, couper le *restreint*, donc une clé d'astreinte de nuit peut tenir
+`revoke` et `arbitrate` sans pouvoir rien approuver. Les deux formes ne se mélangent jamais dans un même fichier,
+chaque rôle doit être tenu par au moins une clé, et les k signatures d'une approbation de classe F ou W doivent
+venir de clés qui tiennent `approve`. Une clé qui signe un acte pour un rôle qu'elle n'a pas est refusée avec une
+raison nommée (`plan-approval-role-denied`, `plan-revocation-role-denied`), et le refus laisse une feuille.
 
 **Commande** : écrire `/etc/tbp/brokerd.env` comme en cellule.fr.md étape 7 avec ces valeurs d'échelle 2, puis le
 démarrer :

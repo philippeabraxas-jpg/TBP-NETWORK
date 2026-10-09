@@ -219,7 +219,7 @@ src/
                            stratified human sampling, `TBTM1` registry leaf)
 deploy/                 Multi-machine deployment guides (router, cell, server,
                         supervisor) with per-machine checklists, monitor→closed
-                        posture switch, and an executable selftest (258 controls)
+                        posture switch, and an executable selftest (261 controls)
 scripts/genesis/        Genesis ceremony tooling (epoch 0, controller keys §12)
 lab/                    docker-compose PoC + containerlab P1 topology + netns
                         tests (802.1X fail-closed, MAB/IoT VLAN, OCSP remediation)
@@ -236,7 +236,7 @@ packaged: [`deploy/scale-1.md`](deploy/scale-1.md) and
 [`deploy/scale-2.md`](deploy/scale-2.md) are executable guides.** Every
 `src/` package carries its own test suite (Go unit/integration tests,
 Python for the audit and measurement tooling), and `deploy/selftest/`
-executes the deployment guides end to end (**258 controls, 0 failures** at
+executes the deployment guides end to end (**261 controls, 0 failures** at
 the time of writing — a guide that drifts from the code breaks there, not
 at the operator's). Since the first pilot cut the work has been hardening:
 several security reviews and their follow-ups, an encrypted journal of the
@@ -323,7 +323,7 @@ measured user-experience regression = 0):
    is the entry point (what, where, why, prerequisites); it synthesizes
    the per-role guides (router, cell, server, supervisor) and their
    per-machine acceptance checklists. `deploy/selftest/` **executes**
-   the guides (`bash deploy/selftest/selftest.sh`, 258 controls,
+   the guides (`bash deploy/selftest/selftest.sh`, 261 controls,
    fail-closed) — run it before touching a real machine.
 
 At every step, measure against the friction budget (§9.1) — see

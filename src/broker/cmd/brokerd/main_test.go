@@ -1071,7 +1071,7 @@ func TestLoadOperatorKeysRefusesTheSameKeyInTwoCases(t *testing.T) {
 		return p
 	}
 	lo := strings.Repeat("ab", 32)
-	if keys, err := loadOperatorKeys(write(`["` + lo + `","` + strings.Repeat("cd", 32) + `"]`)); err != nil || len(keys) != 2 {
+	if ring, err := loadOperatorKeyring(write(`["` + lo + `","` + strings.Repeat("cd", 32) + `"]`)); err != nil || len(ring.All) != 2 {
 		t.Fatalf("liste valide refusée : %v", err)
 	}
 	for name, body := range map[string]string{
@@ -1081,7 +1081,7 @@ func TestLoadOperatorKeysRefusesTheSameKeyInTwoCases(t *testing.T) {
 		"contenu final":              `["` + lo + `"] []`,
 		"vide":                       `[]`,
 	} {
-		if _, err := loadOperatorKeys(write(body)); err == nil {
+		if _, err := loadOperatorKeyring(write(body)); err == nil {
 			t.Errorf("%s : accepté", name)
 		}
 	}

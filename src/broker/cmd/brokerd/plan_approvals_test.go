@@ -64,8 +64,18 @@ func TestCheckOperatorQuorum(t *testing.T) {
 // opérateurs) et rend le client du socket d'administration.
 func startQuorumBrokerd(t *testing.T) (*runFixture, *http.Client) {
 	t.Helper()
+	return startQuorumBrokerdWith(t, nil)
+}
+
+// startQuorumBrokerdWith : comme startQuorumBrokerd, avec une chance d'adapter la configuration (le fichier des
+// opérateurs, par exemple) avant le démarrage.
+func startQuorumBrokerdWith(t *testing.T, adapt func(*runFixture)) (*runFixture, *http.Client) {
+	t.Helper()
 	sock := filepath.Join(t.TempDir(), "broker.sock")
 	fx := newRunFixture(t, sock)
+	if adapt != nil {
+		adapt(fx)
+	}
 	agents, _ := json.Marshal(map[string]agentRegistryEntry{
 		"agent-f": {Class: classOf(0)}, "agent-i": {Class: classOf(1)}, "agent-w": {Class: classOf(2)},
 	})

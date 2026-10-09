@@ -85,7 +85,16 @@ by a different person who approves plans: at k = 2 you need **at least two** (#1
 class-F or class-W agent takes k distinct operator signatures (class I takes one):
 `quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (and `operator-2`),
 and their `public=` values go into `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuses to
-start if the registry holds a class-F or class-W agent and the keyring has fewer than k distinct keys.
+start if the registry holds a class-F or class-W agent and fewer than k distinct keys can approve.
+
+**Roles (optional).** With the plain list above, every key can approve a plan, revoke one and arbitrate degraded
+requests. To separate those gestures, write each entry as `{"key": "<public>", "roles": ["approve", "revoke",
+"arbitrate"]}` and give each key only the roles it needs: approving *widens* what the cell allows, cutting
+*narrows* it, so a night-duty key can hold `revoke` and `arbitrate` without being able to approve anything. The
+two forms are never mixed in one file, every role must be held by at least one key, and the k signatures of a
+class-F or class-W approval must come from keys that hold `approve`. A key that signs an act for a role it does
+not hold is refused with a named reason (`plan-approval-role-denied`, `plan-revocation-role-denied`), and the
+refusal leaves a leaf.
 
 **Command**: write `/etc/tbp/brokerd.env` as in cellule.md step 7 with these scale-2 values, then start it:
 

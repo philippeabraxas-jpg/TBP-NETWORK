@@ -528,7 +528,9 @@ go build -o /usr/local/bin/brokerd ./src/broker/cmd/brokerd
 #                                      # TBP_TOPOLOGY=mono) ⇒ mono-cellule
 #                                      # mode (#97): no epoch lease minted,
 #                                      # epoch0.json not read
-#   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json
+#   TBP_OPERATOR_KEYS_FILE=/etc/tbp/operators.json  # public keys, optionally
+#                                  # with roles (approve, revoke, arbitrate):
+#                                  # deploy/scale-2.md step 3
 #   TBP_AGENT_REGISTRY_FILE=/etc/tbp/agents.json  # security review #125:
 #                                      # JSON {"<subject>": {"class": 0..3,
 #                                      # "quota"?: {"max_volume",

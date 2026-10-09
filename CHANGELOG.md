@@ -32,6 +32,12 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 - Operator gestures for plans: recompute a plan hash before signing it with `quorumproof planhash`
   ([#273](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/273)); revoke an approved plan
   ([#244](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/244)).
+- **Roles for operator keys**: `operators.json` may give each key only the roles it needs (`approve`, `revoke`,
+  `arbitrate`). Approving widens what the cell allows, cutting narrows it, so a night-duty key can revoke a plan or
+  rule on a degraded request without being able to approve anything. The plain list of keys still works and gives
+  every key every role. A key signing for a role it does not hold is refused with a named reason and a leaf; the
+  k signatures of a class-F or class-W approval must come from keys that hold `approve`. `operators.json` is a
+  measured trust file: changing it on a cell that already ran takes one transition proof, as for any other.
 - Release machinery: `scripts/release/build.sh` builds `pepd`, `brokerd`, `anod`, `supervisord`,
   `opawatchdog`, `quorumproof` and `tbp-audit` (checked on every pull request); a `vX.Y.Z` tag publishes them
   with SLSA provenance and a CycloneDX SBOM; `SECURITY.md`.
