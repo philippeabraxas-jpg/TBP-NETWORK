@@ -57,7 +57,7 @@ un rôle qu'elle n'a pas est refusée avec une raison nommée, et le refus laiss
 
 1. Dire de quel côté il est, avec le pire qu'un appel forgé puisse faire.
 2. Donner à ce côté son prix : restreindre, c'est une clé ou un quorum réduit ; élargir, c'est k clés.
-3. Mettre le prix dans le code qui l'applique (`brokerd`, `pepd`), jamais dans une passerelle ou un script qu'un
-   chemin local contournerait.
+3. Mettre le prix dans le code qui l'applique (`brokerd`, `pepd`), jamais dans une enveloppe ou un script qu'un
+   appel direct contournerait.
 4. Laisser une feuille pour l'acte, et une pour chaque refus.
 5. L'ajouter à ce tableau.

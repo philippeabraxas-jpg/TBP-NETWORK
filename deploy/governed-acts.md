@@ -54,7 +54,7 @@ not hold is refused with a named reason, and the refusal leaves a leaf.
 
 1. Say which side it is on, with the worst a forged call can do.
 2. Give the side its price: restricting is one key or a reduced quorum; widening is k keys.
-3. Put the price in the code that applies it (`brokerd`, `pepd`), never in a gateway or a script that a local path
-   would skip.
+3. Put the price in the code that applies it (`brokerd`, `pepd`), never in a wrapper or a script that a direct
+   call would skip.
 4. Leave a leaf for the act, and one for each refusal.
 5. Add it to this table.

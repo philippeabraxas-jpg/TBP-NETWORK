@@ -10,7 +10,7 @@ package pep
 // de la même façon : tout changement de posture d'application est un
 // événement de gouvernance, pas un détail d'exploitation.
 //
-// Restreindre n'est pas élargir (revue des consoles, point C1). Passer de monitor à closed RESTREINT : le
+// Restreindre n'est pas élargir. Passer de monitor à closed RESTREINT : le
 // pire qu'un acte faux puisse faire est d'appliquer les règles que la cellule a déjà. Revenir à monitor, ou sortir de
 // ModeRefused, ÉLARGIT : une preuve de k contrôleurs, toujours. Exiger k signatures pour fermer, c'est rendre
 // l'acte de sécurité le plus simple impossible le jour où deux contrôleurs sur trois sont injoignables. Un second

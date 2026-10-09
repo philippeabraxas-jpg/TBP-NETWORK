@@ -782,7 +782,7 @@ func TestPepdProvisioningAndMeasuredBootLeavesAreJournaled(t *testing.T) {
 	}
 }
 
-// Qui peut FERMER la cellule est un réglage de sécurité (revue des consoles, point C1) : engagé dans la posture,
+// Qui peut FERMER la cellule est un réglage de sécurité : engagé dans la posture,
 // donc le changer entre deux démarrages diverge du témoin et ne s'autorise que par le quorum attesté.
 func TestPepdRestrictQuorumIsAttestedAndBounded(t *testing.T) {
 	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }

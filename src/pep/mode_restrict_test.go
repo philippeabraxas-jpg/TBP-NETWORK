@@ -1,6 +1,6 @@
 package pep
 
-// mode_restrict_test.go — restreindre n'est pas élargir (revue des consoles, point C1) : la bascule
+// mode_restrict_test.go — restreindre n'est pas élargir : la bascule
 // monitor → closed peut passer avec un quorum réduit ; le retour à monitor et la sortie de ModeRefused
 // exigent toujours le quorum complet. Chaque refus a son cas voisin accepté ; chaque test échoue si on retire
 // la règle qu'il couvre.
