@@ -142,8 +142,9 @@ func runScale2(s *suite, cfg config) {
 	// #196 : à k = 2, un plan de classe W exige DEUX opérateurs distincts — le trousseau en porte deux.
 	var opKeyPaths, opPubs []string
 	// Le troisième est l'astreinte de nuit : elle peut COUPER (révoquer un plan, trancher une demande dégradée), pas
-	// approuver — approuver élargit ce que la cellule autorise, couper le restreint.
-	for i := 1; i <= 3; i++ {
+	// approuver — approuver élargit ce que la cellule autorise, couper le restreint. Le quatrième est le poste qui SOUMET
+	// les plans : soumetteur ≠ approbateur, la soumission est signée et le soumetteur n'approuve pas.
+	for i := 1; i <= 4; i++ {
 		kp := filepath.Join(keysDir, fmt.Sprintf("operator-%d.key", i))
 		opOut, opErr, err := runCmd(cfg.repo, nil, qpBin, "keygen", "-key", kp, "-keyring", filepath.Join(keysDir, fmt.Sprintf("operator-%d-ring.json", i)))
 		pub := ""
@@ -163,6 +164,7 @@ func runScale2(s *suite, cfg config) {
 		{"key": opPubs[0], "roles": []string{"approve"}},
 		{"key": opPubs[1], "roles": []string{"approve"}},
 		{"key": opPubs[2], "roles": []string{"revoke", "arbitrate"}},
+		{"key": opPubs[3], "roles": []string{"submit"}},
 	})
 	agentsPath := filepath.Join(base, "agents.json")
 	agentsJSON, _ := json.Marshal(map[string]map[string]any{"agent-w": {"class": 2}})
@@ -247,10 +249,29 @@ func runScale2(s *suite, cfg config) {
 		})
 		s.add(ph, "plan "+name+" refusé à la soumission (#235)", st == http.StatusBadRequest, fmt.Sprintf("status=%d", st))
 	}
-	submitStatus, raw, err := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
+	// Soumetteur ≠ approbateur : à k = 2 la soumission est SIGNÉE (quorumproof plansubmit, clé du poste qui soumet).
+	submitPlan := func(name, plan string) (int, []byte) {
+		planPath := filepath.Join(base, name+"-plan.json")
+		subPath := filepath.Join(base, name+"-submission.json")
+		if err := os.WriteFile(planPath, []byte(plan), 0o600); err != nil {
+			return 0, []byte(err.Error())
+		}
+		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "plansubmit", "-cell", scale2CellID, "-plan", planPath, "-key", opKeyPaths[3], "-out", subPath); err != nil {
+			return 0, []byte(fmt.Sprintf("%v — %s", err, errB))
+		}
+		raw, _ := os.ReadFile(subPath)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		st, out, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", body)
+		return st, out
+	}
+	unsignedStatus, unsignedOut, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
 		"subject": "agent-w",
 		"steps":   []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
 	})
+	s.add(ph, "soumetteur ≠ approbateur : une soumission non signée est refusée à k = 2 — on sait qui soumet",
+		unsignedStatus == http.StatusBadRequest && strings.Contains(string(unsignedOut), "non signée"), fmt.Sprintf("status=%d %s", unsignedStatus, strings.TrimSpace(string(unsignedOut))))
+	submitStatus, raw := submitPlan("doc-1", `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}`)
 	var planSub daemonPlanSubmitResponse
 	if submitStatus == http.StatusOK {
 		err = json.Unmarshal(raw, &planSub)
@@ -348,10 +369,7 @@ func runScale2(s *suite, cfg config) {
 	approveStatus := postApproval(approvalFile)
 	s.add(ph, "plan soumis, approuvé par deux opérateurs distincts (quorumproof planapprove + planassemble, deploy/scale-2.md étape 4, #196)", approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
 	// rôles : sur un second plan, un approbateur ne révoque pas ; l'astreinte de nuit, si.
-	revStatus, revRaw, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
-		"subject": "agent-w",
-		"steps":   []map[string]string{{"action": "read", "resource": "doc-2", "params_hex": ""}},
-	})
+	revStatus, revRaw := submitPlan("doc-2", `{"subject":"agent-w","steps":[{"action":"read","resource":"doc-2","params_hex":""}]}`)
 	var revPlan daemonPlanSubmitResponse
 	_ = json.Unmarshal(revRaw, &revPlan)
 	if revStatus != http.StatusOK || revPlan.PlanHash == "" {

@@ -81,20 +81,29 @@ overwritten).
 class), the operator keys (`operators.json`, the keys that approve plans), the issuer seed and the cell salt
 prepared as in [cellule.md](cellule.md) step 7; `TBP_PROVISIONING_WITNESS_FILE` outside
 `TBP_REGISTRY_DIR`. The **operator keys** are created like controller keys — they are different keys, each held
-by a different person who approves plans: at k = 2 you need **at least two** (#196), because a plan for a
-class-F or class-W agent takes k distinct operator signatures (class I takes one):
-`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (and `operator-2`),
-and their `public=` values go into `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuses to
-start if the registry holds a class-F or class-W agent and fewer than k distinct keys can approve.
+by a different person: at k = 2 you need **at least three** — two approve (#196: a plan for a class-F or
+class-W agent takes k distinct operator signatures, class I takes one) and one **submits** the plans, because
+the one who proposes a plan is never the one who approves it:
+`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (and `operator-2`,
+`operator-3`), and their `public=` values go into `operators.json` (`["<public 1>", "<public 2>", "<public 3>"]`).
+`brokerd` refuses to start if the registry holds a class-F or class-W agent and fewer than k distinct keys can
+approve it, or if every key that can submit would have to approve its own plan (see "Roles" below).
 
-**Roles (optional).** With the plain list above, every key can approve a plan, revoke one and arbitrate degraded
-requests. To separate those gestures, write each entry as `{"key": "<public>", "roles": ["approve", "revoke",
-"arbitrate"]}` and give each key only the roles it needs: approving *widens* what the cell allows, cutting
-*narrows* it, so a night-duty key can hold `revoke` and `arbitrate` without being able to approve anything. The
-two forms are never mixed in one file, every role must be held by at least one key, and the k signatures of a
-class-F or class-W approval must come from keys that hold `approve`. A key that signs an act for a role it does
-not hold is refused with a named reason (`plan-approval-role-denied`, `plan-revocation-role-denied`), and the
-refusal leaves a leaf.
+**Roles (optional).** With the plain list above, every key can submit a plan, approve it, revoke it and
+arbitrate degraded requests. To separate those gestures, write each entry as `{"key": "<public>", "roles":
+["submit", "approve", "revoke", "arbitrate"]}` and give each key only the roles it needs: approving *widens* what
+the cell allows, cutting *narrows* it, so a night-duty key can hold `revoke` and `arbitrate` without being able to
+approve anything, and a submitting desk can hold `submit` alone. The two forms are never mixed in one file,
+`approve`, `revoke` and `arbitrate` must each be held by at least one key, and the k signatures of a class-F or
+class-W approval must come from keys that hold `approve`. A key that signs an act for a role it does not hold is
+refused with a named reason (`plan-approval-role-denied`, `plan-revocation-role-denied`,
+`plan-submission-role-denied`), and the refusal leaves a leaf.
+
+**Submitter ≠ approver.** From k = 2 on, `plan/submit` takes a **signed** submission (`quorumproof plansubmit`,
+step 4): the broker knows who submitted, and the submitter's key can never approve that plan. An unsigned
+submission is refused (`plan-submission-unsigned`). `brokerd` refuses to start when no key holds `submit`, or
+when a class-F or class-W agent could never be approved by keys other than the submitter's. At k = 1 (scale 1)
+one operator does both gestures: an unsigned submission stays open.
 
 **Command**: write `/etc/tbp/brokerd.env` as in cellule.md step 7 with these scale-2 values, then start it:
 
@@ -127,13 +136,15 @@ since the witness: see [cellule.md](cellule.md), "Provisioning files".
 **Verifiable prerequisite**: step 3 green; an agent registered class W in `agents.json`; `TBP_POLICY_ID` of
 the cell (the bundle hash).
 
-**Command**: the operator submits and approves the plan, then two controllers sign a proof for **that**
-action; the agent presents both:
+**Command**: the submitting operator signs and posts the plan, two operators approve it, then two controllers
+sign a proof for **that** action; the agent presents both:
 
 ```bash
-# 1. submit the plan FOR one agent (admin socket; "subject" must be in the registry, and only that agent can run it, #235) — it answers {"plan_hash": "<hex>"}
-curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
-  -d '{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
+# 1. the submitter signs the plan FOR one agent and posts it (admin socket; "subject" must be in the registry, and only that agent can run it, #235) — it answers {"plan_hash": "<hex>"}
+#    plan.json = {"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}
+#    the signature carries the cell and a short expiry: it is worth one submission, for that plan, in that cell
+quorumproof plansubmit -cell cell-s2 -plan plan.json -key /etc/tbp/keys/operator-3.key -out /tmp/submission.json
+curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/submission.json \
   http://localhost/v1/supervision/plan/submit
 # 2a. the operator RECOMPUTES the hash from the plan in clear (the same body as submit) — never trust the hash the
 #     broker announces: the cell, the policy and the submission time come from the operator's own configuration and
@@ -167,8 +178,10 @@ curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/revocation.jso
 The agent's next step is then refused `plan-revoked`; an unsigned or wrongly signed revocation is refused and
 leaves a refusal leaf, a valid one leaves a leaf naming the operator. Works on a pending plan too.
 
-**Observable success criterion**: a plan approved with **one** operator signature is refused (HTTP 400,
-"approbation insuffisante") and stays pending, then is approved by two distinct operators. The same action is
+**Observable success criterion**: an **unsigned** submission is refused (HTTP 400, "non signée"); the signed one
+is accepted. A plan approved with **one** operator signature is refused (HTTP 400,
+"approbation insuffisante") and stays pending, then is approved by two distinct operators — never by the key
+that submitted it. The same action is
 **refused** with no proof (`quorum-required`) and with one controller's proof (`quorum-insufficient`), and
 **allowed with a token** with two — here controllers 1 and 3, because 2 is unavailable: that is what the spare
 is for. The proof does not work a second time.

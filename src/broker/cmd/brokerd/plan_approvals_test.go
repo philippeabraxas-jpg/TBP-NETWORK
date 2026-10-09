@@ -107,9 +107,27 @@ func startQuorumBrokerdWith(t *testing.T, adapt func(*runFixture)) (*runFixture,
 	return fx, unixClient(t, fx.adminSock)
 }
 
-func submitPlanFor(t *testing.T, hc *http.Client, subject string) (string, [32]byte) {
+// signedSubmitBody rend le corps d'une soumission SIGNÉE par la clé qui soumet (opPriv3) : une cellule à k ≥ 2 sépare les
+// tâches et refuse la soumission non signée.
+func (fx *runFixture) signedSubmitBody(subject string, steps []planSubmitStepRequest) string {
+	return fx.signedSubmitBodyBy(fx.opPriv3, subject, steps)
+}
+
+func (fx *runFixture) signedSubmitBodyBy(priv ed25519.PrivateKey, subject string, steps []planSubmitStepRequest) string {
+	planSteps := make([]pep.PlanStep, 0, len(steps))
+	for _, s := range steps {
+		params, _ := hex.DecodeString(s.ParamsHex)
+		planSteps = append(planSteps, pep.PlanStep{Action: s.Action, Resource: s.Resource, ParamsHash: pep.HashParams(params)})
+	}
+	exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+	sig := ed25519.Sign(priv, pep.SubmissionMessage(fx.env["TBP_CELL_ID"], subject, planSteps, exp))
+	raw, _ := json.Marshal(map[string]any{"subject": subject, "steps": steps, "expires_at": exp.Format(time.RFC3339), "signature": hex.EncodeToString(sig)})
+	return string(raw)
+}
+
+func submitPlanFor(t *testing.T, fx *runFixture, hc *http.Client, subject string) (string, [32]byte) {
 	t.Helper()
-	body := fmt.Sprintf(`{"subject":%q,"steps":[{"action":"pay","resource":"invoice-42","params_hex":""}]}`, subject)
+	body := fx.signedSubmitBody(subject, []planSubmitStepRequest{{Action: "pay", Resource: "invoice-42"}})
 	code, out := postBody(t, hc, "/v1/supervision/plan/submit", body)
 	if code != http.StatusOK {
 		t.Fatalf("soumission pour %s : %d %s", subject, code, out)
@@ -143,7 +161,7 @@ func TestPlanApprovalQuorumThroughTheAdminSocket(t *testing.T) {
 	}
 
 	for _, subject := range []string{"agent-w", "agent-f"} {
-		hash, h := submitPlanFor(t, hc, subject)
+		hash, h := submitPlanFor(t, fx, hc, subject)
 		s1, s2 := sig(fx.opPriv, h), sig(fx.opPriv2, h)
 
 		// une seule signature : refusé, le plan reste en attente (k = 2)
@@ -177,7 +195,7 @@ func TestPlanApprovalQuorumThroughTheAdminSocket(t *testing.T) {
 	}
 
 	// classe I : une signature suffit, sous la forme historique
-	hash, h := submitPlanFor(t, hc, "agent-i")
+	hash, h := submitPlanFor(t, fx, hc, "agent-i")
 	if code, out := postBody(t, hc, "/v1/supervision/plan/approve", one(hash, sig(fx.opPriv, h))); code != http.StatusOK {
 		t.Fatalf("classe I à une signature refusée : %d %s", code, out)
 	}

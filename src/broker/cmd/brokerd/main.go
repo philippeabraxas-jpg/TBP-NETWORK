@@ -835,10 +835,16 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err := checkOperatorQuorum(agentRegistry, cfg.quorumMin, len(distinctOperators)); err != nil {
 		return err
 	}
+	// Soumetteur ≠ approbateur : à k ≥ 2, la soumission est signée et le soumetteur n'approuve pas son propre plan.
+	if err := checkSeparatedDuties(agentRegistry, cfg.quorumMin, operators); err != nil {
+		return err
+	}
 	contracts, err := pep.NewContractStore(pep.ContractOptions{
 		CellID:            cfg.cellID,
 		PolicyID:          cfg.policyID,
 		OperatorKeys:      operators.All,
+		SubmitterKeys:     operators.Submitters,
+		SeparateDuties:    separateDuties(cfg.quorumMin),
 		ApproverKeys:      operators.Approvers,
 		RevokerKeys:       operators.Revokers,
 		ApprovalsRequired: planApprovalsRequired(agentRegistry, cfg.quorumMin),
@@ -1044,7 +1050,17 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 				ParamsHash: pep.HashParams(params),
 			})
 		}
-		hash, err := contracts.Submit(r.Context(), req.Subject, steps)
+		var hash [32]byte
+		if req.Signature != "" || !req.ExpiresAt.IsZero() {
+			sig, derr := hex.DecodeString(req.Signature)
+			if req.Signature == "" || req.ExpiresAt.IsZero() || derr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "soumission signée : « expires_at » et « signature » (hex) vont ensemble"})
+				return
+			}
+			hash, err = contracts.SubmitSigned(r.Context(), req.Subject, steps, req.ExpiresAt, sig)
+		} else {
+			hash, err = contracts.Submit(r.Context(), req.Subject, steps)
+		}
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1478,6 +1494,10 @@ type planSubmitRequest struct {
 	// plan ; un plan sans destinataire n'existe plus.
 	Subject string                  `json:"subject"`
 	Steps   []planSubmitStepRequest `json:"steps"`
+	// ExpiresAt et Signature : la soumission SIGNÉE (quorumproof plansubmit). Les deux ensemble, ou aucun. Une
+	// cellule qui sépare les tâches (k ≥ 2) refuse la soumission sans signature : on sait qui soumet.
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	Signature string    `json:"signature,omitempty"`
 }
 
 type planSubmitResponse struct {

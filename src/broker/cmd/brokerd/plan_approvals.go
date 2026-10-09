@@ -16,6 +16,7 @@ package main
 // réglage : pas de variante plus faible selon le chemin.
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
@@ -48,6 +49,50 @@ func checkOperatorQuorum(reg broker.StaticAgentRegistry, quorumMin, distinctOper
 	for subject, rec := range reg {
 		if rec.Class == pep.ClassF || rec.Class == pep.ClassW {
 			return fmt.Errorf("l'agent %q est de classe F ou W : l'approbation de ses plans exige %d signatures distinctes d'opérateurs (TBP_QUORUM_MIN), mais le trousseau d'opérateurs n'a que %d clé(s) distincte(s) — ajouter des clés à TBP_OPERATOR_KEYS_FILE (issue #196)", subject, quorumMin, distinctOperators)
+		}
+	}
+	return nil
+}
+
+// separateDuties dit si la cellule sépare les tâches : à partir de k = 2 (échelle 2), celui qui soumet un plan n'est pas celui
+// qui l'approuve, donc la soumission est SIGNÉE (le broker sait qui l'a faite). À k = 1 (échelle 1), un seul opérateur fait les
+// deux gestes : la règle n'a pas de sens, la soumission non signée reste ouverte. Le k est celui du quorum attesté
+// (TBP_QUORUM_MIN) : un seul réglage, le même code partout.
+func separateDuties(quorumMin int) bool { return quorumMin >= 2 }
+
+// checkSeparatedDuties refuse de démarrer quand, la cellule séparant les tâches, aucun plan ne pourrait être approuvé : personne
+// ne tient le rôle de soumission, ou, pour un agent enregistré, il n'existe aucun soumetteur dont les approbations exigées
+// puissent venir d'AUTRES clés. Même doctrine que checkOperatorQuorum : un quorum impossible est un refus de démarrage, pas
+// un plan qui expire sans raison lisible. Le soumetteur compte pour un approbateur de moins quand il tient aussi ce rôle.
+func checkSeparatedDuties(reg broker.StaticAgentRegistry, quorumMin int, ring operatorKeyring) error {
+	if !separateDuties(quorumMin) {
+		return nil
+	}
+	if len(ring.Submitters) == 0 {
+		return errors.New("la cellule sépare les tâches (TBP_QUORUM_MIN ≥ 2) : au moins une clé d'opérateur doit tenir le rôle « submit » — sans elle, aucun plan ne peut être soumis")
+	}
+	approver := make(map[[16]byte]bool, len(ring.Approvers))
+	for _, k := range ring.Approvers {
+		approver[pep.KeyIDFromPublicKey(k)] = true
+	}
+	// le plus d'approbateurs que laisse un soumetteur : tous, s'il n'approuve pas lui-même ; un de moins sinon
+	best := 0
+	for _, k := range ring.Submitters {
+		n := len(approver)
+		if approver[pep.KeyIDFromPublicKey(k)] {
+			n--
+		}
+		if n > best {
+			best = n
+		}
+	}
+	need := planApprovalsRequired(reg, quorumMin)
+	for subject, rec := range reg {
+		if rec.Class == pep.ClassOut {
+			continue // un agent de classe Out ne déroule pas de plan : s'il en soumet un, le refus est net à la soumission
+		}
+		if required := need(subject); required > best {
+			return fmt.Errorf("l'agent %q exige %d approbation(s) distincte(s), mais aucun soumetteur ne laisse plus de %d approbateur(s) autre(s) que lui-même — donner le rôle « submit » à une clé qui n'approuve pas, ou ajouter des clés qui approuvent (soumetteur ≠ approbateur)", subject, required, best)
 		}
 	}
 	return nil

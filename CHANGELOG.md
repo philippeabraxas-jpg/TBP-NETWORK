@@ -38,6 +38,13 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   every key every role. A key signing for a role it does not hold is refused with a named reason and a leaf; the
   k signatures of a class-F or class-W approval must come from keys that hold `approve`. `operators.json` is a
   measured trust file: changing it on a cell that already ran takes one transition proof, as for any other.
+- **Submitter ≠ approver**: from k = 2, `plan/submit` takes a **signed** submission (`quorumproof plansubmit`; new
+  signed message `TBPS1`, bound to the cell and to a short expiry, one use) and the submitter's key can never approve
+  that plan. An unsigned submission is refused at k ≥ 2; at k = 1 (one operator does both gestures) it stays open.
+  New role `submit` in `operators.json`. **Upgrading** a cell at k = 2: it now needs at least one key that holds
+  `submit` and, for each class-F or class-W agent, k approvers other than the submitter — in practice a third operator
+  key; `brokerd` refuses to start otherwise and names what is missing. Scale-2 submissions move from a bare `curl` to
+  `quorumproof plansubmit`.
 - Release machinery: `scripts/release/build.sh` builds `pepd`, `brokerd`, `anod`, `supervisord`,
   `opawatchdog`, `quorumproof` and `tbp-audit` (checked on every pull request); a `vX.Y.Z` tag publishes them
   with SLSA provenance and a CycloneDX SBOM; `SECURITY.md`.

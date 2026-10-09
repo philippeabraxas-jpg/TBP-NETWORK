@@ -20,7 +20,7 @@
 //	    assemble des signatures faites ailleurs (KID = SHA-256(pub)[:16], hex)
 //
 //	quorumproof wproof | wmessage | wassemble   — preuves de classe W pour brokerd (voir wproof.go)
-//	quorumproof planapprove | planassemble | planrevoke | planhash | planbind — approbation, révocation, recalcul du hash et liaison d'un plan (voir plantools.go)
+//	quorumproof plansubmit | planapprove | planassemble | planrevoke | planhash | planbind — approbation, révocation, recalcul du hash et liaison d'un plan (voir plantools.go)
 //
 // Conditions : « provisioning-transition-brokerd », « provisioning-transition-pepd »,
 // « provisioning-transition-anod » (#272),
@@ -84,6 +84,8 @@ func main() {
 		err = cmdSign(os.Args[2:])
 	case "assemble":
 		err = cmdAssemble(os.Args[2:])
+	case "plansubmit":
+		err = cmdPlanSubmit(os.Args[2:])
 	case "planapprove":
 		err = cmdPlanApprove(os.Args[2:])
 	case "planassemble":
@@ -117,7 +119,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble|planapprove|planassemble|planrevoke|planhash|planbind|arbid|arbpresence|arbdecide> [flags]
+	fmt.Fprintln(os.Stderr, `usage: quorumproof <keygen|message|sign|assemble|wproof|wmessage|wassemble|plansubmit|planapprove|planassemble|planrevoke|planhash|planbind|arbid|arbpresence|arbdecide> [flags]
   keygen   -key FILE -keyring TROUSSEAU.json
   message  -condition C -cell ID [-ttl 240]
   sign     -condition C -cell ID [-ttl 240] -key FILE [-key FILE …] -out PREUVE.json
@@ -125,6 +127,7 @@ func usage() {
   wproof    -manifest M -action A -resource R -policy HEX64 [-epoch N] [-ttl S] -key FILE [-key …] -out P   (classe W, brokerd)
   wmessage  -action A -resource R -policy HEX64 [-epoch N] [-ttl S] -out DECLARATION.json
   wassemble -statement DECLARATION.json -sig ID=SIGHEX [-sig …] -quorum K-of-N -out P
+  plansubmit  -cell ID -plan PLAN.json [-ttl S] -key CLE_OPERATEUR -out SOUMISSION.json   (soumission signée d'un plan : le broker sait qui soumet)
   planapprove -plan-hash HEX64 [-ttl S | -expires-at T] -key CLE_OPERATEUR [-key …] -out APPROBATION.json   (contrat de plan, #177 ; k clés pour F et W, #196)
   planassemble -in APPROBATION.json -in APPROBATION.json [-in …] -out APPROBATION.json   (réunit les approbations signées séparément, #196)
   planrevoke  -plan-hash HEX64 [-ttl S] -key CLE_OPERATEUR -out REVOCATION.json    (révocation d'un plan, #244)

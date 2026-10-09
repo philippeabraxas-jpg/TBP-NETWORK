@@ -82,21 +82,30 @@ la cellule (`brokerd` le dit au démarrage). Ne pas continuer avec `n ≤ k`.
 classe), les clés d'opérateurs (`operators.json`, les clés qui approuvent les plans), la graine de l'émetteur et
 le sel de la cellule préparés comme en [cellule.fr.md](cellule.fr.md) étape 7 ; `TBP_PROVISIONING_WITNESS_FILE`
 hors de `TBP_REGISTRY_DIR`. Les **clés d'opérateur** se créent comme des clés de contrôleur — ce sont d'autres
-clés, détenues chacune par une personne différente qui approuve les plans : à k = 2 il en faut **au moins deux**
-(#196), car un plan pour un agent de classe F ou W exige k signatures distinctes d'opérateurs (la classe I en
-exige une) :
-`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (et `operator-2`), et
-leurs `public=` vont dans `operators.json` (`["<public 1>", "<public 2>"]`). `brokerd` refuse de démarrer si
-le registre contient un agent de classe F ou W et que moins de k clés distinctes peuvent approuver.
+clés, détenues chacune par une personne différente : à k = 2 il en faut **au moins trois** — deux approuvent
+(#196 : un plan pour un agent de classe F ou W exige k signatures distinctes d'opérateurs, la classe I en exige
+une) et une **soumet** les plans, car celui qui propose un plan n'est jamais celui qui l'approuve :
+`quorumproof keygen -key /etc/tbp/keys/operator-1.key -keyring /tmp/operator-1-ring.json` (et `operator-2`,
+`operator-3`), et leurs `public=` vont dans `operators.json` (`["<public 1>", "<public 2>", "<public 3>"]`).
+`brokerd` refuse de démarrer si le registre contient un agent de classe F ou W et que moins de k clés distinctes
+peuvent l'approuver, ou si toute clé qui peut soumettre devrait approuver son propre plan (voir « Rôles »).
 
-**Rôles (facultatif).** Avec la liste simple ci-dessus, toute clé peut approuver un plan, en révoquer un et
-arbitrer les demandes dégradées. Pour séparer ces gestes, écrire chaque entrée sous la forme `{"key": "<public>",
-"roles": ["approve", "revoke", "arbitrate"]}` et ne donner à chaque clé que les rôles dont elle a besoin :
-approuver *élargit* ce que la cellule autorise, couper le *restreint*, donc une clé d'astreinte de nuit peut tenir
-`revoke` et `arbitrate` sans pouvoir rien approuver. Les deux formes ne se mélangent jamais dans un même fichier,
-chaque rôle doit être tenu par au moins une clé, et les k signatures d'une approbation de classe F ou W doivent
-venir de clés qui tiennent `approve`. Une clé qui signe un acte pour un rôle qu'elle n'a pas est refusée avec une
-raison nommée (`plan-approval-role-denied`, `plan-revocation-role-denied`), et le refus laisse une feuille.
+**Rôles (facultatif).** Avec la liste simple ci-dessus, toute clé peut soumettre un plan, l'approuver, le
+révoquer et arbitrer les demandes dégradées. Pour séparer ces gestes, écrire chaque entrée sous la forme
+`{"key": "<public>", "roles": ["submit", "approve", "revoke", "arbitrate"]}` et ne donner à chaque clé que les
+rôles dont elle a besoin : approuver *élargit* ce que la cellule autorise, couper le *restreint*, donc une clé
+d'astreinte de nuit peut tenir `revoke` et `arbitrate` sans pouvoir rien approuver, et un poste de soumission peut
+tenir `submit` seul. Les deux formes ne se mélangent jamais dans un même fichier, `approve`, `revoke` et
+`arbitrate` doivent chacun être tenus par au moins une clé, et les k signatures d'une approbation de classe F ou W
+doivent venir de clés qui tiennent `approve`. Une clé qui signe un acte pour un rôle qu'elle n'a pas est refusée
+avec une raison nommée (`plan-approval-role-denied`, `plan-revocation-role-denied`,
+`plan-submission-role-denied`), et le refus laisse une feuille.
+
+**Soumetteur ≠ approbateur.** À partir de k = 2, `plan/submit` prend une soumission **signée** (`quorumproof
+plansubmit`, étape 4) : le broker sait qui a soumis, et la clé du soumetteur n'approuve jamais ce plan. Une
+soumission non signée est refusée (`plan-submission-unsigned`). `brokerd` refuse de démarrer quand aucune clé ne
+tient `submit`, ou quand un agent de classe F ou W ne pourrait jamais être approuvé par d'autres clés que celle du
+soumetteur. À k = 1 (échelle 1), un seul opérateur fait les deux gestes : la soumission non signée reste ouverte.
 
 **Commande** : écrire `/etc/tbp/brokerd.env` comme en cellule.fr.md étape 7 avec ces valeurs d'échelle 2, puis le
 démarrer :
@@ -131,13 +140,15 @@ provisionnement ».
 **Prérequis vérifiable** : étape 3 verte ; un agent enregistré en classe W dans `agents.json` ; le
 `TBP_POLICY_ID` de la cellule (le condensé du bundle).
 
-**Commande** : l'opérateur soumet et approuve le plan, puis deux contrôleurs signent une preuve pour **cette**
-action ; l'agent présente les deux :
+**Commande** : l'opérateur qui soumet signe et poste le plan, deux opérateurs l'approuvent, puis deux contrôleurs
+signent une preuve pour **cette** action ; l'agent présente les deux :
 
 ```bash
-# 1. soumettre le plan POUR un agent (socket d'administration ; "subject" doit être au registre, et lui seul peut le dérouler, #235) — répond {"plan_hash": "<hex>"}
-curl -s --unix-socket /run/tbp/broker-admin.sock -X POST \
-  -d '{"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}' \
+# 1. le soumetteur signe le plan POUR un agent et le poste (socket d'administration ; "subject" doit être au registre, et lui seul peut le dérouler, #235) — répond {"plan_hash": "<hex>"}
+#    plan.json = {"subject":"agent-w","steps":[{"action":"read","resource":"doc-1","params_hex":""}]}
+#    la signature porte la cellule et une courte échéance : elle vaut une soumission, pour ce plan, dans cette cellule
+quorumproof plansubmit -cell cell-s2 -plan plan.json -key /etc/tbp/keys/operator-3.key -out /tmp/submission.json
+curl -s --unix-socket /run/tbp/broker-admin.sock -X POST -d @/tmp/submission.json \
   http://localhost/v1/supervision/plan/submit
 # 2a. l'opérateur RECALCULE le hash à partir du plan en clair (le même corps que la soumission) — jamais le hash annoncé
 #     par le broker : la cellule, la politique et l'instant de soumission viennent de la configuration de l'opérateur et
@@ -173,8 +184,10 @@ L'étape suivante de l'agent est alors refusée `plan-revoked` ; une révocation
 refusée et laisse une feuille de refus, une valide laisse une feuille qui nomme l'opérateur. Vaut aussi pour un
 plan en attente.
 
-**Critère de succès observable** : un plan approuvé par **une seule** signature d'opérateur est refusé (HTTP
-400, « approbation insuffisante ») et reste en attente, puis il est approuvé par deux opérateurs distincts. La
+**Critère de succès observable** : une soumission **non signée** est refusée (HTTP 400, « non signée ») ; la
+signée est acceptée. Un plan approuvé par **une seule** signature d'opérateur est refusé (HTTP 400,
+« approbation insuffisante ») et reste en attente, puis il est approuvé par deux opérateurs distincts — jamais par
+la clé qui l'a soumis. La
 même action est **refusée** sans preuve (`quorum-required`) et avec la preuve d'un seul contrôleur
 (`quorum-insufficient`), et **autorisée avec un jeton** avec deux — ici les contrôleurs 1 et 3, parce que le 2
 est indisponible : c'est à cela que sert la rechange. La preuve ne vaut pas une seconde fois.

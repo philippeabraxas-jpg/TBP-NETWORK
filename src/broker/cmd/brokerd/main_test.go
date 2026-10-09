@@ -277,6 +277,7 @@ type runFixture struct {
 	controllerPrivs []ed25519.PrivateKey // issue #126 : réutilisées pour signer des renouvellements
 	opPriv          ed25519.PrivateKey   // clé de l'opérateur épinglé : signe approbation et révocation de plan (#274)
 	opPriv2         ed25519.PrivateKey   // seconde clé d'opérateur (#196) : un plan F ou W exige k = 2 clés distinctes
+	opPriv3         ed25519.PrivateKey   // troisième clé : soumet (le soumetteur n'approuve pas son propre plan) ; à k = 2, 2 approbateurs restent
 }
 
 // mintManifest écrit le manifest de genèse (nKeys contrôleurs, key_id
@@ -390,8 +391,13 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 	if err != nil {
 		t.Fatalf("operateur 2: %v", err)
 	}
+	// Soumetteur ≠ approbateur : à k = 2 la soumission est signée, et le soumetteur n'est pas l'un des deux approbateurs.
+	opPub3, opPriv3, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("operateur 3: %v", err)
+	}
 	opsFile := filepath.Join(dir, "operators.json")
-	ops, err := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2)})
+	ops, err := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2), hex.EncodeToString(opPub3)})
 	if err != nil {
 		t.Fatalf("operateurs: %v", err)
 	}
@@ -451,6 +457,7 @@ func newRunFixture(t *testing.T, sock string) *runFixture {
 		controllerPrivs: controllerPrivs,
 		opPriv:          opPriv,
 		opPriv2:         opPriv2,
+		opPriv3:         opPriv3,
 		env: map[string]string{
 			"TBP_CELL_ID":                    "cell-a",
 			"TBP_SALT":                       hex.EncodeToString(salt),

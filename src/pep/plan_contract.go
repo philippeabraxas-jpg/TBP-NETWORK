@@ -75,6 +75,12 @@ const (
 	// — ensuite purge tracée (feuille event=expire).
 	DefaultPendingTTL = 15 * time.Minute
 
+	// MaxSubmissionTTL borne la validité d'une soumission signée : l'échéance signée est dans ]now, now+MaxSubmissionTTL].
+	// Une soumission capturée ne se rejoue pas au-delà (et jamais deux fois dans la fenêtre : voir maxSubmissionReplay).
+	MaxSubmissionTTL = 10 * time.Minute
+	// maxSubmissionReplay borne la mémoire des soumissions déjà vues (§4.3 : état borné) : plein = refus, jamais d'éviction.
+	maxSubmissionReplay = 1024
+
 	// DefaultMaxTombstones borne le nombre d'entrées EXPIRÉES OU RÉVOQUÉES
 	// retenues pour inspection (§4.3 : état borné). Sans cette borne, les
 	// quotas MaxPending/MaxApproved ne bornent que les plans VIVANTS — la
@@ -111,6 +117,12 @@ var (
 	ErrPlanApprovalExpiryInvalid   = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
 	ErrPlanApprovalSignature       = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
 	ErrPlanApprovalRole            = errors.New("pep: cette clé d'opérateur n'a pas le rôle d'approbation de plans")
+	ErrPlanApprovalSelf            = errors.New("pep: le soumetteur d'un plan ne l'approuve pas (soumetteur ≠ approbateur)")
+	ErrPlanSubmissionUnsigned      = errors.New("pep: soumission non signée refusée — la cellule exige qu'on sache qui soumet (soumetteur ≠ approbateur)")
+	ErrPlanSubmissionSignature     = errors.New("pep: signature de soumission invalide (trousseau opérateur épinglé)")
+	ErrPlanSubmissionRole          = errors.New("pep: cette clé d'opérateur n'a pas le rôle de soumission de plans")
+	ErrPlanSubmissionExpiryInvalid = errors.New("pep: échéance de soumission hors bornes ]maintenant, MaxSubmissionTTL]")
+	ErrPlanSubmissionReplayed      = errors.New("pep: soumission signée déjà reçue (rejeu)")
 	ErrPlanRevocationRole          = errors.New("pep: cette clé d'opérateur n'a pas le rôle de révocation de plans")
 	ErrPlanApprovalQuorum          = errors.New("pep: approbation insuffisante : k signatures distinctes d'opérateurs exigées pour ce plan (#196)")
 	ErrPlanApprovalDuplicateSigner = errors.New("pep: deux signatures de la même clé d'opérateur (#196 : des clés distinctes, sinon ce n'est pas un quorum)")
@@ -206,6 +218,43 @@ func RevocationMessage(planHash [32]byte, expiry time.Time) []byte {
 	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
 }
 
+// SubmissionContentHash est l'empreinte du CONTENU soumis : SHA-256("TBPS1c" ‖ u8 len(cellID) ‖ cellID ‖ u8 len(subject) ‖ subject
+// ‖ n(u16 BE) ‖ par étape : u8 len(action)‖action ‖ u16 BE len(resource)‖resource ‖ paramsHash(32)). Même forme canonique que
+// HashPlan, sans l'instant de soumission ni le bundle : le soumetteur signe ce qu'il propose AVANT que le broker ne le scelle.
+func SubmissionContentHash(cellID, subject string, steps []PlanStep) [32]byte {
+	h := sha256.New()
+	h.Write([]byte("TBPS1c"))
+	h.Write([]byte{byte(len(cellID))})
+	h.Write([]byte(cellID))
+	h.Write([]byte{byte(len(subject))})
+	h.Write([]byte(subject))
+	var buf [2]byte
+	binary.BigEndian.PutUint16(buf[:], uint16(len(steps)))
+	h.Write(buf[:])
+	for _, st := range steps {
+		h.Write([]byte{byte(len(st.Action))})
+		h.Write([]byte(st.Action))
+		binary.BigEndian.PutUint16(buf[:], uint16(len(st.Resource)))
+		h.Write(buf[:])
+		h.Write([]byte(st.Resource))
+		h.Write(st.ParamsHash[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// SubmissionMessage est le message que le soumetteur SIGNE : "TBPS1" ‖ SubmissionContentHash(32) ‖ expiry(u64 BE, unix s).
+// Domaine DISTINCT de l'approbation (« TBPA1 ») et de la révocation (« TBPR1 ») : une signature de soumission ne vaut jamais
+// approbation. Elle identifie QUI propose le plan ; c'est ce qui permet d'exiger que l'approbateur soit un autre.
+func SubmissionMessage(cellID, subject string, steps []PlanStep, expiry time.Time) []byte {
+	c := SubmissionContentHash(cellID, subject, steps)
+	msg := make([]byte, 0, 5+32+8)
+	msg = append(msg, "TBPS1"...)
+	msg = append(msg, c[:]...)
+	return binary.BigEndian.AppendUint64(msg, uint64(expiry.Unix()))
+}
+
 // BuildBinding construit le blob opaque présenté à l'exécution (D62) :
 // "TBPB1" ‖ planHash(32) ‖ paramsLen(u16 BE) ‖ params. Le broker le RELAYE
 // au ContractGate sans jamais l'interpréter (no-DPI) — seul le gate parse.
@@ -234,9 +283,11 @@ type planEntry struct {
 	submittedAt time.Time
 	expiresAt   time.Time // pending : soumission + PendingTTL ; approved : expiry signé
 	status      byte
-	required    int  // approbations distinctes exigées (#196) : fixé à la soumission, d'après la classe de l'agent
-	cursor      int  // prochaine étape exigible (consommation à l'émission, D61)
-	expired     bool // feuille d'expiration déjà écrite (une seule fois)
+	required    int      // approbations distinctes exigées (#196) : fixé à la soumission, d'après la classe de l'agent
+	signed      bool     // soumission signée : submitter est connu
+	submitter   [16]byte // kid du soumetteur : il n'approuve pas son propre plan
+	cursor      int      // prochaine étape exigible (consommation à l'émission, D61)
+	expired     bool     // feuille d'expiration déjà écrite (une seule fois)
 }
 
 // ContractOptions paramètre le store. Fail-closed dès la configuration,
@@ -259,6 +310,11 @@ type ContractOptions struct {
 	// avec une raison nommée (…-role-denied), pas confondue avec une signature inconnue.
 	ApproverKeys []ed25519.PublicKey
 	RevokerKeys  []ed25519.PublicKey
+	// SubmitterKeys : qui peut soumettre un plan SIGNÉ (SubmitSigned). Nil ⇒ tout le trousseau.
+	SubmitterKeys []ed25519.PublicKey
+	// SeparateDuties exige que toute soumission soit signée (Submit refuse) : on sait qui soumet, et le soumetteur n'approuve
+	// jamais son propre plan. Faux (historique) : Submit reste ouvert ; un plan soumis signé est protégé de la même façon.
+	SeparateDuties bool
 	// ApprovalsRequired rend, pour l'agent destinataire d'un plan, le nombre de signatures
 	// distinctes d'opérateurs qui l'approuvent (#196) : k pour les classes F et W, 1 pour I.
 	// Évaluée À LA SOUMISSION et scellée dans le plan (un changement de classe ne baisse pas
@@ -313,6 +369,9 @@ type ContractStore struct {
 	operatorKeys  []ed25519.PublicKey // tout le trousseau épinglé : sert à nommer un refus de rôle
 	approverKeys  []ed25519.PublicKey
 	revokerKeys   []ed25519.PublicKey
+	submitterKeys []ed25519.PublicKey
+	separate      bool
+	submissions   map[[32]byte]time.Time // soumissions signées déjà reçues → leur échéance (anti-rejeu borné)
 	approvalsReq  func(subject string) int
 	distinctKeys  int // clés DISTINCTES AYANT LE RÔLE d'approbation : borne haute d'un quorum atteignable
 	salt          []byte
@@ -393,12 +452,19 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	submitters, err := roleKeys("soumission", opts.SubmitterKeys, keys)
+	if err != nil {
+		return nil, err
+	}
 	return &ContractStore{
 		cellID:        opts.CellID,
 		policyID:      opts.PolicyID,
 		operatorKeys:  keys,
 		approverKeys:  approvers,
 		revokerKeys:   revokers,
+		submitterKeys: submitters,
+		separate:      opts.SeparateDuties,
+		submissions:   make(map[[32]byte]time.Time),
 		approvalsReq:  opts.ApprovalsRequired,
 		distinctKeys:  countDistinctKeys(approvers),
 		salt:          salt,
@@ -482,6 +548,9 @@ func ValidatePlan(subject string, steps []PlanStep) error {
 // refus fail-closed : pas de preuve, pas de contrat. subject est l'agent
 // pour lequel le plan est soumis (#235) : lui seul pourra consommer les
 // étapes (VerifyStep compare au sujet résolu par le broker).
+//
+// Soumission NON signée : on ne sait pas qui l'a faite. Quand la cellule sépare les tâches (SeparateDuties), elle est
+// refusée — voir SubmitSigned.
 func (s *ContractStore) Submit(ctx context.Context, subject string, steps []PlanStep) ([32]byte, error) {
 	if err := ValidatePlan(subject, steps); err != nil {
 		return [32]byte{}, err
@@ -490,6 +559,91 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 	defer s.mu.Unlock()
 	now := s.clock()
 	s.expireLocked(ctx, now)
+	if s.separate {
+		return s.refuseSubmissionLocked(ctx, subject, steps, "plan-submission-unsigned", ErrPlanSubmissionUnsigned, now)
+	}
+	return s.submitLocked(ctx, subject, steps, nil, now)
+}
+
+// SubmitSigned est la soumission ATTRIBUÉE : le soumetteur signe SubmissionMessage (le contenu proposé et une échéance
+// ≤ MaxSubmissionTTL) avec une clé du trousseau qui tient le rôle de soumission. Le plan retient son soumetteur : ApproveAll
+// refuse la signature de la même clé (soumetteur ≠ approbateur). Une soumission capturée ne se rejoue pas : même message,
+// une seule fois. Toute tentative invalide laisse une feuille de refus ; un succès laisse une feuille « TBPL2 » attribuée.
+func (s *ContractStore) SubmitSigned(ctx context.Context, subject string, steps []PlanStep, expiry time.Time, sig []byte) ([32]byte, error) {
+	if err := ValidatePlan(subject, steps); err != nil {
+		return [32]byte{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock()
+	s.expireLocked(ctx, now)
+	if ttl := expiry.Sub(now); ttl <= 0 || ttl > MaxSubmissionTTL {
+		return s.refuseSubmissionLocked(ctx, subject, steps, "plan-submission-expiry-invalid", ErrPlanSubmissionExpiryInvalid, now)
+	}
+	msg := SubmissionMessage(s.cellID, subject, steps, expiry)
+	kid, signed := signedBy(s.submitterKeys, msg, sig)
+	if !signed {
+		if _, known := signedBy(s.operatorKeys, msg, sig); known {
+			return s.refuseSubmissionLocked(ctx, subject, steps, "plan-submission-role-denied", ErrPlanSubmissionRole, now)
+		}
+		return s.refuseSubmissionLocked(ctx, subject, steps, "plan-submission-signature-invalid", ErrPlanSubmissionSignature, now)
+	}
+	for d, until := range s.submissions {
+		if !now.Before(until) {
+			delete(s.submissions, d)
+		}
+	}
+	digest := sha256.Sum256(msg)
+	if _, seen := s.submissions[digest]; seen {
+		return s.refuseSubmissionLocked(ctx, subject, steps, "plan-submission-replayed", ErrPlanSubmissionReplayed, now)
+	}
+	if len(s.submissions) >= maxSubmissionReplay {
+		if s.onTrip != nil {
+			s.onTrip("plan-store-saturated")
+		}
+		return [32]byte{}, ErrPlanStoreSaturated
+	}
+	hash, err := s.submitLocked(ctx, subject, steps, &signedSubmission{kid: kid, expiry: expiry, sig: sig}, now)
+	if err == nil {
+		s.submissions[digest] = expiry
+	}
+	return hash, err
+}
+
+// signedSubmission est ce que la soumission signée ajoute à un plan : qui, jusqu'à quand, et la preuve.
+type signedSubmission struct {
+	kid    [16]byte
+	expiry time.Time
+	sig    []byte
+}
+
+// refuseSubmissionLocked trace le refus d'une soumission (event=submit, verdict 0) sous le hash que le plan aurait eu.
+func (s *ContractStore) refuseSubmissionLocked(ctx context.Context, subject string, steps []PlanStep, reason string, err error, now time.Time) ([32]byte, error) {
+	hash := HashPlan(s.cellID, subject, now, s.policyID, steps)
+	if werr := s.writeLeafLocked(ctx, planEventSubmit, hash, uint16(len(steps)), 0, reason, now); werr != nil {
+		s.tripStoreFault()
+		return [32]byte{}, ErrPlanStoreFault
+	}
+	return [32]byte{}, err
+}
+
+// approversApartFrom compte les clés distinctes qui peuvent approuver, hors le soumetteur : la borne haute d'un quorum
+// d'approbation atteignable pour ce plan.
+func (s *ContractStore) approversApartFrom(submitter *signedSubmission) int {
+	if submitter == nil {
+		return s.distinctKeys
+	}
+	seen := make(map[[16]byte]bool, len(s.approverKeys))
+	for _, k := range s.approverKeys {
+		if kid := KeyIDFromPublicKey(k); kid != submitter.kid {
+			seen[kid] = true
+		}
+	}
+	return len(seen)
+}
+
+// submitLocked scelle et met en attente le plan ; l'appelant tient le verrou et a purgé les expirés.
+func (s *ContractStore) submitLocked(ctx context.Context, subject string, steps []PlanStep, sub *signedSubmission, now time.Time) ([32]byte, error) {
 	hash := HashPlan(s.cellID, subject, now, s.policyID, steps)
 	required := 1
 	if s.approvalsReq != nil {
@@ -497,9 +651,10 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 			required = r
 		}
 	}
-	if required > s.distinctKeys {
+	if required > s.approversApartFrom(sub) {
 		// #196 : un plan qu'aucun ensemble de signataires ne peut approuver ne part pas en attente —
-		// refus net à la soumission, pas un plan qui expire sans raison lisible.
+		// refus net à la soumission, pas un plan qui expire sans raison lisible. Le soumetteur ne compte pas
+		// parmi ceux qui l'approuvent.
 		if err := s.writeLeafLocked(ctx, planEventSubmit, hash, uint16(len(steps)), 0, "plan-approval-unreachable", now); err != nil {
 			s.tripStoreFault()
 			return [32]byte{}, ErrPlanStoreFault
@@ -518,7 +673,13 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 		}
 		return [32]byte{}, ErrPlanStoreSaturated
 	}
-	if err := s.writeLeafLocked(ctx, planEventSubmit, hash, uint16(len(steps)), 1, "ok", now); err != nil {
+	var leafErr error
+	if sub != nil {
+		leafErr = s.writeSignedLeafLocked(ctx, planEventSubmit, hash, sub.kid, sub.expiry, sub.sig, now)
+	} else {
+		leafErr = s.writeLeafLocked(ctx, planEventSubmit, hash, uint16(len(steps)), 1, "ok", now)
+	}
+	if leafErr != nil {
 		s.tripStoreFault()
 		return [32]byte{}, ErrPlanStoreFault
 	}
@@ -527,7 +688,7 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 	}
 	cp := make([]PlanStep, len(steps))
 	copy(cp, steps)
-	s.plans[hash] = &planEntry{
+	e := &planEntry{
 		subject:     subject,
 		steps:       cp,
 		submittedAt: now,
@@ -535,6 +696,10 @@ func (s *ContractStore) Submit(ctx context.Context, subject string, steps []Plan
 		status:      planStatusPending,
 		required:    required,
 	}
+	if sub != nil {
+		e.signed, e.submitter = true, sub.kid
+	}
+	s.plans[hash] = e
 	return hash, nil
 }
 
@@ -595,6 +760,9 @@ func (s *ContractStore) ApproveAll(ctx context.Context, planHash [32]byte, expir
 				return s.refuseApprovalLocked(ctx, planHash, "plan-approval-role-denied", ErrPlanApprovalRole, now)
 			}
 			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-signature-invalid", ErrPlanApprovalSignature, now)
+		}
+		if e.signed && kid == e.submitter {
+			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-self", ErrPlanApprovalSelf, now)
 		}
 		if seen[kid] {
 			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-duplicate-signer", ErrPlanApprovalDuplicateSigner, now)

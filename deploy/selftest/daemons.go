@@ -507,7 +507,9 @@ func runDaemons(s *suite, cfg config) {
 	opPub := devKey("operator-1").Public().(ed25519.PublicKey)
 	opPub2 := devKey("operator-2").Public().(ed25519.PublicKey)
 	opKeysPath := filepath.Join(base, "operators.json")
-	opKeysJSON, _ := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2)})
+	// Soumetteur ≠ approbateur : à k = 2, la soumission est signée, et le soumetteur (operator-3) n'est pas l'un des deux approbateurs.
+	opPub3 := devKey("operator-3").Public().(ed25519.PublicKey)
+	opKeysJSON, _ := json.Marshal([]string{hex.EncodeToString(opPub), hex.EncodeToString(opPub2), hex.EncodeToString(opPub3)})
 	if err := os.WriteFile(opKeysPath, opKeysJSON, 0o600); err != nil {
 		s.fail(phaseDaemons, "clés d'opérateurs", err)
 		return
@@ -737,10 +739,19 @@ func runDaemons(s *suite, cfg config) {
 	// pas un raccourci de fixture : c'est exactement le canal qu'un
 	// opérateur emprunterait avant d'autoriser "agent-1" à exécuter
 	// "read"/"doc-1".
-	submitStatus, raw, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
-		"subject": "agent-1",
-		"steps":   []map[string]string{{"action": "read", "resource": "doc-1", "params_hex": ""}},
-	})
+	// la soumission est SIGNÉE par operator-3 (une cellule à k = 2 refuse la soumission non signée)
+	signedSubmission := func(resource string) map[string]any {
+		steps := []pep.PlanStep{{Action: "read", Resource: resource, ParamsHash: pep.HashParams(nil)}}
+		exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+		sig := ed25519.Sign(devKey("operator-3"), pep.SubmissionMessage(daemonsCellID, "agent-1", steps, exp))
+		return map[string]any{
+			"subject":    "agent-1",
+			"steps":      []map[string]string{{"action": "read", "resource": resource, "params_hex": ""}},
+			"expires_at": exp.Format(time.RFC3339),
+			"signature":  hex.EncodeToString(sig),
+		}
+	}
+	submitStatus, raw, err := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", signedSubmission("doc-1"))
 	var planSub daemonPlanSubmitResponse
 	if submitStatus == http.StatusOK {
 		err = json.Unmarshal(raw, &planSub)
@@ -781,10 +792,7 @@ func runDaemons(s *suite, cfg config) {
 	// (ici : la signature d'APPROBATION, domaine distinct) est refusée ; la signée coupe le plan ;
 	// la rejouer est refusée (déjà révoqué).
 	{
-		st2, raw2, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
-			"subject": "agent-1",
-			"steps":   []map[string]string{{"action": "read", "resource": "doc-revoke", "params_hex": ""}},
-		})
+		st2, raw2, _ := postUnixJSON(brokerAdminHC, "http://brokerd/v1/supervision/plan/submit", signedSubmission("doc-revoke"))
 		var sub2 daemonPlanSubmitResponse
 		if st2 == http.StatusOK {
 			_ = json.Unmarshal(raw2, &sub2)

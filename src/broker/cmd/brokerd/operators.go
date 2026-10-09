@@ -11,12 +11,13 @@ package main
 // Deux formes de fichier (TBP_OPERATOR_KEYS_FILE, mesuré par le témoin de provisionnement) :
 //
 //   - historique : ["pubkey_ed25519_hex", …] — chaque clé tient TOUS les rôles (aucune séparation) ;
-//   - avec rôles : [{"key": "pubkey_ed25519_hex", "roles": ["approve", "revoke", "arbitrate"]}, …].
+//   - avec rôles : [{"key": "pubkey_ed25519_hex", "roles": ["submit", "approve", "revoke", "arbitrate"]}, …].
 //
 // Les deux formes ne se mélangent pas dans un même fichier : une chaîne égarée dans un fichier à rôles donnerait
 // tous les rôles à une clé, en silence. Un rôle inconnu, une liste de rôles vide ou répétée, un champ inconnu : refus
-// au chargement. Dans la forme à rôles, chaque rôle doit être tenu par au moins une clé : un acte que personne ne
-// peut signer est dit à voix haute au démarrage, pas découvert le jour où il faut couper.
+// au chargement. Dans la forme à rôles, approve, revoke et arbitrate doivent chacun être tenus par au moins une clé : un
+// acte que personne ne peut signer est dit à voix haute au démarrage, pas découvert le jour où il faut couper. Le rôle
+// submit n'est exigé que quand la cellule sépare les tâches (voir plan_approvals.go : checkSeparatedDuties).
 //
 // Les règles vivent ici et dans ContractStore et la file d'arbitrage, donc pour tout chemin qui atteint le socket
 // d'administration : une variante locale plus faible n'existe pas.
@@ -34,19 +35,21 @@ import (
 )
 
 const (
+	roleSubmit    = "submit"    // soumettre un plan SIGNÉ (plan/submit)
 	roleApprove   = "approve"   // approuver un plan (plan/approve)
 	roleRevoke    = "revoke"    // révoquer un plan (plan/revoke)
 	roleArbitrate = "arbitrate" // présence et décision sur les demandes dégradées
 )
 
-var operatorRoles = []string{roleApprove, roleRevoke, roleArbitrate}
+var operatorRoles = []string{roleSubmit, roleApprove, roleRevoke, roleArbitrate}
 
 // operatorKeyring est le trousseau chargé : toutes les clés, et le sous-ensemble qui tient chaque rôle.
 type operatorKeyring struct {
-	All       []ed25519.PublicKey
-	Approvers []ed25519.PublicKey
-	Revokers  []ed25519.PublicKey
-	Arbiters  []ed25519.PublicKey
+	All        []ed25519.PublicKey
+	Submitters []ed25519.PublicKey
+	Approvers  []ed25519.PublicKey
+	Revokers   []ed25519.PublicKey
+	Arbiters   []ed25519.PublicKey
 }
 
 type operatorEntry struct {
@@ -111,6 +114,8 @@ func loadOperatorKeyring(path string) (operatorKeyring, error) {
 			}
 			held[r] = true
 			switch r {
+			case roleSubmit:
+				ring.Submitters = append(ring.Submitters, key)
 			case roleApprove:
 				ring.Approvers = append(ring.Approvers, key)
 			case roleRevoke:
