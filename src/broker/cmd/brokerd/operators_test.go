@@ -44,6 +44,10 @@ func TestLoadOperatorKeyringWithRoles(t *testing.T) {
 	if len(ring.All) != 3 || len(ring.Approvers) != 2 || len(ring.Revokers) != 2 || len(ring.Arbiters) != 1 {
 		t.Fatalf("rôles mal répartis : %d/%d/%d/%d", len(ring.All), len(ring.Approvers), len(ring.Revokers), len(ring.Arbiters))
 	}
+	// refuser une demande dégradée restreint : ouvert aux arbitres ET à ceux qui tiennent « revoke » (b et c), pas à a
+	if len(ring.Refusers) != 2 {
+		t.Fatalf("%d clés peuvent refuser, veut 2 (les arbitres et les révocateurs, sans doublon)", len(ring.Refusers))
+	}
 }
 
 func TestLoadOperatorKeyringRefusals(t *testing.T) {

@@ -95,7 +95,8 @@ révoquer et arbitrer les demandes dégradées. Pour séparer ces gestes, écrir
 `{"key": "<public>", "roles": ["submit", "approve", "revoke", "arbitrate"]}` et ne donner à chaque clé que les
 rôles dont elle a besoin : approuver *élargit* ce que la cellule autorise, couper le *restreint*, donc une clé
 d'astreinte de nuit peut tenir `revoke` et `arbitrate` sans pouvoir rien approuver, et un poste de soumission peut
-tenir `submit` seul. Les deux formes ne se mélangent jamais dans un même fichier, `approve`, `revoke` et
+tenir `submit` seul. Refuser une demande dégradée restreint comme révoquer un plan : une clé qui tient `revoke`
+peut aussi en refuser une ; l'approuver reste à `arbitrate` ([governed-acts.fr.md](governed-acts.fr.md)). Les deux formes ne se mélangent jamais dans un même fichier, `approve`, `revoke` et
 `arbitrate` doivent chacun être tenus par au moins une clé, et les k signatures d'une approbation de classe F ou W
 doivent venir de clés qui tiennent `approve`. Une clé qui signe un acte pour un rôle qu'elle n'a pas est refusée
 avec une raison nommée (`plan-approval-role-denied`, `plan-revocation-role-denied`,

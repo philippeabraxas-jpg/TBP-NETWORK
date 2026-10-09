@@ -25,7 +25,7 @@ Prouver qu'aucune route de sortie n'existe hors TBP : [network-isolation.fr.md](
 
 Où vit le clair derrière une feuille hash-only et comment le vérifier (journal d'enregistrements, `tbp-audit`, #271) : [audit.fr.md](audit.fr.md).
 
-Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.fr.md).
+Bascule de posture (monitor → closed, §5.3) : [monitor-to-closed.md](monitor-to-closed.fr.md). Ce que coûte chaque acte gouverné, et pourquoi restreindre coûte moins qu'élargir : [governed-acts.fr.md](governed-acts.fr.md).
 Checklists de recette par machine : [checklists/](checklists/).
 
 ## Custody des clés (décision D97 — « jamais de clé de gouvernance hors son rôle »)
