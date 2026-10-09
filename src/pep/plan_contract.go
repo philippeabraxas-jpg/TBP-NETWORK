@@ -110,6 +110,8 @@ var (
 	ErrPlanRevocationExpiryInvalid = errors.New("pep: expiry de révocation hors bornes ]maintenant, TTL configuré] (#244)")
 	ErrPlanApprovalExpiryInvalid   = errors.New("pep: expiry d'approbation hors bornes [60 s, TTL configuré]")
 	ErrPlanApprovalSignature       = errors.New("pep: signature d'approbation invalide (trousseau opérateur épinglé)")
+	ErrPlanApprovalRole            = errors.New("pep: cette clé d'opérateur n'a pas le rôle d'approbation de plans")
+	ErrPlanRevocationRole          = errors.New("pep: cette clé d'opérateur n'a pas le rôle de révocation de plans")
 	ErrPlanApprovalQuorum          = errors.New("pep: approbation insuffisante : k signatures distinctes d'opérateurs exigées pour ce plan (#196)")
 	ErrPlanApprovalDuplicateSigner = errors.New("pep: deux signatures de la même clé d'opérateur (#196 : des clés distinctes, sinon ce n'est pas un quorum)")
 	ErrPlanApprovalUnreachable     = errors.New("pep: le trousseau d'opérateurs compte moins de clés que d'approbations exigées pour ce plan (#196)")
@@ -250,6 +252,13 @@ type ContractOptions struct {
 	// approuver exige ApprovalsRequired(sujet) signatures valides de CLÉS DISTINCTES
 	// de ce trousseau (1 par défaut). Requis, ≥ 1.
 	OperatorKeys []ed25519.PublicKey
+	// ApproverKeys et RevokerKeys restreignent QUI approuve et QUI révoque : des sous-ensembles du trousseau
+	// OperatorKeys. Nil ⇒ tout le trousseau (historique : aucune séparation). Un sous-ensemble vide (non nil,
+	// longueur 0) est refusé — un rôle que personne ne tient rend l'acte impossible, ce que la configuration
+	// doit dire à voix haute. Une clé du trousseau qui signe un acte pour lequel elle n'a pas le rôle est refusée
+	// avec une raison nommée (…-role-denied), pas confondue avec une signature inconnue.
+	ApproverKeys []ed25519.PublicKey
+	RevokerKeys  []ed25519.PublicKey
 	// ApprovalsRequired rend, pour l'agent destinataire d'un plan, le nombre de signatures
 	// distinctes d'opérateurs qui l'approuvent (#196) : k pour les classes F et W, 1 pour I.
 	// Évaluée À LA SOUMISSION et scellée dans le plan (un changement de classe ne baisse pas
@@ -301,9 +310,11 @@ type ContractOptions struct {
 type ContractStore struct {
 	cellID        string
 	policyID      [32]byte
-	operatorKeys  []ed25519.PublicKey
+	operatorKeys  []ed25519.PublicKey // tout le trousseau épinglé : sert à nommer un refus de rôle
+	approverKeys  []ed25519.PublicKey
+	revokerKeys   []ed25519.PublicKey
 	approvalsReq  func(subject string) int
-	distinctKeys  int // clés DISTINCTES du trousseau : borne haute d'un quorum d'approbation atteignable
+	distinctKeys  int // clés DISTINCTES AYANT LE RÔLE d'approbation : borne haute d'un quorum atteignable
 	salt          []byte
 	leaves        LeafSink
 	journal       *registry.RecordStore
@@ -374,12 +385,22 @@ func NewContractStore(opts ContractOptions) (*ContractStore, error) {
 	copy(salt, opts.Salt)
 	keys := make([]ed25519.PublicKey, len(opts.OperatorKeys))
 	copy(keys, opts.OperatorKeys)
+	approvers, err := roleKeys("approbation", opts.ApproverKeys, keys)
+	if err != nil {
+		return nil, err
+	}
+	revokers, err := roleKeys("révocation", opts.RevokerKeys, keys)
+	if err != nil {
+		return nil, err
+	}
 	return &ContractStore{
 		cellID:        opts.CellID,
 		policyID:      opts.PolicyID,
 		operatorKeys:  keys,
+		approverKeys:  approvers,
+		revokerKeys:   revokers,
 		approvalsReq:  opts.ApprovalsRequired,
-		distinctKeys:  countDistinctKeys(keys),
+		distinctKeys:  countDistinctKeys(approvers),
 		salt:          salt,
 		leaves:        opts.Leaves,
 		journal:       opts.Journal,
@@ -399,6 +420,39 @@ func (s *ContractStore) clock() time.Time {
 		return s.now()
 	}
 	return time.Now()
+}
+
+// roleKeys résout le sous-ensemble de clés qui tient un rôle : nil ⇒ tout le trousseau ; sinon chaque clé doit
+// appartenir au trousseau épinglé, et le sous-ensemble ne peut pas être vide.
+func roleKeys(role string, subset, all []ed25519.PublicKey) ([]ed25519.PublicKey, error) {
+	if subset == nil {
+		return all, nil
+	}
+	if len(subset) == 0 {
+		return nil, fmt.Errorf("pep: aucune clé d'opérateur n'a le rôle de %s — l'acte serait impossible", role)
+	}
+	known := make(map[[16]byte]bool, len(all))
+	for _, k := range all {
+		known[KeyIDFromPublicKey(k)] = true
+	}
+	out := make([]ed25519.PublicKey, len(subset))
+	for i, k := range subset {
+		if !known[KeyIDFromPublicKey(k)] {
+			return nil, fmt.Errorf("pep: la clé %d du rôle de %s n'est pas dans le trousseau d'opérateurs épinglé", i, role)
+		}
+		out[i] = append(ed25519.PublicKey(nil), k...)
+	}
+	return out, nil
+}
+
+// signedBy cherche, parmi les clés données, celle dont la signature vérifie sur msg.
+func signedBy(keys []ed25519.PublicKey, msg, sig []byte) (kid [16]byte, ok bool) {
+	for _, pub := range keys {
+		if ed25519.Verify(pub, msg, sig) {
+			return KeyIDFromPublicKey(pub), true
+		}
+	}
+	return kid, false
 }
 
 // ValidatePlan applique au sujet et aux étapes les bornes que Submit exige
@@ -534,16 +588,12 @@ func (s *ContractStore) ApproveAll(ctx context.Context, planHash [32]byte, expir
 	approvers := make([][16]byte, 0, len(sigs))
 	seen := make(map[[16]byte]bool, len(sigs))
 	for _, sig := range sigs {
-		var kid [16]byte
-		signed := false
-		for _, pub := range s.operatorKeys {
-			if ed25519.Verify(pub, msg, sig) {
-				signed = true
-				kid = KeyIDFromPublicKey(pub)
-				break
-			}
-		}
+		kid, signed := signedBy(s.approverKeys, msg, sig)
 		if !signed {
+			// une clé du trousseau qui n'a pas le rôle : un événement de sécurité nommé, pas une signature inconnue
+			if _, known := signedBy(s.operatorKeys, msg, sig); known {
+				return s.refuseApprovalLocked(ctx, planHash, "plan-approval-role-denied", ErrPlanApprovalRole, now)
+			}
 			return s.refuseApprovalLocked(ctx, planHash, "plan-approval-signature-invalid", ErrPlanApprovalSignature, now)
 		}
 		if seen[kid] {
@@ -609,16 +659,11 @@ func (s *ContractStore) Revoke(ctx context.Context, planHash [32]byte, expiry ti
 		return s.refuseRevocationLocked(ctx, planHash, "plan-revocation-expiry-invalid", ErrPlanRevocationExpiryInvalid, now)
 	}
 	msg := RevocationMessage(planHash, expiry)
-	var revoker [16]byte
-	signed := false
-	for _, pub := range s.operatorKeys {
-		if ed25519.Verify(pub, msg, sig) {
-			signed = true
-			revoker = KeyIDFromPublicKey(pub)
-			break
-		}
-	}
+	revoker, signed := signedBy(s.revokerKeys, msg, sig)
 	if !signed {
+		if _, known := signedBy(s.operatorKeys, msg, sig); known {
+			return s.refuseRevocationLocked(ctx, planHash, "plan-revocation-role-denied", ErrPlanRevocationRole, now)
+		}
 		return s.refuseRevocationLocked(ctx, planHash, "plan-revocation-signature-invalid", ErrPlanRevocationSignature, now)
 	}
 	if err := s.writeSignedLeafLocked(ctx, planEventRevoke, planHash, revoker, expiry, sig, now); err != nil {

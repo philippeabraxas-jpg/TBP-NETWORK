@@ -83,6 +83,7 @@ var (
 	ErrFull              = errors.New("arbiter: file d'arbitrage pleine — default-deny")
 	ErrUnknownEntry      = errors.New("arbiter: demande inconnue, expirée ou déjà tranchée")
 	ErrBadSignature      = errors.New("arbiter: signature d'opérateur invalide")
+	ErrRoleDenied        = errors.New("arbiter: cette clé d'opérateur n'a pas le rôle d'arbitrage")
 	ErrHeartbeatStale    = errors.New("arbiter: battement hors de la fenêtre de fraîcheur")
 	ErrHeartbeatReplayed = errors.New("arbiter: battement non croissant (rejeu)")
 	ErrDecisionExpiry    = errors.New("arbiter: échéance de décision hors bornes")
@@ -145,11 +146,15 @@ type Options struct {
 	Journal *registry.RecordStore
 	// OperatorKeys : trousseau d'opérateurs ÉPINGLÉ (le même que le store de contrats). Requis.
 	OperatorKeys []ed25519.PublicKey
-	PresenceTTL  time.Duration // 0 ⇒ DefaultPresenceTTL
-	EntryTTL     time.Duration // 0 ⇒ DefaultEntryTTL
-	MaxEntries   int           // 0 ⇒ DefaultMaxEntries
-	OnAlarm      func(reason string)
-	Now          func() time.Time
+	// ArbiterKeys : le sous-ensemble du trousseau qui tient le rôle d'arbitrage (présence et décision). Nil ⇒ tout le
+	// trousseau (historique). Non nil, il ne peut pas être vide et chaque clé doit être dans OperatorKeys. Une clé du
+	// trousseau sans ce rôle est refusée avec ErrRoleDenied, pas confondue avec une signature inconnue.
+	ArbiterKeys []ed25519.PublicKey
+	PresenceTTL time.Duration // 0 ⇒ DefaultPresenceTTL
+	EntryTTL    time.Duration // 0 ⇒ DefaultEntryTTL
+	MaxEntries  int           // 0 ⇒ DefaultMaxEntries
+	OnAlarm     func(reason string)
+	Now         func() time.Time
 }
 
 type status byte
@@ -175,7 +180,8 @@ type Queue struct {
 	salt    []byte
 	leaves  translator.LeafSink
 	journal *registry.RecordStore
-	keys    []ed25519.PublicKey
+	keys    []ed25519.PublicKey // clés ayant le rôle d'arbitrage
+	allKeys []ed25519.PublicKey // tout le trousseau : sert à nommer un refus de rôle
 	presTTL time.Duration
 	entTTL  time.Duration
 	max     int
@@ -208,6 +214,23 @@ func NewQueue(o Options) (*Queue, error) {
 		}
 		keys[i] = append(ed25519.PublicKey(nil), k...)
 	}
+	arb := keys
+	if o.ArbiterKeys != nil {
+		if len(o.ArbiterKeys) == 0 {
+			return nil, errors.New("arbiter: aucune clé d'opérateur n'a le rôle d'arbitrage — la file ne pourrait jamais être tranchée")
+		}
+		known := make(map[[16]byte]bool, len(keys))
+		for _, k := range keys {
+			known[pep.KeyIDFromPublicKey(k)] = true
+		}
+		arb = make([]ed25519.PublicKey, len(o.ArbiterKeys))
+		for i, k := range o.ArbiterKeys {
+			if !known[pep.KeyIDFromPublicKey(k)] {
+				return nil, fmt.Errorf("arbiter: la clé %d du rôle d'arbitrage n'est pas dans le trousseau d'opérateurs épinglé", i)
+			}
+			arb[i] = append(ed25519.PublicKey(nil), k...)
+		}
+	}
 	pt := o.PresenceTTL
 	if pt == 0 {
 		pt = DefaultPresenceTTL
@@ -235,19 +258,26 @@ func NewQueue(o Options) (*Queue, error) {
 	}
 	salt := append([]byte(nil), o.Salt...)
 	return &Queue{
-		cellID: o.CellID, salt: salt, leaves: o.Leaves, journal: o.Journal, keys: keys,
+		cellID: o.CellID, salt: salt, leaves: o.Leaves, journal: o.Journal, keys: arb, allKeys: keys,
 		presTTL: pt, entTTL: et, max: mx, alarm: o.OnAlarm, now: now,
 		entries: make(map[[32]byte]*entry),
 	}, nil
 }
 
-func (q *Queue) kidOf(msg, sig []byte) ([16]byte, bool) {
+// kidOf identifie le signataire d'un acte d'arbitrage : sa clé si elle tient le rôle ; ErrRoleDenied si elle est du
+// trousseau sans ce rôle ; ErrBadSignature sinon.
+func (q *Queue) kidOf(msg, sig []byte) ([16]byte, error) {
 	for _, pub := range q.keys {
 		if ed25519.Verify(pub, msg, sig) {
-			return pep.KeyIDFromPublicKey(pub), true
+			return pep.KeyIDFromPublicKey(pub), nil
 		}
 	}
-	return [16]byte{}, false
+	for _, pub := range q.allKeys {
+		if ed25519.Verify(pub, msg, sig) {
+			return [16]byte{}, ErrRoleDenied
+		}
+	}
+	return [16]byte{}, ErrBadSignature
 }
 
 // Heartbeat enregistre un battement de présence signé par un opérateur épinglé. L'horodatage signé doit être frais
@@ -259,8 +289,8 @@ func (q *Queue) Heartbeat(ctx context.Context, at time.Time, sig []byte) error {
 	if d := now.Sub(at); d > HeartbeatSkew || d < -HeartbeatSkew {
 		return ErrHeartbeatStale
 	}
-	if _, ok := q.kidOf(PresenceMessage(q.cellID, at), sig); !ok {
-		return ErrBadSignature
+	if _, err := q.kidOf(PresenceMessage(q.cellID, at), sig); err != nil {
+		return err
 	}
 	if !at.After(q.lastHB) {
 		return ErrHeartbeatReplayed
@@ -326,9 +356,9 @@ func (q *Queue) Decide(ctx context.Context, id [32]byte, v Verdict, expiry time.
 	if ttl := expiry.Sub(now); ttl < MinDecisionTTL || ttl > q.entTTL {
 		return ErrDecisionExpiry
 	}
-	kid, signed := q.kidOf(DecisionMessage(q.cellID, id, e.ticket, v, expiry), sig)
-	if !signed {
-		return ErrBadSignature
+	kid, err := q.kidOf(DecisionMessage(q.cellID, id, e.ticket, v, expiry), sig)
+	if err != nil {
+		return err
 	}
 	act := actRefuse
 	if v == VerdictApprove {

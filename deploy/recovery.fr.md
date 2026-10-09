@@ -46,7 +46,8 @@ Rien de ce qu'elle a signé n'est révoqué, et — pour une clé de **contrôle
   (`TBP_OPERATOR_KEYS_FILE`), pas par une clé de contrôleur : un plan approuvé le reste jusqu'à sa propre
   expiration — 1 h par défaut, jusqu'à 24 h. Depuis #196, un plan pour un agent de classe F ou W exige k
   signatures distinctes d'opérateurs : une clé volée n'approuve plus seule un tel plan (la classe I en exige
-  toujours une). Si une clé d'opérateur est perdue ou volée, aucune vue de la
+  toujours une). Avec des rôles dans `operators.json` ([scale-2.fr.md](scale-2.fr.md) étape 3), une clé volée
+  qui ne tient que `revoke` n'approuve rien. Si une clé d'opérateur est perdue ou volée, aucune vue de la
   console ne liste les plans *approuvés* (`/v1/supervision/arbitration` ne montre que ceux encore en
   attente) : retrouvez-les dans le journal — chaque feuille d'approbation nomme l'identifiant de la clé de
   l'opérateur — et coupez chacun avec `quorumproof planrevoke` ([scale-2.fr.md](scale-2.fr.md), « Couper un

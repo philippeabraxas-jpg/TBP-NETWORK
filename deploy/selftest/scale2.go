@@ -141,7 +141,9 @@ func runScale2(s *suite, cfg config) {
 	// les clés d'OPÉRATEUR (celles qui approuvent les plans) sont créées par la même commande que les contrôleurs.
 	// #196 : à k = 2, un plan de classe W exige DEUX opérateurs distincts — le trousseau en porte deux.
 	var opKeyPaths, opPubs []string
-	for i := 1; i <= 2; i++ {
+	// Le troisième est l'astreinte de nuit : elle peut COUPER (révoquer un plan, trancher une demande dégradée), pas
+	// approuver — approuver élargit ce que la cellule autorise, couper le restreint.
+	for i := 1; i <= 3; i++ {
 		kp := filepath.Join(keysDir, fmt.Sprintf("operator-%d.key", i))
 		opOut, opErr, err := runCmd(cfg.repo, nil, qpBin, "keygen", "-key", kp, "-keyring", filepath.Join(keysDir, fmt.Sprintf("operator-%d-ring.json", i)))
 		pub := ""
@@ -157,7 +159,11 @@ func runScale2(s *suite, cfg config) {
 		opKeyPaths, opPubs = append(opKeyPaths, kp), append(opPubs, pub)
 	}
 	opKeysPath := filepath.Join(base, "operators.json")
-	opKeysJSON, _ := json.Marshal(opPubs)
+	opKeysJSON, _ := json.Marshal([]map[string]any{
+		{"key": opPubs[0], "roles": []string{"approve"}},
+		{"key": opPubs[1], "roles": []string{"approve"}},
+		{"key": opPubs[2], "roles": []string{"revoke", "arbitrate"}},
+	})
 	agentsPath := filepath.Join(base, "agents.json")
 	agentsJSON, _ := json.Marshal(map[string]map[string]any{"agent-w": {"class": 2}})
 	for _, f := range []struct {
@@ -311,9 +317,22 @@ func runScale2(s *suite, cfg config) {
 	oneStatus := postApproval(oneFile)
 	s.add(ph, "#196 : une seule signature d'opérateur ne suffit pas pour un plan de classe W à k = 2 — refusé, le plan reste en attente",
 		oneStatus == http.StatusBadRequest, fmt.Sprintf("status=%d", oneStatus))
+	// rôles : la clé de nuit ne complète pas un quorum d'approbation (le plan reste en attente)
+	nightFile := filepath.Join(base, "approval-night.json")
+	nightExpiry := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
+	if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-expires-at", nightExpiry, "-key", opKeyPaths[2], "-out", nightFile); err != nil {
+		s.fail(ph, "quorumproof planapprove (clé de nuit)", fmt.Errorf("%v — %s", err, errB))
+		return
+	}
+	nightRaw, _ := os.ReadFile(nightFile)
+	var nightBody map[string]any
+	_ = json.Unmarshal(nightRaw, &nightBody)
+	nightStatus, nightOut, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/approve", nightBody)
+	s.add(ph, "rôles : une clé qui ne tient pas le rôle d'approbation (l'astreinte de nuit) est refusée, avec un refus nommé — approuver élargit, couper restreint",
+		nightStatus == http.StatusBadRequest && strings.Contains(string(nightOut), "rôle d'approbation"), fmt.Sprintf("status=%d %s", nightStatus, strings.TrimSpace(string(nightOut))))
 	sameExpiry := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
 	var perOperator []string
-	for i, kp := range opKeyPaths {
+	for i, kp := range opKeyPaths[:2] {
 		f := filepath.Join(base, fmt.Sprintf("approval-op%d.json", i+1))
 		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planapprove", "-plan-hash", planSub.PlanHash, "-expires-at", sameExpiry, "-key", kp, "-out", f); err != nil {
 			s.fail(ph, "quorumproof planapprove (échéance commune)", fmt.Errorf("%v — %s", err, errB))
@@ -328,6 +347,33 @@ func runScale2(s *suite, cfg config) {
 	}
 	approveStatus := postApproval(approvalFile)
 	s.add(ph, "plan soumis, approuvé par deux opérateurs distincts (quorumproof planapprove + planassemble, deploy/scale-2.md étape 4, #196)", approveStatus == http.StatusOK, fmt.Sprintf("status=%d", approveStatus))
+	// rôles : sur un second plan, un approbateur ne révoque pas ; l'astreinte de nuit, si.
+	revStatus, revRaw, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/submit", map[string]any{
+		"subject": "agent-w",
+		"steps":   []map[string]string{{"action": "read", "resource": "doc-2", "params_hex": ""}},
+	})
+	var revPlan daemonPlanSubmitResponse
+	_ = json.Unmarshal(revRaw, &revPlan)
+	if revStatus != http.StatusOK || revPlan.PlanHash == "" {
+		s.fail(ph, "second plan (rôles de révocation)", fmt.Errorf("status=%d %s", revStatus, revRaw))
+		return
+	}
+	postRevocation := func(keyPath string) (int, string) {
+		f := filepath.Join(base, "revocation.json")
+		if _, errB, err := runCmd(cfg.repo, nil, qpBin, "planrevoke", "-plan-hash", revPlan.PlanHash, "-key", keyPath, "-out", f); err != nil {
+			return 0, fmt.Sprintf("%v — %s", err, errB)
+		}
+		raw, _ := os.ReadFile(f)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		st, out, _ := postUnixJSON(adminHC, "http://brokerd/v1/supervision/plan/revoke", body)
+		return st, string(out)
+	}
+	st1, out1 := postRevocation(opKeyPaths[0])
+	s.add(ph, "rôles : un approbateur qui ne tient pas le rôle de révocation ne révoque pas (refus nommé)",
+		st1 == http.StatusBadRequest && strings.Contains(out1, "rôle de révocation"), fmt.Sprintf("status=%d %s", st1, strings.TrimSpace(out1)))
+	st2, out2 := postRevocation(opKeyPaths[2])
+	s.add(ph, "rôles : l'astreinte de nuit révoque un plan — couper est ouvert à qui tient ce rôle", st2 == http.StatusOK, fmt.Sprintf("status=%d %s", st2, strings.TrimSpace(out2)))
 	bindOut, errB, err := runCmd(cfg.repo, nil, qpBin, "planbind", "-plan-hash", planSub.PlanHash)
 	binding := strings.TrimSpace(bindOut)
 	if err != nil || binding == "" {

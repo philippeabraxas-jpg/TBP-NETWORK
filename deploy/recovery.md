@@ -44,7 +44,8 @@ Nothing it signed is revoked, and — for a **controller** key — nothing it si
 - **Plan approvals** are the exception, and they are signed by an *operator* key (`TBP_OPERATOR_KEYS_FILE`),
   not a controller key: an approved plan stays approved until its own expiry — 1 h by default, up to 24 h.
   Since #196 a plan for a class-F or class-W agent takes k distinct operator signatures: one stolen key no
-  longer approves such a plan alone (class I still takes one signature).
+  longer approves such a plan alone (class I still takes one signature). With roles in `operators.json`
+  ([scale-2.md](scale-2.md) step 3), a stolen key that only holds `revoke` cannot approve anything.
   If an operator key is lost or stolen, no console view lists *approved* plans (`/v1/supervision/arbitration`
   shows only those still pending): find them in the log — each approval leaf names the approving operator's
   key id — and cut each one with `quorumproof planrevoke` ([scale-2.md](scale-2.md), "Cutting a plan approved

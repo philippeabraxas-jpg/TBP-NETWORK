@@ -117,7 +117,10 @@
 //	                        cellule et elle-même. multi (≥ 2 cellules) ⇒
 //	                        fencing complet, epoch0.json requis
 //	TBP_OPERATOR_KEYS_FILE  JSON ["pubkey_ed25519_hex", …] ≥ 1 — clés
-//	                        d'opérateurs du store de contrats (T30)
+//	                        d'opérateurs du store de contrats (T30), chacune
+//	                        avec TOUS les rôles ; ou, pour séparer les rôles,
+//	                        [{"key": "…", "roles": ["approve", "revoke",
+//	                        "arbitrate"]}, …] (voir operators.go)
 //	TBP_AGENT_REGISTRY_FILE JSON {"<subject>": {"class": 0..3,
 //	                        "quota"?: {"max_volume", "max_window_s"},
 //	                        "transport_identity"?: "<CN mTLS>"}, …}
@@ -789,7 +792,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	}
 
 	// Store de contrats de plan (T30) : clés d'opérateurs épinglées.
-	operatorKeys, err := loadOperatorKeys(cfg.operatorKeysFile)
+	operators, err := loadOperatorKeyring(cfg.operatorKeysFile)
 	if err != nil {
 		return err
 	}
@@ -823,9 +826,10 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 		}
 	}
 	// Issue #196 : combien d'opérateurs approuvent un plan — k pour les classes F et W, 1 pour I. Un
-	// quorum d'approbation impossible à atteindre (moins de clés distinctes que k) refuse le démarrage.
-	distinctOperators := make(map[[16]byte]bool, len(operatorKeys))
-	for _, k := range operatorKeys {
+	// quorum d'approbation impossible à atteindre (moins de clés distinctes AYANT LE RÔLE d'approbation que k)
+	// refuse le démarrage.
+	distinctOperators := make(map[[16]byte]bool, len(operators.Approvers))
+	for _, k := range operators.Approvers {
 		distinctOperators[pep.KeyIDFromPublicKey(k)] = true
 	}
 	if err := checkOperatorQuorum(agentRegistry, cfg.quorumMin, len(distinctOperators)); err != nil {
@@ -834,7 +838,9 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	contracts, err := pep.NewContractStore(pep.ContractOptions{
 		CellID:            cfg.cellID,
 		PolicyID:          cfg.policyID,
-		OperatorKeys:      operatorKeys,
+		OperatorKeys:      operators.All,
+		ApproverKeys:      operators.Approvers,
+		RevokerKeys:       operators.Revokers,
 		ApprovalsRequired: planApprovalsRequired(agentRegistry, cfg.quorumMin),
 		Salt:              cfg.salt,
 		Leaves:            cellLog,
@@ -903,7 +909,7 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	var arbQueue *arbiter.Queue
 	if cfg.arbitration.enabled {
 		arbQueue, err = arbiter.NewQueue(arbiter.Options{
-			CellID: cfg.cellID, Salt: cfg.salt, Leaves: cellLog, Journal: auditStore, OperatorKeys: operatorKeys,
+			CellID: cfg.cellID, Salt: cfg.salt, Leaves: cellLog, Journal: auditStore, OperatorKeys: operators.All, ArbiterKeys: operators.Arbiters,
 			PresenceTTL: cfg.arbitration.presenceTTL, EntryTTL: cfg.arbitration.entryTTL, MaxEntries: cfg.arbitration.maxPending,
 			OnAlarm: onTrip,
 		})
@@ -1608,38 +1614,6 @@ func parseGenesisControllers(data []byte) (map[int]ed25519.PublicKey, error) {
 		controllers[i+1] = ed25519.PublicKey(pub) // key_id 1-basé (genèse)
 	}
 	return controllers, nil
-}
-
-// loadOperatorKeys charge le trousseau d'opérateurs du store de contrats
-// (T30) : JSON ["pubkey_ed25519_hex", …], ≥ 1, sans doublon.
-func loadOperatorKeys(path string) ([]ed25519.PublicKey, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("clés d'opérateurs: %w", err)
-	}
-	var raw []string
-	if err := strictjson.Decode(data, &raw); err != nil {
-		return nil, fmt.Errorf("clés d'opérateurs JSON: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, errors.New("clés d'opérateurs : liste vide — le store de contrats exige ≥ 1 opérateur (T30)")
-	}
-	// le doublon se juge sur la clé DÉCODÉE : « AA… » et « aa… » sont la même clé (revue tierce 4.4) —
-	// comparer le texte laissait une clé compter pour deux opérateurs
-	seen := map[string]bool{}
-	keys := make([]ed25519.PublicKey, 0, len(raw))
-	for _, pubHex := range raw {
-		pub, err := hex.DecodeString(pubHex)
-		if err != nil || len(pub) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("clé d'opérateur %q illisible (Ed25519 hex)", pubHex)
-		}
-		if seen[string(pub)] {
-			return nil, fmt.Errorf("clé d'opérateur %q en double (même clé, casse hexadécimale éventuellement différente)", pubHex)
-		}
-		seen[string(pub)] = true
-		keys = append(keys, ed25519.PublicKey(pub))
-	}
-	return keys, nil
 }
 
 // agentRegistryEntry est la forme JSON d'un enregistrement du registre
