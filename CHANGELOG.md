@@ -53,9 +53,17 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 - `brokerd` requires `TBP_PROVISIONING_POLICY_BUNDLE` and `TBP_PROVISIONING_OPA_CONFIG` (unless the dev
   opt-out is declared). **Upgrading** a cell that already ran: the first start refuses on the new witness
   entries; one transition proof signed by the attested quorum adopts them.
-- When the registry holds a class F or class W agent, `operators.json` must hold at least k distinct keys,
-  otherwise `brokerd` refuses to start and names the agent. `plan/approve` accepts `signature` (one) or
-  `signatures` (a list), never both.
+- When the registry holds a class F or class W agent, at least k distinct keys of `operators.json` must be able to
+  approve (and, from k = 2, a submitter apart from them: see "Submitter ≠ approver" above), otherwise `brokerd`
+  refuses to start and names what is missing. `plan/approve` accepts `signature` (one) or `signatures` (a list),
+  never both.
+- **Request bodies are decoded strictly** on the data planes and the operator routes
+  ([#289](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/289), after
+  [#241](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/241) and
+  [#274](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/274)): a duplicate key, an unknown field, a
+  field name in a different case, content after the document or invalid UTF-8 is refused with HTTP 400 and a
+  detail naming the cause, and has no effect. **Upgrading:** an integration that sends an extra field or a
+  different case now gets a 400; the exact fields are listed in `deploy/integration-contract.md`, section 5.
 
 - **Closing the network is no longer as hard as reopening it** ("restricting is not widening"): `pepd` accepts
   the switch monitor → closed with `TBP_MODE_RESTRICT_QUORUM_MIN` distinct controller signatures (default 1,
