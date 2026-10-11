@@ -2,7 +2,7 @@
 # scripts/devtest/site.sh — a three-machine DEV-TEST site: M1 the cell, M2 an application server, M3 an agent.
 #
 #   scripts/devtest/site.sh m1 init --address <M1 address> [--listen <addr:port>] [--env <label>]
-#   scripts/devtest/site.sh m1 up | down | status | grant | mode-proof | pack | report | reset
+#   scripts/devtest/site.sh m1 up | down | status | sign | grant | mode-proof | pack | report | reset
 #   scripts/devtest/site.sh m2 init --pack m2.pack.tgz --listen <addr:port> [--env <label>]
 #   scripts/devtest/site.sh m2 up | down | status | mode | report | reset
 #   scripts/devtest/site.sh m3 init --pack m3.pack.tgz --app http://<M2 address:port> [--env <label>]
@@ -442,35 +442,77 @@ m1_status() {
   return "${rc}"
 }
 
-# m1_grant AGENT ACTION RESOURCE: what the operators and controllers do for ONE action of an agent — a signed plan,
-# approved by as many operators as the agent's class needs and, for class W, a proof signed by two controllers.
-m1_grant() {
+# m1_sign AGENT ACTION RESOURCE [--yes]: the operators' side of ONE action of an agent. It is what a person does at
+# the console, step by step: the desk that submits sends a signed plan; the operator reads the plan IN CLEAR,
+# recomputes its hash with their own tool instead of trusting the one the broker announces (#273), and signs only if
+# they match and they say so; for class W, two controllers then sign a proof for exactly that action.
+# `--yes` skips the questions, never the recomputation: a broker that sealed another plan is refused either way.
+m1_sign() {
   require_init
-  [ $# -eq 3 ] || die "usage: $0 m1 grant <agent> <action> <resource>"
-  local agent=$1 action=$2 resource=$3 class w hash binding proof="" exp keys=()
+  local yes=0 pos=() agent action resource class w hash binding proof="" exp keys=() answer policy sub arb out resp body
+  while [ $# -gt 0 ]; do case "$1" in --yes) yes=1; shift ;; --*) die "sign: unknown option $1" ;; *) pos+=("$1"); shift ;; esac; done
+  [ "${#pos[@]}" -eq 3 ] || die "usage: $0 m1 sign <agent> <action> <resource> [--yes]"
+  agent=${pos[0]}; action=${pos[1]}; resource=${pos[2]}
   class=$(jq -r --arg a "${agent}" '.[$a].class // empty' "${HOME_DIR}/agents.json")
   [ -n "${class}" ] || die "unknown agent ${agent} (agent-f, agent-i, agent-w)"
   m1_status >/dev/null 2>&1 || die "the cell is not running: '$0 m1 up' first"
-  w=$(mktemp -d "${STATE_DIR}/grant.XXXXXX")
+  w=$(mktemp -d "${STATE_DIR}/sign.XXXXXX")
   # shellcheck disable=SC2064
   trap "rm -rf -- '${w}'" EXIT
+
+  echo "1. The submitting desk (operator-4) sends a signed plan to the cell"
   jq -cn --arg s "${agent}" --arg a "${action}" --arg r "${resource}" '{subject:$s,steps:[{action:$a,resource:$r,params_hex:""}]}' >"${w}/plan.json"
-  "${BIN_DIR}/quorumproof" plansubmit -cell "${CELL_ID}" -plan "${w}/plan.json" -key "${KEYS_DIR}/operator-4.key" -out "${w}/sub.json" >/dev/null 2>&1
-  hash=$(curl -fsS --unix-socket "${ADMIN_SOCK}" -X POST -d @"${w}/sub.json" http://localhost/v1/supervision/plan/submit | jq -r .plan_hash)
+  cp "${w}/plan.json" "${w}/submitted-plan.json" # (the file sent to the broker)
+  "${BIN_DIR}/quorumproof" plansubmit -cell "${CELL_ID}" -plan "${w}/submitted-plan.json" -key "${KEYS_DIR}/operator-4.key" -out "${w}/sub.json" >/dev/null 2>&1
+  resp=$(curl -sS --unix-socket "${ADMIN_SOCK}" -X POST -d @"${w}/sub.json" -w '\n%{http_code}' http://localhost/v1/supervision/plan/submit)
+  if [ "${resp##*$'\n'}" != "200" ]; then
+    body=${resp%$'\n'*}
+    die "the cell refused the plan: $(printf '%s' "${body}" | jq -r '.error // .' 2>/dev/null)$([[ "${body}" == *rejeu* ]] && echo ' — the same plan was signed within the same second: wait a second and run it again')"
+  fi
+  hash=$(printf '%s' "${resp%$'\n'*}" | jq -r .plan_hash)
   [ "${#hash}" -eq 64 ] || die "the cell did not accept the plan"
+  arb=$(curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/arbitration)
+  policy=$(printf '%s' "${arb}" | jq -r .policy_id)
+  sub=$(printf '%s' "${arb}" | jq -r --arg h "${hash}" '.pending[] | select(.hash == $h) | .submitted_at')
+  [ -n "${sub}" ] || die "the cell does not list the plan it announced (${hash:0:16}…)"
+
+  echo "2. The plan the operator is asked to sign, in clear"
+  echo "     agent    : ${agent} (class ${class}: $(case "${class}" in 0) echo financial ;; 1) echo infrastructure ;; 2) echo survival ;; esac))"
+  jq -r '.steps[] | "     may      : \(.action) \(.resource)"' "${w}/plan.json"
+  echo "     cell     : ${CELL_ID}      expires: 30 minutes after approval"
+  echo "3. The operator recomputes the hash from that plan (quorumproof planhash) — not from the broker's word"
+  if ! out=$("${BIN_DIR}/quorumproof" planhash -cell "${CELL_ID}" -policy-id "${policy}" -submitted-at "${sub}" -plan "${w}/plan.json" -expect "${hash}" 2>&1); then
+    printf '%s\n' "${out}" | tail -1 | sed 's/^/     /'
+    die "the broker sealed a plan that is not the one above: NOTHING is signed"
+  fi
+  echo "     the hash the broker announced is the hash of this plan (${hash:0:16}…)"
+
   exp=$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)
   keys=(-key "${KEYS_DIR}/operator-1.key")
   [ "${class}" = "1" ] || keys+=(-key "${KEYS_DIR}/operator-2.key") # class F and W: k distinct approvers
+  echo "4. Approval by $([ "${class}" = "1" ] && echo "one operator (operator-1)" || echo "two operators (operator-1 and operator-2): class ${class} needs k distinct approvers")"
+  if [ "${yes}" -eq 0 ]; then
+    printf '     Sign this plan? Type "sign" to go on, anything else stops: '
+    read -r answer || answer=""
+    [ "${answer}" = "sign" ] || die "not signed: nothing was approved"
+  fi
   "${BIN_DIR}/quorumproof" planapprove -plan-hash "${hash}" -expires-at "${exp}" "${keys[@]}" -out "${w}/appr.json" >/dev/null 2>&1
-  curl -fsS --unix-socket "${ADMIN_SOCK}" -X POST -d @"${w}/appr.json" http://localhost/v1/supervision/plan/approve >/dev/null ||
-    die "the cell refused the approval"
+  resp=$(curl -sS --unix-socket "${ADMIN_SOCK}" -X POST -d @"${w}/appr.json" -w '\n%{http_code}' http://localhost/v1/supervision/plan/approve)
+  [ "${resp##*$'\n'}" = "200" ] || die "the cell refused the approval: $(printf '%s' "${resp%$'\n'*}" | jq -r '.error // .' 2>/dev/null)"
   binding=$("${BIN_DIR}/quorumproof" planbind -plan-hash "${hash}")
+
   if [ "${class}" = "2" ]; then
+    echo "5. Two controllers (1 and 3) sign a proof for exactly: ${action} ${resource}, under the rules ${policy:0:16}…"
+    if [ "${yes}" -eq 0 ]; then
+      printf '     Sign this proof? Type "sign" to go on, anything else stops: '
+      read -r answer || answer=""
+      [ "${answer}" = "sign" ] || die "not signed: the plan is approved but there is no controllers' proof"
+    fi
     "${BIN_DIR}/quorumproof" wproof -manifest "${GENESIS_DIR}/manifest.json" -action "${action}" -resource "${resource}" \
-      -policy "$(sed -n 's/^TBP_POLICY_ID=//p' "${ENV_FILE}")" -key "${KEYS_DIR}/controller-1.key" -key "${KEYS_DIR}/controller-3.key" \
-      -out "${w}/proof.json" >/dev/null 2>&1
+      -policy "${policy}" -key "${KEYS_DIR}/controller-1.key" -key "${KEYS_DIR}/controller-3.key" -out "${w}/proof.json" >/dev/null 2>&1
     proof=$(od -An -v -tx1 "${w}/proof.json" | tr -d ' \n')
   fi
+  echo
   echo "plan approved for ${agent} to ${action} ${resource} (class ${class}); valid 30 minutes. On M3, within the next 4 minutes:"
   echo
   if [ -n "${proof}" ]; then
@@ -883,7 +925,8 @@ case "${ROLE}:${CMD}" in
   m1:up) m1_up ;;
   m1:down) m1_down ;;
   m1:status) m1_status ;;
-  m1:grant) m1_grant "$@" ;;
+  m1:grant) m1_sign --yes "$@" ;;
+  m1:sign) m1_sign "$@" ;;
   m1:mode-proof) m1_mode_proof "$@" ;;
   m1:pack) m1_make_packs; echo "site M1: packs rewritten in ${PACK_DIR}" ;;
   m1:report) m1_report ;;

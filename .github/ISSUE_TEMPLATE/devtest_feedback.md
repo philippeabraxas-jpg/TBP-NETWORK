@@ -30,3 +30,6 @@ M2:
 
 M3:
 ```
+
+**What you missed seeing or doing** (a screen, a view, a question before you typed `sign`): see
+[#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) — the console is not designed yet, and your answer shapes it.

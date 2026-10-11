@@ -37,7 +37,7 @@ alone, is [solo.md](solo.md).
 | Its job | decides who may do what, and signs a token for it | checks the token before the application acts | acts as an agent: asks, then presents what it got |
 | What it holds | the controllers' and operators' keys, the CAs, the issuer key | public material only: the issuer's public key, the controllers' public keys, the signed rules | its agents' certificates and keys |
 | What it never holds | — | **no governance key**, no CA key | no governance key, no CA key |
-| What you do there | enrol, grant, sign the controllers' proofs | close and reopen `pepd` with those proofs | request, replay, forge, impersonate |
+| What you do there | enrol, sign plans, sign the controllers' proofs | close and reopen `pepd` with those proofs | request, replay, forge, impersonate |
 
 **Why these three.** They are the smallest set that exercises what a one-machine test cannot: *enrolment* (M3's
 agents are bound to the certificates M1 issued), a decision *over the network* (mutual TLS), and *enforcement* by a
@@ -136,7 +136,7 @@ Run these in order. Each step says where it runs, and what it proves when it giv
 | # | On | Do | You should get | It proves |
 |---|---|---|---|---|
 | 1 | M3 | `site.sh m3 act agent-i read doc-1` | `plan-binding-required`, no token | the cell admits nothing that no operator approved |
-| 2 | M1 | `site.sh m1 grant agent-i read doc-1` | a plan approved by an operator, and the exact `m3 act …` line to run | the operators' side: a signed plan, approved |
+| 2 | M1 | `site.sh m1 sign agent-i read doc-1`, then type `sign` | the plan in clear, its hash recomputed by the tool itself, then a plan approved and the exact `m3 act …` line to run | the operators' side as a person does it: you see what you sign, and the hash you sign is the one you computed (`--yes` skips the questions, never the recomputation) |
 | 3 | M3 | paste that line | `{"allow":true,"reason":"ok"}`, then on M2 `{"executed": "read doc-1", "verdict": { … "mode": "monitor", "forwarded": true }}` `[200]` | **the whole path**: enrolment by certificate, the decision, the signed token, `pepd` on another machine checking it, the application acting |
 | 4 | M3 | `site.sh m3 call` (the same token again) | `[200]` but `"reason": "replay"` | in monitor, `pepd` records the would-be refusal and blocks nothing |
 | 5 | M1, M3 | get a fresh token (2–3), then `site.sh m3 call read doc-9`; get another, then `site.sh m3 call --forge` | `scope-mismatch`, then `bad-signature`, both still `[200]` in monitor | scope and signature are checked by `pepd` |
@@ -145,7 +145,7 @@ Run these in order. Each step says where it runs, and what it proves when it giv
 | 8 | M1, M3 | repeat 4 and 5 (a fresh token each time) | now `[403]` for the replay, the other resource and the forged token; step 3 still `[200]` | closed: `pepd`'s verdict is applied |
 | 9 | M1, M2 | `m1 mode-proof monitor --controllers 1` → `m2 mode monitor --proof` | `[403]` | reopening widens, so one controller is not enough |
 | 10 | M1, M2 | `m1 mode-proof monitor` (two controllers) → `m2 mode monitor --proof` | `{"mode":"monitor"}` | two controllers reopen |
-| 11 | M1, M3 | `m1 grant agent-w read doc-1`, run the line; then run it again **without** `--proof …` | `executed`; then `quorum-required` | class W needs two operators **and** two controllers |
+| 11 | M1, M3 | `m1 sign agent-w read doc-1` (answer `sign` to the operators, then to the controllers), run the line; then run it again **without** `--proof …` | `executed`; then `quorum-required` | class W needs two operators **and** two controllers |
 | 12 | M3 | `site.sh m3 act agent-i read doc-1 --as agent-w`; `… --no-cert` | `agent-transport-unbound`; a TLS handshake refusal | an agent cannot use another agent's certificate, nor none |
 | 13 | M2 | `site.sh m2 down`, `site.sh m2 up`, then step 3 | `pepd's posture: refused`, then `[403]` with `"forwarded": false` | a restart never silently reopens |
 | 14 | M1, M2 | `m1 mode-proof monitor` → `m2 mode monitor --proof`, then step 3 | `[200]` again | two controllers reconfirm the posture |
@@ -227,6 +227,12 @@ What makes a report useful: what you tried (the exact command), what you expecte
   agents').
 - **M2's measured boot uses two stand-ins** — the `pepd` binary where a broker binary would be, a placeholder file
   where an AI container would be — and records its reference at the first start. A real server measures the real ones.
+- **There is no console.** Everything is done on a command line: `m1 sign` shows you a plan and asks you to type
+  `sign`; `m1 mode-proof` signs the controllers' proofs; `m1 status` and `report` show counters; the audit trail is read
+  with `tbp-audit verify`. There is no dashboard and no screen. `supervisord` (read-only JSON over a Unix socket,
+  [superviseur.md](../superviseur.md)) exists in this repository but is not part of this test, and nothing in the
+  repository lets an operator *sign* from anything but the command line. What a console should show and let people
+  do, and in what form, is an open question ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): tell us what you missed.
 - **One of each.** One cell, one server, one agent host. No supervisor, no multi-cell, no 802.1X NAC, and the
   network isolation of [network-isolation.md](../network-isolation.md) is not set up: you bring the firewall.
 - **The application is a stand-in** (`scripts/devtest/site-app.py`, Python standard library), not a real service.
@@ -237,7 +243,8 @@ What makes a report useful: what you tried (the exact command), what you expecte
 |---|---|
 | `m1 init --address <M1> [--listen addr:port] [--env label]` | builds the binaries, makes the keys, the signed rules, the two CAs and the agents' certificates, the environment and the two packs |
 | `m1 up` / `down` / `status` | starts OPA and `brokerd` / stops them / shows them and the counters |
-| `m1 grant <agent> <action> <resource>` | the operators' (and for class W the controllers') side of one action; prints the `m3 act` line to run |
+| `m1 sign <agent> <action> <resource> [--yes]` | the operators' (and for class W the controllers') side of one action: submits the plan, shows it in clear, recomputes its hash, asks you to type `sign`; prints the `m3 act` line to run |
+| `m1 grant <agent> <action> <resource>` | the same as `sign --yes` (no questions; the hash is still recomputed) |
 | `m1 mode-proof closed\|monitor [--controllers N]` | the controllers' proof for M2's `pepd`: one controller to close, two to reopen |
 | `m1 pack` | rewrites the two packs |
 | `m2 init --pack <m2.pack.tgz> --listen <M2>:9000 [--env label]` | unpacks, writes `pepd`'s environment (a real measured boot, no development switch) |

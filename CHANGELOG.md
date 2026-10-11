@@ -16,6 +16,9 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
     only when `pepd` forwards), M3 an agent. It tests that the whole path works: enrolment by certificate, a
     decision, a signed token, the token checked on another machine, the server's posture closed and reopened by the
     controllers, a restart that comes back refused. M2 and M3 hold no governance key.
+  - **`site.sh m1 sign`**: the operators' side as a person does it — the plan is shown in clear, its hash is
+    recomputed by `quorumproof planhash` (a plan the broker sealed differently signs nothing), and the operator types
+    `sign`. `grant` is `sign --yes`. There is no monitoring or signing console in this release; the pages say so, and [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) asks what one should do and show.
   - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
   - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
     gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**

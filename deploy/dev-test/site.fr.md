@@ -38,7 +38,7 @@ pour regarder la cellule seule, est [solo.fr.md](solo.fr.md).
 | Son rôle | décide qui peut faire quoi, et signe un jeton | vérifie le jeton avant que l'application n'agisse | joue l'agent : demande, puis présente ce qu'il a reçu |
 | Ce qu'elle détient | les clés des contrôleurs et des opérateurs, les CA, la clé d'émission | du public seulement : la clé publique de l'émetteur, celles des contrôleurs, les règles signées | les certificats et clés de ses agents |
 | Ce qu'elle ne détient jamais | — | **aucune clé de gouvernance**, aucune clé de CA | aucune clé de gouvernance, aucune clé de CA |
-| Ce que vous y faites | inscrire, accorder, signer les preuves des contrôleurs | fermer et rouvrir `pepd` avec ces preuves | demander, rejouer, falsifier, usurper |
+| Ce que vous y faites | inscrire, signer les plans, signer les preuves des contrôleurs | fermer et rouvrir `pepd` avec ces preuves | demander, rejouer, falsifier, usurper |
 
 **Pourquoi ces trois-là.** C'est le plus petit ensemble qui exerce ce qu'un test à une machine ne peut pas :
 l'*inscription* (les agents de M3 sont liés aux certificats que M1 a émis), une décision *par le réseau* (TLS
@@ -141,7 +141,7 @@ Jouez ces étapes dans l'ordre. Chacune dit où elle se joue, et ce qu'elle prou
 | # | Sur | Faire | Vous devez obtenir | Cela prouve |
 |---|---|---|---|---|
 | 1 | M3 | `site.sh m3 act agent-i read doc-1` | `plan-binding-required`, pas de jeton | la cellule n'admet rien qu'aucun opérateur n'ait approuvé |
-| 2 | M1 | `site.sh m1 grant agent-i read doc-1` | un plan approuvé par un opérateur, et la ligne `m3 act …` exacte à exécuter | le côté opérateurs : un plan signé, approuvé |
+| 2 | M1 | `site.sh m1 sign agent-i read doc-1`, puis tapez `sign` | le plan en clair, son hash recalculé par l'outil lui-même, puis un plan approuvé et la ligne `m3 act …` exacte à exécuter | le côté opérateurs comme le fait une personne : vous voyez ce que vous signez, et le hash signé est celui que vous avez calculé (`--yes` saute les questions, jamais le recalcul) |
 | 3 | M3 | collez cette ligne | `{"allow":true,"reason":"ok"}`, puis sur M2 `{"executed": "read doc-1", "verdict": { … "mode": "monitor", "forwarded": true }}` `[200]` | **tout le chemin** : l'inscription par certificat, la décision, le jeton signé, `pepd` sur une autre machine qui le vérifie, l'application qui agit |
 | 4 | M3 | `site.sh m3 call` (le même jeton de nouveau) | `[200]` mais `"reason": "replay"` | en monitor, `pepd` enregistre le refus qui aurait eu lieu et ne bloque rien |
 | 5 | M1, M3 | obtenez un jeton neuf (2–3), puis `site.sh m3 call read doc-9` ; un autre, puis `site.sh m3 call --forge` | `scope-mismatch`, puis `bad-signature`, tous deux encore `[200]` en monitor | `pepd` vérifie la portée et la signature |
@@ -150,7 +150,7 @@ Jouez ces étapes dans l'ordre. Chacune dit où elle se joue, et ce qu'elle prou
 | 8 | M1, M3 | refaites 4 et 5 (un jeton neuf à chaque fois) | maintenant `[403]` pour le rejeu, l'autre ressource et le jeton falsifié ; l'étape 3 reste `[200]` | closed : le verdict de `pepd` est appliqué |
 | 9 | M1, M2 | `m1 mode-proof monitor --controllers 1` → `m2 mode monitor --proof` | `[403]` | rouvrir élargit : un contrôleur ne suffit pas |
 | 10 | M1, M2 | `m1 mode-proof monitor` (deux contrôleurs) → `m2 mode monitor --proof` | `{"mode":"monitor"}` | deux contrôleurs rouvrent |
-| 11 | M1, M3 | `m1 grant agent-w read doc-1`, exécutez la ligne ; puis exécutez-la de nouveau **sans** `--proof …` | `executed` ; puis `quorum-required` | la classe W demande deux opérateurs **et** deux contrôleurs |
+| 11 | M1, M3 | `m1 sign agent-w read doc-1` (répondez `sign` aux opérateurs, puis aux contrôleurs), exécutez la ligne ; puis exécutez-la de nouveau **sans** `--proof …` | `executed` ; puis `quorum-required` | la classe W demande deux opérateurs **et** deux contrôleurs |
 | 12 | M3 | `site.sh m3 act agent-i read doc-1 --as agent-w` ; `… --no-cert` | `agent-transport-unbound` ; un refus de poignée de main TLS | un agent ne peut ni utiliser le certificat d'un autre, ni aucun |
 | 13 | M2 | `site.sh m2 down`, `site.sh m2 up`, puis l'étape 3 | `pepd's posture: refused`, puis `[403]` avec `"forwarded": false` | un redémarrage ne rouvre jamais en silence |
 | 14 | M1, M2 | `m1 mode-proof monitor` → `m2 mode monitor --proof`, puis l'étape 3 | `[200]` de nouveau | deux contrôleurs reconfirment la posture |
@@ -241,6 +241,12 @@ passé, et les rapports.
 - **Le démarrage mesuré de M2 utilise deux substituts** — le binaire `pepd` à la place d'un binaire de broker, un
   fichier vide à la place d'un conteneur d'IA — et enregistre sa référence au premier démarrage. Un vrai serveur
   mesure les vrais.
+- **Il n'y a pas de console.** Tout se fait en ligne de commande : `m1 sign` vous montre un plan et vous demande de
+  taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ;
+  la piste d'audit se lit avec `tbp-audit verify`. Il n'y a ni tableau de bord ni écran. `supervisord` (JSON en lecture seule sur un socket Unix,
+  [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test, et rien dans le
+  dépôt ne permet à un opérateur de *signer* autrement qu'en ligne de commande. Ce qu'une console doit montrer et
+  permettre de faire, et sous quelle forme, est une question ouverte ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.
 - **Un de chaque.** Une cellule, un serveur, un hôte d'agents. Pas de superviseur, pas de multi-cellule, pas de NAC
   802.1X, et l'isolation réseau de [network-isolation.fr.md](../network-isolation.fr.md) n'est pas mise en place :
   le pare-feu est le vôtre.
@@ -253,7 +259,8 @@ passé, et les rapports.
 |---|---|
 | `m1 init --address <M1> [--listen addr:port] [--env étiquette]` | compile les binaires, fait les clés, les règles signées, les deux CA et les certificats d'agents, l'environnement et les deux paquets |
 | `m1 up` / `down` / `status` | démarre OPA et `brokerd` / les arrête / les montre avec les compteurs |
-| `m1 grant <agent> <action> <ressource>` | le côté opérateurs (et, pour la classe W, contrôleurs) d'une action ; affiche la ligne `m3 act` à exécuter |
+| `m1 sign <agent> <action> <ressource> [--yes]` | le côté opérateurs (et, pour la classe W, contrôleurs) d'une action : soumet le plan, le montre en clair, recalcule son hash, vous demande de taper `sign` ; affiche la ligne `m3 act` à exécuter |
+| `m1 grant <agent> <action> <ressource>` | identique à `sign --yes` (sans questions ; le hash est quand même recalculé) |
 | `m1 mode-proof closed\|monitor [--controllers N]` | la preuve des contrôleurs pour le `pepd` de M2 : un contrôleur pour fermer, deux pour rouvrir |
 | `m1 pack` | réécrit les deux paquets |
 | `m2 init --pack <m2.pack.tgz> --listen <M2>:9000 [--env étiquette]` | décompresse, écrit l'environnement de `pepd` (un vrai démarrage mesuré, aucune échappatoire de développement) |
