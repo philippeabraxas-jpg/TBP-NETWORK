@@ -21,7 +21,7 @@ whether the code is sound; this asks whether the whole thing **works**, and whet
 | What it does not | key custody, separation between real people, a genesis ceremony | tokens at a server, enrolment, the network |
 | For | the functional test and the red team: **this is the DEV-TEST release** | a quick look at the cell |
 
-**Watching what happens:** there is no screen — [console.md](console.md) says where the monitor is (three commands on M1), how to read it and how to use it, so you do not have to look for it.
+**Watching what happens:** open the **live console** in a browser — after `m1 up`, one address shows the path of every request across the three machines, the state of each component and the latency of each step. [console.md](console.md) says where it is, how to read it and how it measures.
 
 If you try one thing, try the site: it is the one that matches how TBP is deployed.
 

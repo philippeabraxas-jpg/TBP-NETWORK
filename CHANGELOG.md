@@ -29,8 +29,15 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
     trace behind a new development switch, `TBP_DECISION_TRACE_DEV` (sentinel required, start-up alarm, listed with the
     active development switches); it is written after the verdict and cannot change it. `pepd` is untouched: M2's side
     is the verdict it returned to the application. Requests without a trace id (`curl`) are listed apart.
-  - **[deploy/dev-test/console.md](deploy/dev-test/console.md)** (EN/FR): where the monitor is (three commands on M1, no
-    screen), how to read `m1 watch` and `m1 trace` line by line, how to use them, recipes, and what they do not show.
+  - **The live console** (`src/devconsole`, [deploy/dev-test/console.md](deploy/dev-test/console.md), EN/FR;
+    [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): after `m1 up`, one address in a browser shows,
+    as it happens, the path of each request across the three machines (agent → TLS/identity → cell decision →
+    application → `pepd` → executed or rejected, and the component that stopped it, with the reason in words), the state
+    of each component (a machine that stops reporting is UNKNOWN, never green) and the latency of every step, each
+    measured on one machine with one clock (p50/p95/p99 over the last 500 requests). Runs on M1 by default or on any
+    machine (`site.sh console up`); M1 and M2 run a shipper (`devconsole ship`), M3 posts with curl. Read-only, two
+    different keys (one opens the page, one lets a machine send), no history. Everything a request carries is shown as
+    text: `test_site.sh` opens the page in a real browser with hostile content to check nothing runs.
   - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
   - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
     gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**

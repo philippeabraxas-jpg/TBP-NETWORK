@@ -7,6 +7,8 @@
 #   scripts/devtest/site.sh m2 up | down | status | mode | trace-export | report | reset
 #   scripts/devtest/site.sh m3 init --pack m3.pack.tgz --app http://<M2 address:port> [--env <label>]
 #   scripts/devtest/site.sh m3 check | act | call | trace-export | report | reset
+#   scripts/devtest/site.sh console up --listen <addr:port> --ingest-key <hex> [--env <label>]   # the live console, on any machine
+#   scripts/devtest/site.sh console down | url | status | reset
 #   scripts/devtest/site.sh <role> listeners       # what this machine listens on, to check the exposure
 #
 # ⚠ NOT FOR PRODUCTION. Throw-away keys, a seed-file issuer key on M1, no HSM, no real people behind the roles.
@@ -70,7 +72,7 @@ EOF
 
 die() { echo "site: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing prerequisite: $1 ($2)"; }
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 # --- shared helpers ---------------------------------------------------------------------------------
 
@@ -82,7 +84,7 @@ pid_of() {
   pid=$(cat "$f" 2>/dev/null || true)
   [ -n "$pid" ] || return 0
   comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
-  case "${comm}" in "$1" | bash | sh | setsid | nohup | python3) echo "$pid" ;; esac
+  case "${comm}" in "$1" | bash | sh | setsid | nohup | python3 | devconsole) echo "$pid" ;; esac
 }
 
 stop_one() {
@@ -120,6 +122,35 @@ wait_for() {
   done
   die "${what}: no answer after ${secs}s — see ${LOG_DIR}/"
 }
+
+# --- the live console (issue #329) -------------------------------------------------------------------------------------
+# src/devconsole is a TEST tool: a read-only web page that shows, as it happens, the path of each request through the three
+# machines, the state of each component and the latencies. It runs on M1 by default, or on any other machine
+# (`site.sh console up`). M1 and M2 run a shipper that sends it their trace files and their components' state; M3 posts
+# its events with curl. Plain HTTP, two keys (one opens the page, one lets a machine send), no power over the test.
+CONSOLE_PORT=9100
+
+console_url() { cat "${STATE_DIR}/console-url" 2>/dev/null || true; }
+
+console_hostport() { local u; u=$(console_url); u=${u#http://}; printf '%s' "${u%%/*}"; }
+
+console_start_server() { # console_start_server LISTEN — needs console-ingest.key and console-view.key in the home
+  local listen=$1
+  [ -x "${BIN_DIR}/devconsole" ] || die "no ${BIN_DIR}/devconsole"
+  start_bg console "${BIN_DIR}/devconsole" serve --listen "${listen}" --view-key-file "${HOME_DIR}/console-view.key" \
+    --ingest-key-file "${HOME_DIR}/console-ingest.key" --label "$(cat "${STATE_DIR}/env-label" 2>/dev/null || true)"
+  wait_for console 10 "the console" curl -fsS "http://${listen}/healthz"
+}
+
+console_start_shipper() { # console_start_shipper MACHINE ARGS... — sends this machine's trace files and component state
+  local machine=$1
+  shift
+  [ -n "$(console_url)" ] && [ -f "${HOME_DIR}/console-ingest.key" ] || return 0
+  start_bg shipper "${BIN_DIR}/devconsole" ship --machine "${machine}" --console "$(console_url)" \
+    --key-file "${HOME_DIR}/console-ingest.key" --run-dir "${RUN_DIR}" "$@"
+}
+
+console_page_url() { printf '%s/?key=%s' "$(console_url)" "$(cat "${HOME_DIR}/console-view.key")"; }
 
 require_init() { [ -f "${HOME_DIR}/SITE" ] || die "not initialised: run '$0 ${ROLE} init …' first (home: ${HOME_DIR})"; }
 
@@ -230,7 +261,7 @@ start_opa() {
 
 m1_install_binaries() {
   local b pkg
-  for b in brokerd quorumproof tbp-audit pepd; do
+  for b in brokerd quorumproof tbp-audit pepd devconsole; do
     if [ -x "${SRC_BIN_DIR}/${b}" ]; then
       cp -- "${SRC_BIN_DIR}/${b}" "${BIN_DIR}/${b}"
     else
@@ -240,6 +271,7 @@ m1_install_binaries() {
         quorumproof) pkg=./src/pep/cmd/quorumproof ;;
         tbp-audit) pkg=./src/registry/cmd/tbp-audit ;;
         pepd) pkg=./src/pep/cmd/pepd ;;
+        devconsole) pkg=./src/devconsole/cmd/devconsole ;; # the test console: not one of the release binaries
       esac
       (cd "${REPO_ROOT}" && go build -o "${BIN_DIR}/${b}" "${pkg}")
     fi
@@ -285,34 +317,38 @@ m1_make_packs() {
 
   # M2: what an application server needs to check tokens — public material and binaries, no governance key
   mkdir -p "${w}/m2/bin"
-  cp -- "${BIN_DIR}/pepd" "${BIN_DIR}/tbp-audit" "${BIN_DIR}/opa" "${w}/m2/bin/"
+  cp -- "${BIN_DIR}/pepd" "${BIN_DIR}/tbp-audit" "${BIN_DIR}/opa" "${BIN_DIR}/devconsole" "${w}/m2/bin/"
   cp -- "${OPA_DIR}/bundle.tar.gz" "${OPA_DIR}/policy-verify.pub" "${w}/m2/"
   cp -- "${HOME_DIR}/issuer-keyring.json" "${w}/m2/issuer-keyring.json"
   cp -- "${KEYS_DIR}/quorum-keyring.json" "${w}/m2/quorum-keyring.json"
-  printf 'CELL_ID=%s\nPOLICY_ID=%s\n' "${CELL_ID}" "${policy_id}" >"${w}/m2/site.env"
+  printf 'CELL_ID=%s\nPOLICY_ID=%s\nCONSOLE_URL=%s\nCONSOLE_KEY=%s\n' "${CELL_ID}" "${policy_id}" "$(console_url)" "$(cat "${HOME_DIR}/console-ingest.key")" >"${w}/m2/site.env"
   tar -C "${w}/m2" -czf "${PACK_DIR}/m2.pack.tgz" .
 
   # M3: the agents' certificates and what verifies the cell. The agents' PRIVATE keys are in it: it goes to M3 only.
   mkdir -p "${w}/m3/agents"
   cp -- "${PKI_DIR}/server-ca.pem" "${w}/m3/server-ca.pem"
   for addr in agent-f agent-i agent-w; do cp -- "${PKI_DIR}/${addr}.pem" "${PKI_DIR}/${addr}.key" "${w}/m3/agents/"; done
-  printf 'CELL_ID=%s\nBROKER_URL=%s\n' "${CELL_ID}" "${broker_url}" >"${w}/m3/site.env"
+  printf 'CELL_ID=%s\nBROKER_URL=%s\nCONSOLE_URL=%s\nCONSOLE_KEY=%s\n' "${CELL_ID}" "${broker_url}" "$(console_url)" "$(cat "${HOME_DIR}/console-ingest.key")" >"${w}/m3/site.env"
   tar -C "${w}/m3" -czf "${PACK_DIR}/m3.pack.tgz" .
   rm -rf -- "${w}"
   chmod 600 "${PACK_DIR}"/*.tgz
 }
 
 m1_init() {
-  local t0=${SECONDS} address="" listen="" label=""
+  local t0=${SECONDS} address="" listen="" label="" console_url="" console_key=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --address) address=${2:-}; shift 2 ;;
       --listen) listen=${2:-}; shift 2 ;;
       --env) label=${2:-}; shift 2 ;;
+      --console-url) console_url=${2:-}; shift 2 ;;
+      --console-key) console_key=${2:-}; shift 2 ;;
       *) die "m1 init: unknown option $1" ;;
     esac
   done
   banner
+  [ -z "${console_url}" ] || [[ "${console_url}" =~ ^http://[A-Za-z0-9._-]+:[0-9]+$ ]] || die "--console-url must look like http://<address>:<port> (the console elsewhere: see deploy/dev-test/console.md)"
+  [ -z "${console_key}" ] || [[ "${console_key}" =~ ^[0-9a-f]{32}$ ]] || die "--console-key must be 32 hex characters (openssl rand -hex 16)"
   [ -n "${address}" ] || die "m1 init: --address is required: the address agents will use to reach this machine (its PRIVATE address on your network)"
   [ -n "${listen}" ] || listen="${address}:8443"
   case "${listen}" in *:*) ;; *) die "--listen must be addr:port" ;; esac
@@ -403,7 +439,14 @@ extendedKeyUsage=serverAuth"
   "${BIN_DIR}/tbp-audit" keygen -out "${HOME_DIR}/brokerd-audit.key" >/dev/null
   printf 'https://%s\n' "${address}:${listen##*:}" >"${STATE_DIR}/broker-url"
 
-  echo "== 7/7 development sentinel (${SENTINEL}) and the packs for M2 and M3"
+  echo "== 7/7 the live console, the development sentinel (${SENTINEL}) and the packs for M2 and M3"
+  # the console runs here unless --console-url says it runs elsewhere; two different keys: one opens the page, one
+  # lets a machine send events
+  if [ -n "${console_url}" ]; then printf '0\n' >"${STATE_DIR}/console-local"; else console_url="http://${address}:${CONSOLE_PORT}"; printf '1\n' >"${STATE_DIR}/console-local"; fi
+  printf '%s\n' "${console_url}" >"${STATE_DIR}/console-url"
+  printf '%s\n' "${console_key:-$(openssl rand -hex 16)}" >"${HOME_DIR}/console-ingest.key"
+  openssl rand -hex 16 >"${HOME_DIR}/console-view.key"
+  chmod 600 "${HOME_DIR}/console-ingest.key" "${HOME_DIR}/console-view.key"
   m1_write_sentinel
   printf 'site M1\ncell: %s\n' "${CELL_ID}" >"${HOME_DIR}/SITE"
   m1_make_packs
@@ -422,18 +465,30 @@ m1_up() {
   [ -e "${SENTINEL}" ] || die "${SENTINEL} is missing: brokerd would refuse its seed-file issuer key."
   [ -z "$(pid_of opa)" ] && [ -z "$(pid_of brokerd)" ] || die "already running: '$0 m1 status', or '$0 m1 down' first"
   rm -f "${BROKER_SOCK}" "${ADMIN_SOCK}"
-  trap 'stop_one brokerd; stop_one opa' EXIT
+  [ -z "$(pid_of console)" ] && [ -z "$(pid_of shipper)" ] || die "already running: '$0 m1 status', or '$0 m1 down' first"
+  trap 'stop_one shipper; stop_one console; stop_one brokerd; stop_one opa' EXIT
   start_opa
   start_bg brokerd bash -c 'set -a; . "$1"; set +a; exec "$2"' _ "${ENV_FILE}" "${BIN_DIR}/brokerd"
   wait_for brokerd 30 "brokerd stats" curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/stats
   if grep -q "AVERTISSEMENT quorum" "${LOG_DIR}/brokerd.log"; then die "brokerd warns about a fragile quorum — see ${LOG_DIR}/brokerd.log"; fi
+  [ "$(cat "${STATE_DIR}/console-local" 2>/dev/null)" != "1" ] || console_start_server "$(console_hostport)"
+  console_start_shipper M1 --trace "${TRACE_DIR}/brokerd.jsonl" --log "${LOG_DIR}/brokerd.log" --admin-sock "${ADMIN_SOCK}" --opa-sock "${OPA_SOCK}"
   trap - EXIT
   echo $((SECONDS - t0)) >"${STATE_DIR}/up-seconds"
   echo "site M1: up. Agents reach the cell at $(cat "${STATE_DIR}/broker-url") (mutual TLS)."
   echo "         expected in ${LOG_DIR}/brokerd.log: a high-priority alarm that a development environment is declared."
+  m1_console_hint
 }
 
-m1_down() { stop_one brokerd; stop_one opa; rm -f "${OPA_SOCK}" "${BROKER_SOCK}" "${ADMIN_SOCK}"; echo "site M1: down"; }
+m1_console_hint() {
+  if [ "$(cat "${STATE_DIR}/console-local" 2>/dev/null)" = "1" ]; then
+    echo "         the live console (open it in a browser): $(console_page_url)"
+  else
+    echo "         the live console runs elsewhere: $(console_url)  (its page key is printed by 'site.sh console up' on that machine)"
+  fi
+}
+
+m1_down() { stop_one shipper; stop_one console; stop_one brokerd; stop_one opa; rm -f "${OPA_SOCK}" "${BROKER_SOCK}" "${ADMIN_SOCK}"; echo "site M1: down"; }
 
 m1_status() {
   require_init
@@ -441,6 +496,10 @@ m1_status() {
   printf 'opa      : '; if [ -n "$(pid_of opa)" ] && curl -fsS --unix-socket "${OPA_SOCK}" http://localhost/health >/dev/null 2>&1; then echo up; else echo DOWN; rc=1; fi
   printf 'brokerd  : '; if [ -n "$(pid_of brokerd)" ] && curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/stats >/dev/null 2>&1; then echo up; else echo DOWN; rc=1; fi
   [ "${rc}" -ne 0 ] || echo "counters : $(curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/stats)"
+  printf 'console  : '
+  if [ "$(cat "${STATE_DIR}/console-local" 2>/dev/null)" != "1" ]; then echo "elsewhere ($(console_url))"
+  elif [ -n "$(pid_of console)" ]; then echo "up, $(console_url)"
+  else echo "not running"; fi
   return "${rc}"
 }
 
@@ -552,8 +611,9 @@ m1_trace() {
   done
   # the TLS handshakes that failed never reach the cell's decision code: only brokerd's own log knows them
   if [ -f "${LOG_DIR}/brokerd.log" ]; then
-    grep -a 'http: TLS handshake error from' "${LOG_DIR}/brokerd.log" | sed -E 's/^([0-9]{4})\/([0-9]{2})\/([0-9]{2}) ([0-9:]{8}) http: TLS handshake error from ([^:]+:[0-9]+): (.*)$/\1-\2-\3T\4.0Z\t\5\t\6/' |
-      while IFS=$'\t' read -r ts peer msg; do
+    grep -a 'http: TLS handshake error from' "${LOG_DIR}/brokerd.log" | sed -E 's/^([0-9]{4})\/([0-9]{2})\/([0-9]{2}) ([0-9:]{8}) http: TLS handshake error from ([^:]+:[0-9]+): (.*)$/\1-\2-\3 \4\t\5\t\6/' |
+      while IFS=$'\t' read -r lts peer msg; do
+        ts=$(date -u -d "${lts}" +%Y-%m-%dT%H:%M:%S.0Z 2>/dev/null) || continue # brokerd's log is in this machine's local time
         jq -cn --arg ts "${ts}" --arg peer "${peer}" --arg d "TLS handshake failed: ${msg}" \
           '{ts:$ts,component:"transport",stage:"handshake",outcome:"deny",reason:"tls-handshake-error",detail:$d,peer:$peer}'
       done >"${work}/transport.jsonl"
@@ -728,16 +788,20 @@ m2_init() {
   local w
   w=$(mktemp -d "${STATE_DIR}/pack.XXXXXX")
   tar -C "${w}" -xzf "${pack}" || die "cannot unpack ${pack}"
-  for f in bin/pepd bin/tbp-audit bin/opa bundle.tar.gz policy-verify.pub issuer-keyring.json quorum-keyring.json site.env; do
+  for f in bin/pepd bin/tbp-audit bin/opa bin/devconsole bundle.tar.gz policy-verify.pub issuer-keyring.json quorum-keyring.json site.env; do
     [ -f "${w}/${f}" ] || die "the pack lacks ${f}: is it M1's m2.pack.tgz?"
   done
-  cp -- "${w}/bin/pepd" "${w}/bin/tbp-audit" "${w}/bin/opa" "${BIN_DIR}/"
+  cp -- "${w}/bin/pepd" "${w}/bin/tbp-audit" "${w}/bin/opa" "${w}/bin/devconsole" "${BIN_DIR}/"
   chmod +x "${BIN_DIR}"/*
   cp -- "${w}/bundle.tar.gz" "${w}/policy-verify.pub" "${OPA_DIR}/"
   cp -- "${w}/issuer-keyring.json" "${w}/quorum-keyring.json" "${HOME_DIR}/"
   local cell policy
   cell=$(sed -n 's/^CELL_ID=//p' "${w}/site.env")
   policy=$(sed -n 's/^POLICY_ID=//p' "${w}/site.env")
+  # where this machine reports what it sees (the live console), and the key that lets it send
+  sed -n 's/^CONSOLE_URL=//p' "${w}/site.env" >"${STATE_DIR}/console-url"
+  sed -n 's/^CONSOLE_KEY=//p' "${w}/site.env" >"${HOME_DIR}/console-ingest.key"
+  chmod 600 "${HOME_DIR}/console-ingest.key"
   rm -rf -- "${w}"
   write_opa_launch
   cp -- "${SCRIPT_DIR}/site-app.py" "${HOME_DIR}/app/site-app.py"
@@ -790,12 +854,15 @@ m2_up() {
   require_init
   [ -z "$(pid_of opa)" ] && [ -z "$(pid_of pepd)" ] && [ -z "$(pid_of app)" ] || die "already running: '$0 m2 status', or '$0 m2 down' first"
   rm -f "${PEPD_ADMIN_SOCK}"
-  trap 'stop_one app; stop_one pepd; stop_one opa' EXIT
+  [ -z "$(pid_of shipper)" ] || die "already running: '$0 m2 status', or '$0 m2 down' first"
+  trap 'stop_one shipper; stop_one app; stop_one pepd; stop_one opa' EXIT
   start_opa
   start_bg pepd bash -c 'set -a; . "$1"; set +a; exec "$2"' _ "${ENV_FILE}" "${BIN_DIR}/pepd"
   wait_for pepd 30 "pepd admin socket" curl -fsS --unix-socket "${PEPD_ADMIN_SOCK}" http://localhost/v1/mode
   APP_LISTEN=$(cat "${STATE_DIR}/app-listen") PEPD_URL="http://${PEPD_ADDR}" APP_TRACE_FILE="${TRACE_DIR}/app.jsonl" start_bg app python3 "${HOME_DIR}/app/site-app.py"
   wait_for app 10 "the application" curl -fsS "http://$(cat "${STATE_DIR}/app-listen")/healthz"
+  console_start_shipper M2 --trace "${TRACE_DIR}/app.jsonl" --admin-sock "${PEPD_ADMIN_SOCK}" --opa-sock "${OPA_SOCK}" \
+    --app-url "http://$(cat "${STATE_DIR}/app-listen")"
   trap - EXIT
   echo $((SECONDS - t0)) >"${STATE_DIR}/up-seconds"
   mode=$(pepd_mode)
@@ -806,7 +873,7 @@ m2_up() {
   esac
 }
 
-m2_down() { stop_one app; stop_one pepd; stop_one opa; rm -f "${OPA_SOCK}" "${PEPD_ADMIN_SOCK}"; echo "site M2: down"; }
+m2_down() { stop_one shipper; stop_one app; stop_one pepd; stop_one opa; rm -f "${OPA_SOCK}" "${PEPD_ADMIN_SOCK}"; echo "site M2: down"; }
 
 m2_status() {
   require_init
@@ -906,12 +973,30 @@ m3_init() {
 
 # m3_event STAGE OUTCOME REASON DETAIL [CERT]: what the agent side records about the request it is making (issue #329).
 # The trace id is the one sent to the cell and to the application in the header X-TBP-Trace-Id.
+# Extra arguments: CERT, HOP (cell|app: whom the agent was talking to) and TIMES ("connect appconnect pretransfer
+# starttransfer total", in seconds, as curl measured them on THIS machine). Durations are only ever measured on one machine.
 m3_event() {
   [ -n "${TRACE_ID:-}" ] || return 0
+  local line
   (umask 077; : >>"${TRACE_DIR}/m3.jsonl")
-  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" --arg id "${TRACE_ID}" --arg st "$1" --arg o "$2" --arg r "$3" --arg d "$4" --arg c "${5:-}" \
-    '{ts:$ts,trace_id:$id,component:"agent",stage:$st,outcome:$o} + (if $r != "" then {reason:$r} else {} end) + (if $d != "" then {detail:$d} else {} end) + (if $c != "" then {peer_cn:$c} else {} end)' \
-    >>"${TRACE_DIR}/m3.jsonl" # (the file is made 0600 on first write, whatever the caller's umask)
+  line=$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" --arg id "${TRACE_ID}" --arg st "$1" --arg o "$2" --arg r "$3" --arg d "$4" \
+    --arg c "${5:-}" --arg h "${6:-}" --arg t "${7:-}" \
+    '($t | split(" ") | map(tonumber? // 0)) as $x
+     | {ts:$ts,trace_id:$id,component:"agent",stage:$st,outcome:$o} + (if $r != "" then {reason:$r} else {} end) + (if $d != "" then {detail:$d} else {} end)
+       + (if $c != "" then {peer_cn:$c} else {} end) + (if $h != "" then {hop:$h} else {} end)
+       + (if ($x | length) == 5 then {connect_us:(($x[0]*1e6)|floor), tls_us:(if $x[1] > 0 then ((($x[1]-$x[0])*1e6)|floor) else 0 end),
+                                      wait_us:((($x[3]-$x[2])*1e6)|floor), total_us:(($x[4]*1e6)|floor)} else {} end)' )
+  printf '%s\n' "${line}" >>"${TRACE_DIR}/m3.jsonl" # (0600 from its first write, whatever the caller's umask)
+  m3_ship "${line}"
+}
+
+# m3_ship LINE: send one event to the live console, in the background; it never delays or fails the test
+m3_ship() {
+  local url key
+  url=$(sed -n 's/^CONSOLE_URL=//p' "${HOME_DIR}/site.env" 2>/dev/null || true)
+  key=$(sed -n 's/^CONSOLE_KEY=//p' "${HOME_DIR}/site.env" 2>/dev/null || true)
+  [ -n "${url}" ] && [ -n "${key}" ] || return 0
+  (printf '%s\n' "$1" | curl -sS -m 3 -o /dev/null -H "Authorization: Bearer ${key}" --data-binary @- "${url}/ingest" >/dev/null 2>&1 &)
 }
 m3_new_trace_id() { TRACE_ID="t-$(date +%s)-$(openssl rand -hex 3)"; }
 
@@ -923,6 +1008,16 @@ m3_decide() {
   [ -z "${TRACE_ID:-}" ] || th=(-H "X-TBP-Trace-Id: ${TRACE_ID}")
   curl -sS --cacert "${HOME_DIR}/server-ca.pem" --cert "${HOME_DIR}/agents/$2.pem" --key "${HOME_DIR}/agents/$2.key" \
     "${th[@]}" -X POST -d "$3" "$(m3_broker_url)/v1/actions"
+}
+
+# m3_decide_timed AGENT CERT-AGENT JSON-BODY: like m3_decide, then a last line "__TIMES__ connect appconnect pretransfer starttransfer total"
+m3_decide_timed() {
+  local th=() rc=0
+  [ -z "${TRACE_ID:-}" ] || th=(-H "X-TBP-Trace-Id: ${TRACE_ID}")
+  curl -sS --cacert "${HOME_DIR}/server-ca.pem" --cert "${HOME_DIR}/agents/$2.pem" --key "${HOME_DIR}/agents/$2.key" \
+    "${th[@]}" -w $'\n__TIMES__ %{time_connect} %{time_appconnect} %{time_pretransfer} %{time_starttransfer} %{time_total}' \
+    -X POST -d "$3" "$(m3_broker_url)/v1/actions" || rc=$?
+  return "${rc}"
 }
 
 m3_intent_body() { # m3_intent_body SUBJECT ACTION RESOURCE [BINDING [PROOF]]
@@ -938,12 +1033,12 @@ hex_to_b64() { perl -ne 'chomp; print pack("H*",$_)' | base64 -w0; }
 m3_present() {
   local th=()
   [ -z "${TRACE_ID:-}" ] || th=(-H "X-TBP-Trace-Id: ${TRACE_ID}")
-  curl -sS -H "X-TBP-Token: $1" "${th[@]}" -w ' [%{http_code}]\n' "$(cat "${STATE_DIR}/app-url")/$2/$3"
+  curl -sS -H "X-TBP-Token: $1" "${th[@]}" -w $' [%{http_code}]\n__TIMES__ %{time_connect} %{time_appconnect} %{time_pretransfer} %{time_starttransfer} %{time_total}\n' "$(cat "${STATE_DIR}/app-url")/$2/$3"
 }
 
 m3_act() {
   require_init
-  local agent="" action="" resource="" binding="" proof="" as="" nocert=0 positional=() resp tok out
+  local agent="" action="" resource="" binding="" proof="" as="" nocert=0 positional=() resp tok out times
   while [ $# -gt 0 ]; do
     case "$1" in
       --binding) binding=${2:-}; shift 2 ;;
@@ -962,16 +1057,18 @@ m3_act() {
   if [ "${nocert}" -eq 1 ]; then
     if resp=$(curl -sS --cacert "${HOME_DIR}/server-ca.pem" -H "X-TBP-Trace-Id: ${TRACE_ID}" -X POST -d "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")" "$(m3_broker_url)/v1/actions" 2>&1); then
       echo "   answered without a client certificate: ${resp}"
-      m3_event answer allow "answered-without-certificate" "the cell answered a request that carried no certificate"
+      m3_event answer allow "answered-without-certificate" "the cell answered a request that carried no certificate" "" cell
     else
       echo "   refused at the TLS handshake, as it must be: $(printf '%s' "${resp}" | tail -1 | cut -c1-160)"
-      m3_event answer deny "tls-handshake-refused" "$(printf '%s' "${resp}" | tail -1 | cut -c1-160)"
+      m3_event answer deny "tls-handshake-refused" "$(printf '%s' "${resp}" | tail -1 | cut -c1-160)" "" cell
     fi
     return 0
   fi
-  resp=$(m3_decide "${agent}" "${as:-${agent}}" "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")") || { m3_event answer deny "no-answer" "the cell did not answer"; die "no answer from the cell"; }
+  resp=$(m3_decide_timed "${agent}" "${as:-${agent}}" "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")") || { m3_event answer deny "no-answer" "the cell did not answer" "" cell; die "no answer from the cell"; }
+  times=${resp##*__TIMES__ }
+  resp=${resp%$'\n__TIMES__'*}
   echo "   $(printf '%s' "${resp}" | jq -c '{allow,reason}')"
-  m3_event answer "$(printf '%s' "${resp}" | jq -r 'if .allow then "allow" else "deny" end')" "$(printf '%s' "${resp}" | jq -r '.reason // ""')" "answer received from the cell"
+  m3_event answer "$(printf '%s' "${resp}" | jq -r 'if .allow then "allow" else "deny" end')" "$(printf '%s' "${resp}" | jq -r '.reason // ""')" "answer received from the cell" "" cell "${times}"
   tok=$(printf '%s' "${resp}" | jq -r '.token // empty')
   if [ -z "${tok}" ]; then echo "   no token: nothing to present."; return 0; fi
   printf '%s' "${tok}" | hex_to_b64 >"${STATE_DIR}/last-token"
@@ -979,8 +1076,10 @@ m3_act() {
   echo "2. present the token to the application on M2:"
   m3_event request presenting "" "token presented to the application: ${action} ${resource}"
   out=$(m3_present "$(cat "${STATE_DIR}/last-token")" "${action}" "${resource}")
+  times=${out##*__TIMES__ }
+  out=${out%$'\n__TIMES__'*}
   echo "   ${out}"
-  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }"
+  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }" "" app "${times}"
 }
 
 # m3_http_outcome "<body> [200]" -> executed | refused | no-answer (for the agent's own record)
@@ -991,7 +1090,7 @@ m3_http_outcome() {
 # m3_call [ACTION RESOURCE] [--forge]: present the LAST token again (a replay), for another resource, or forged
 m3_call() {
   require_init
-  local forge=0 positional=() action resource tok out
+  local forge=0 positional=() action resource tok out times
   while [ $# -gt 0 ]; do case "$1" in --forge) forge=1; shift ;; --*) die "call: unknown option $1" ;; *) positional+=("$1"); shift ;; esac; done
   [ -f "${STATE_DIR}/last-token" ] || die "no token yet: '$0 m3 act …' first"
   if [ "${#positional[@]}" -eq 2 ]; then action=${positional[0]}; resource=${positional[1]}; else read -r action resource <"${STATE_DIR}/last-call"; fi
@@ -1001,8 +1100,82 @@ m3_call() {
   echo "present the last token for: ${action} ${resource}$([ "${forge}" -eq 1 ] && echo ' (one byte flipped)')   [trace ${TRACE_ID}]"
   m3_event request presenting "" "token presented again: ${action} ${resource}$([ "${forge}" -eq 1 ] && echo ' (one byte flipped)')"
   out=$(m3_present "${tok}" "${action}" "${resource}")
+  times=${out##*__TIMES__ }
+  out=${out%$'\n__TIMES__'*}
   echo "   ${out}"
-  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }"
+  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }" "" app "${times}"
+}
+
+
+# ===================================================================================================
+# console — the live console, on a machine of its own (or on M1: `m1 up` starts it there by default)
+# ===================================================================================================
+
+# console_up --listen ADDR:PORT --ingest-key HEX [--env LABEL]: the first call makes the home, the keys and the binary.
+# The ingest key is the one given to `m1 init --console-key`; the page key is made here and printed.
+console_up() {
+  local listen="" ikey="" label=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --listen) listen=${2:-}; shift 2 ;;
+      --ingest-key) ikey=${2:-}; shift 2 ;;
+      --env) label=${2:-}; shift 2 ;;
+      *) die "console up: unknown option $1" ;;
+    esac
+  done
+  banner
+  if [ ! -f "${HOME_DIR}/SITE" ]; then
+    [[ "${listen}" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]] || die "console up: --listen <addr:port> (this machine's private address, port ${CONSOLE_PORT})"
+    [[ "${ikey}" =~ ^[0-9a-f]{32}$ ]] || die "console up: --ingest-key <32 hex>: the key M1 was given with 'm1 init --console-key' (openssl rand -hex 16)"
+    case "${listen}" in 0.0.0.0:* ) echo "site: WARNING: ${listen} listens on every interface. Prefer this machine's private address." >&2 ;; esac
+    check_home_free
+    need curl "apt install curl"; need openssl "apt install openssl"
+    refuse_root
+    begin_home
+    set_env_label "${label}"
+    local b=devconsole
+    if [ -x "${SRC_BIN_DIR}/${b}" ]; then cp -- "${SRC_BIN_DIR}/${b}" "${BIN_DIR}/${b}"
+    else
+      need go "or give a built devconsole in DEVTEST_BIN_DIR; the console is a test tool, not one of the release binaries"
+      (cd "${REPO_ROOT}" && go build -o "${BIN_DIR}/${b}" ./src/devconsole/cmd/devconsole)
+    fi
+    printf '%s\n' "${ikey}" >"${HOME_DIR}/console-ingest.key"
+    openssl rand -hex 16 >"${HOME_DIR}/console-view.key"
+    chmod 600 "${HOME_DIR}/console-ingest.key" "${HOME_DIR}/console-view.key"
+    printf 'http://%s\n' "${listen}" >"${STATE_DIR}/console-url"
+    printf 'site console\n' >"${HOME_DIR}/SITE"
+    end_home
+  fi
+  require_init
+  [ -z "$(pid_of console)" ] || die "already running: '$0 console url' shows where, '$0 console down' stops it"
+  console_start_server "$(console_hostport)"
+  echo "site console: up. Open this address in a browser:"
+  echo "    $(console_page_url)"
+  echo "    (plain HTTP, read-only. M1, M2 and M3 report to $(console_url) with the ingest key; allow them through the firewall.)"
+}
+
+console_down() { stop_one console; echo "site console: down"; }
+
+console_status() {
+  require_init
+  printf 'console  : '
+  if [ -n "$(pid_of console)" ] && curl -fsS "http://$(console_hostport)/healthz" >/dev/null 2>&1; then echo "up on $(console_url)"; else echo "DOWN"; return 1; fi
+}
+
+console_show_url() { require_init; console_page_url; echo; }
+
+console_reset() {
+  local yes=0
+  [ "${1:-}" != "-y" ] || yes=1
+  if [ -e "${HOME_DIR}" ] && [ ! -f "${HOME_DIR}/SITE" ]; then die "${HOME_DIR} exists but is not a site home (no SITE marker): refusing to delete it"; fi
+  if [ "${yes}" -eq 0 ]; then
+    printf 'This stops the console and DELETES %s. Type "reset" to go on: ' "${HOME_DIR}"
+    read -r answer
+    [ "${answer}" = "reset" ] || die "cancelled"
+  fi
+  [ ! -d "${RUN_DIR}" ] || console_down >/dev/null
+  rm -rf -- "${HOME_DIR}"
+  echo "site console: reset"
 }
 
 CHECK_FAILS=0
@@ -1100,6 +1273,12 @@ case "${ROLE}:${CMD}" in
   m3:call) m3_call "$@" ;;
   m3:report) m3_report ;;
   m3:reset) m3_reset "$@" ;;
-  m1:listeners | m2:listeners | m3:listeners) cmd_listeners ;;
+  console:up) console_up "$@" ;;
+  console:down) console_down ;;
+  console:status) console_status ;;
+  console:url) console_show_url ;;
+  console:reset) console_reset "$@" ;;
+  m1:console-url) require_init; m1_console_hint ;;
+  m1:listeners | m2:listeners | m3:listeners | console:listeners) cmd_listeners ;;
   *) usage ;;
 esac

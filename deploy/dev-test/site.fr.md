@@ -56,6 +56,7 @@ nécessaires :
 |---|---|---|---|
 | M3 → M1 | 8443/tcp | les décisions, TLS mutuel | l'adresse de M3 seulement |
 | M3 → M2 | 9000/tcp | l'application | l'adresse de M3 seulement |
+| vous, M2, M3 → la console (sur M1 par défaut) | 9100/tcp | la console temps réel : la page, et ce que M2 et M3 lui envoient ([console.fr.md](console.fr.md)) | votre adresse et celles des machines |
 | vous → chacune | 22/tcp | ssh et `scp` | votre adresse seulement |
 
 Rien d'autre, et **rien depuis Internet**. Utilisez le pare-feu ou les groupes de sécurité de votre fournisseur.
@@ -167,7 +168,7 @@ entre les machines.
 
 ## Suivre une requête : de son émission à son exécution ou à son rejet
 
-> Où est le moniteur, comment lire chaque ligne et s'en servir : **[console.fr.md](console.fr.md)**.
+> Tout ce qui suit se voit aussi en direct, dans un navigateur : **[console.fr.md](console.fr.md)** (où elle est, comment la lire, comment la latence est mesurée).
 
 Savoir *qu'*une requête est refusée ne suffit pas dans un test : il faut savoir **quel composant l'a arrêtée, et pourquoi**.
 Chacune des trois machines consigne ce qu'elle voit, et M1 en fait une chronologie par requête.
@@ -295,14 +296,13 @@ passé, et les rapports.
 - **Le démarrage mesuré de M2 utilise deux substituts** — le binaire `pepd` à la place d'un binaire de broker, un
   fichier vide à la place d'un conteneur d'IA — et enregistre sa référence au premier démarrage. Un vrai serveur
   mesure les vrais.
-- **Il n'y a pas de console.** Tout se fait en ligne de commande : `m1 sign` vous montre un plan et vous demande de
-  taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ; `m1 watch` est une vue texte en lecture seule de la cellule
-  (processus, règles en vigueur, décisions, fautes, plans en attente par hash, journal d'audit ; une source qui ne
-  répond pas s'affiche `UNKNOWN`, jamais en vert ; `--every 5` la répète) ; la piste d'audit se lit avec
-  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran : [console.fr.md](console.fr.md) dit où est le moniteur et comment le lire. `supervisord` (JSON en lecture seule sur un socket Unix,
-  [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test, et rien dans le
-  dépôt ne permet à un opérateur de *signer* autrement qu'en ligne de commande. Ce qu'une console doit montrer et
-  permettre de faire, et sous quelle forme, est une question ouverte ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.
+- **La console est un outil de test, pas une console d'opérateur.** Elle montre ce qui se passe
+  ([console.fr.md](console.fr.md)) : le trajet de chaque requête, l'état des composants, les latences. Elle ne peut pas
+  agir. L'approbation reste dans `m1 sign` (il vous montre un plan et vous demande de taper `sign`), les preuves des
+  contrôleurs dans `m1 mode-proof`, la piste d'audit dans `tbp-audit verify`. `supervisord` (JSON en lecture seule sur un
+  socket Unix, [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test. Ce
+  qu'une console d'opérateur doit montrer et permettre de faire, et sous quelle forme, est une question ouverte
+  ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.
 - **Un de chaque.** Une cellule, un serveur, un hôte d'agents. Pas de superviseur, pas de multi-cellule, pas de NAC
   802.1X, et l'isolation réseau de [network-isolation.fr.md](../network-isolation.fr.md) n'est pas mise en place :
   le pare-feu est le vôtre.
@@ -313,12 +313,14 @@ passé, et les rapports.
 
 | `site.sh` | Fait |
 |---|---|
-| `m1 init --address <M1> [--listen addr:port] [--env étiquette]` | compile les binaires, fait les clés, les règles signées, les deux CA et les certificats d'agents, l'environnement et les deux paquets |
+| `m1 init --address <M1> [--listen addr:port] [--env étiquette] [--console-url http://<C>:9100 --console-key <hex>]` | compile les binaires, fait les clés, les règles signées, les deux CA et les certificats d'agents, l'environnement et les deux paquets |
 | `m1 up` / `down` / `status` | démarre OPA et `brokerd` / les arrête / les montre avec les compteurs |
 | `m1 sign <agent> <action> <ressource> [--yes]` | le côté opérateurs (et, pour la classe W, contrôleurs) d'une action : soumet le plan, le montre en clair, recalcule son hash, vous demande de taper `sign` ; affiche la ligne `m3 act` à exécuter |
 | `m1 grant <agent> <action> <ressource>` | identique à `sign --yes` (sans questions ; le hash est quand même recalculé) |
 | `m1 watch [--every SECONDES]` | une vue en lecture seule de la cellule : processus, règles, décisions, fautes, plans en attente (par hash), journal d'audit ; `UNKNOWN` quand une source ne répond pas, code de sortie non nul |
 | `m1 mode-proof closed\|monitor [--controllers N]` | la preuve des contrôleurs pour le `pepd` de M2 : un contrôleur pour fermer, deux pour rouvrir |
+| `m1 console-url` | l'adresse de la console temps réel, avec sa clé |
+| `console up --listen <addr:port> --ingest-key <hex>` (`down`, `url`, `status`, `reset`) | la console temps réel sur une machine à part |
 | `m1 trace [--from <archive ou répertoire> ...] [--id <identifiant>]` | les requêtes consignées par M1 et par les machines dont vous donnez les archives, une chronologie chacune : qui a demandé, ce que chaque composant a décidé, pourquoi, comment cela s'est terminé |
 | `<rôle> trace-export` | emballe ce que cette machine a consigné des requêtes qu'elle a vues, à porter vers M1 |
 | `m1 pack` | réécrit les deux paquets |

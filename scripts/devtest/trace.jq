@@ -22,6 +22,19 @@ def offset($t0):
 
 def pad($n): . + (" " * ([$n - length, 0] | max));
 
+# the order of a request's lines follows the steps it went through, not a comparison of three machines' clocks
+def rank:
+  if .component == "agent" and .stage == "request" and .outcome == "emitted" then 10
+  elif .component == "transport" then 15
+  elif .component == "brokerd" then 20
+  elif .component == "agent" and .stage == "answer" and .hop != "app" and ((.detail // "") | contains("the application answered") | not) then 30
+  elif .component == "agent" and .stage == "request" then 40
+  elif .component == "app" and .stage == "request" then 50
+  elif .component == "pepd" then 60
+  elif .component == "app" then 70
+  elif .component == "agent" then 80
+  else 90 end;
+
 def mach:
   if .component == "agent" then "M3"
   elif .component == "brokerd" or .component == "transport" then "M1"
@@ -89,12 +102,12 @@ def ending($evs):
     else "INCOMPLETE — no end seen: the machines that took part have not all been given to this command" end;
 
 def timeline($evs):
-  ($evs | sort_by(.ts) | first | .ts | secs) as $t0
-  | ($evs | sort_by(.ts)) as $sorted
+  ($evs | map(.ts | secs) | min) as $t0
+  | ($evs | sort_by([rank, .ts])) as $sorted
   | ($sorted | map(select(.component == "agent" and .stage == "request")) | first // null) as $first
   | "\($evs[0].trace_id)   \($first.detail // ($sorted | map(select(.component == "brokerd" and .stage == "decision")) | first | action_of) // "")",
     ($sorted[] | "  \(offset($t0))  \(mach)  \(who | pad(8))  \(describe)"),
-    "  → \(ending($evs))",
+    "  → \(ending($sorted))",
     "";
 
 # a refused TLS handshake never becomes a request on the cell, so it carries no trace id: it is attached to the agent's

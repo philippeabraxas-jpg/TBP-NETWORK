@@ -282,18 +282,132 @@ while IFS=$'\t' read -r reason _; do
 done <"${SCRIPT_DIR}/reasons.tsv"
 if [ -z "${drift}" ]; then ok "every reason in reasons.tsv exists in the code"; else bad "reasons.tsv explains reasons that no code produces:${drift}"; fi
 
+echo "== the live console: the path, the state of the components and the latencies, in a browser"
+CONSOLE="http://${ADDR1}:9100"
+VK=$(cat "${H1}/console-view.key" 2>/dev/null)
+IK=$(cat "${H1}/console-ingest.key" 2>/dev/null)
+con() { curl -fsS -m 5 -H "Authorization: Bearer ${VK}" "${CONSOLE}$1"; }
+says "m1 up prints the address to open, with its key" "${CONSOLE}/?key=${VK}" "$(cat "${WORK}/m1-up.log")"
+says "m1 console-url prints it again" "/?key=" "$(M1 console-url 2>&1)"
+says "m1 status says the console is up" "console  : up" "$(M1 status 2>&1)"
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "${CONSOLE}/healthz")" = "200" ]; then ok "the console answers"; else bad "the console does not answer on ${CONSOLE}"; fi
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "${CONSOLE}/")" = "401" ]; then ok "the page is refused without its key"; else bad "the page opens without a key"; fi
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "${CONSOLE}/api/snapshot")" = "401" ]; then ok "the data is refused without its key"; else bad "the data is readable without a key"; fi
+if [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${IK}" "${CONSOLE}/api/snapshot")" = "401" ]; then ok "a machine's sending key does not read the page"; else bad "the sending key reads the data"; fi
+if [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data '{}' "${CONSOLE}/ingest")" = "401" ]; then ok "nobody sends events without the sending key"; else bad "events accepted without a key"; fi
+if [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer ${VK}" --data '{}' "${CONSOLE}/ingest")" = "401" ]; then ok "the page key does not send events"; else bad "the page key sends events"; fi
+# every request made above shows up, with the ending the CLI shows (one source of meaning for both)
+wait_console() { # wait_console ID: until the console has the request with its end
+  local i
+  for i in $(seq 1 40); do
+    if con "/api/request/$1" 2>/dev/null | jq -e '.ending.kind != "running"' >/dev/null 2>&1; then return 0; fi
+    sleep 0.25
+  done
+  return 1
+}
+for pair in "ok:${id_ok}:executed" "replay:${id_replay}:executed-monitor" "noplan:${id_noplan}:rejected" "nocert:${id_nocert}:rejected" "wrongcert:${id_wrongcert}:rejected" "closed:${id_closed}:rejected"; do
+  name=${pair%%:*}; rest=${pair#*:}; id=${rest%%:*}; kind=${rest#*:}
+  if [ -n "${id}" ] && wait_console "${id}"; then
+    got=$(con "/api/request/${id}" | jq -r .ending.kind)
+    if [ "${got}" = "${kind}" ]; then ok "console, ${name}: ${kind}"; else bad "console, ${name}: ${got}, wanted ${kind}"; fi
+    cli=$(view --id "${id}" | sed -n 's/^  → //p')
+    web=$(con "/api/request/${id}" | jq -r .ending.text)
+    if [ -n "${cli}" ] && [ "${cli}" = "${web}" ]; then ok "console and m1 trace agree on how ${name} ended"; else bad "${name}: m1 trace says '${cli}', the console says '${web}'"; fi
+  else bad "console, ${name}: the request never arrived"; fi
+done
+# the path: which component stopped it
+stopped=$(con "/api/request/${id_noplan}" | jq -r '[.path[] | select(.status == "stopped") | .name] | join(",")')
+if [ "${stopped}" = "cell decision" ]; then ok "the path names the component that stopped the request (the cell's decision)"; else bad "stopped hops: '${stopped}'"; fi
+stopped=$(con "/api/request/${id_closed}" | jq -r '[.path[] | select(.status == "stopped") | .name] | join(",")')
+case "${stopped}" in "pepd verdict,executed") ok "…and pepd's verdict when the posture blocks" ;; *) bad "closed: stopped hops '${stopped}'" ;; esac
+if [ "$(con "/api/request/${id_replay}" | jq -r '[.path[] | select(.status == "warn") | .name] | join(",")')" = "pepd verdict" ]; then ok "…and warns where monitor let a would-deny through"; else bad "monitor: no warning on pepd's verdict"; fi
+# latencies, each measured on one machine
+seg=$(con "/api/request/${id_ok}" | jq -c '.segments')
+for k in cell_total cell_connect cell_tls cell_decision cell_network app_total app_handling pepd_verdict; do
+  if [ "$(printf '%s' "${seg}" | jq -r --arg k "${k}" '.[$k] // 0')" -gt 0 ]; then :; else bad "latency ${k} was not measured: ${seg}"; fi
+done
+if [ "$(printf '%s' "${seg}" | jq -r '.cell_total >= .cell_decision and .app_total >= .app_handling and .app_handling >= .pepd_verdict')" = "true" ]; then ok "latencies are measured at every step, and each step fits inside the one around it"; else bad "inconsistent latencies: ${seg}"; fi
+if [ "$(con "/api/snapshot" | jq -r '.stats.total.n > 0 and .stats.cell_decision.p95_us > 0')" = "true" ]; then ok "percentiles are computed over the requests"; else bad "no percentiles"; fi
+# the components, as each machine reports them
+con "/api/snapshot" | jq -r '.machines[] | "\(.machine) \(.status)"' >"${WORK}/machines.txt"
+for m in M1 M2; do
+  if grep -q "^${m} up$" "${WORK}/machines.txt"; then ok "${m} reports its components up"; else bad "${m}: $(grep "^${m} " "${WORK}/machines.txt")"; fi
+done
+if grep -q "^M3 idle$" "${WORK}/machines.txt"; then ok "M3 (no daemon) is idle, not down"; else bad "M3: $(grep '^M3 ' "${WORK}/machines.txt")"; fi
+if [ "$(con "/api/snapshot" | jq -r '[.machines[] | select(.machine == "M2") | .facts.posture] | .[0]')" = "monitor" ]; then ok "M2 reports pepd's posture"; else bad "pepd's posture is not reported"; fi
+# requests that are not ours (no trace id) are listed apart, with the address they came from
+if con "/api/snapshot" | jq -e '[.loose[] | select(.text | contains("doc-direct"))] | length > 0' >/dev/null 2>&1; then ok "a curl attack with no trace id is listed apart"; else bad "the direct request is missing from 'without a trace id'"; fi
+# hostile content is shown, never run: a red team controls the subject, the intent and the paths
+curl -s -o /dev/null -H "Authorization: Bearer ${IK}" --data-binary '{"ts":"x","trace_id":"t-xss","component":"agent","stage":"request","outcome":"emitted","detail":"<img src=x onerror=document.title=1> agent-i asks: <script>document.title=2</script>","peer_cn":"<b>cn</b>"}' "${CONSOLE}/ingest"
+curl -s -o /dev/null -H "Authorization: Bearer ${IK}" --data-binary '{"ts":"x","component":"app","stage":"request","outcome":"received","intent":"<img src=y onerror=document.title=3>","detail":"without a token","peer":"10.9.9.9"}' "${CONSOLE}/ingest"
+CHROME_BIN=${CHROME:-$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome 2>/dev/null | head -1)}
+[ -n "${CHROME_BIN}" ] || CHROME_BIN=$(command -v google-chrome chromium chromium-browser 2>/dev/null | head -1)
+if [ -n "${CHROME_BIN}" ] && command -v node >/dev/null 2>&1; then
+  if node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 3500 >"${WORK}/page.json" 2>/dev/null; then
+    page=$(jq -r .html "${WORK}/page.json")
+    says "in a real browser: the page shows a request that went through" "agent-i asks: read doc-t1" "${page}"
+    says "in a real browser: the components are shown" "the cell" "${page}"
+    says "in a real browser: the latency table is filled" "cell decision" "${page}"
+    if [ "$(jq -r .title "${WORK}/page.json")" = "TBP dev-test console" ]; then ok "in a real browser: nothing a request carried ran (the title is untouched)"; else bad "a request's content ran in the page: title is '$(jq -r .title "${WORK}/page.json")'"; fi
+    if printf '%s' "${page}" | grep -q '<img\|<script>document\|<b>cn'; then bad "hostile markup became elements of the page"; else ok "in a real browser: hostile markup is shown as text, not as elements"; fi
+    says "…and it is there, as text" "&lt;img src=x onerror" "${page}"
+  else echo "  skip - the browser check could not run here (exit $?: 7 = Node older than 22, 3-6 = the browser did not answer; ${CHROME_BIN})"; fi
+else echo "  skip - no Chrome/Chromium and Node on this machine: the page was not opened in a browser"; fi
+
+echo "== the console on a machine of its own (not M1)"
+H4="${WORK}/console2"
+CON() { TBP_SITE_HOME="${H4}" "${SITE}" console "$@"; }
+IK2=$(openssl rand -hex 16)
+refuses "console up needs its listen address" "--listen" env TBP_SITE_HOME="${H4}" "${SITE}" console up
+refuses "console up needs the sending key M1 was given" "--ingest-key" env TBP_SITE_HOME="${H4}" "${SITE}" console up --listen 127.0.0.13:9101 --ingest-key short
+if [ ! -e "${H4}" ]; then ok "a refused console up leaves no half-made home"; else bad "a refused console up left ${H4}"; fi
+out=$(CON up --listen 127.0.0.13:9101 --ingest-key "${IK2}" --env elsewhere 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -eq 0 ]; then ok "console up on another address"; else bad "console up: $(printf '%s' "${out}" | tail -3 | tr '\n' ' ')"; fi
+says "…and prints the address to open, with its key" "http://127.0.0.13:9101/?key=" "${out}"
+VK2=$(cat "${H4}/console-view.key" 2>/dev/null)
+if [ "${VK2}" != "${IK2}" ] && [ -n "${VK2}" ]; then ok "the page key and the sending key differ"; else bad "the page key equals the sending key"; fi
+curl -s -o /dev/null -H "Authorization: Bearer ${IK2}" --data-binary '{"ts":"x","trace_id":"t-elsewhere","component":"agent","stage":"request","outcome":"emitted","detail":"agent-i asks: read doc-e"}' "http://127.0.0.13:9101/ingest"
+if curl -fsS -H "Authorization: Bearer ${VK2}" "http://127.0.0.13:9101/api/snapshot" | jq -e '.requests[0].id == "t-elsewhere"' >/dev/null 2>&1; then ok "it receives events from the machines that send to it"; else bad "the console elsewhere did not receive an event"; fi
+says "console status" "up on" "$(CON status 2>&1)"
+refuses "console up while running is refused" "already running" env TBP_SITE_HOME="${H4}" "${SITE}" console up
+CON down >/dev/null 2>&1
+if [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.13:9101/healthz")" = "000" ]; then ok "console down stops it"; else bad "the console still answers after down"; fi
+CON reset -y >/dev/null 2>&1
+if [ ! -e "${H4}" ]; then ok "console reset deletes its home"; else bad "console reset left ${H4}"; fi
+# M1 told that the console is elsewhere: it does not start one, and the packs point to it
+H1B="${WORK}/m1b"
+if TBP_SITE_HOME="${H1B}" "${SITE}" m1 init --address "${ADDR1}" --console-url "http://127.0.0.13:9101" --console-key "${IK2}" >"${WORK}/m1b-init.log" 2>&1; then
+  ok "m1 init --console-url (the console elsewhere)"
+  if [ "$(cat "${H1B}/state/console-local")" = "0" ] && [ "$(cat "${H1B}/console-ingest.key")" = "${IK2}" ]; then ok "…M1 starts no console of its own and keeps the key it was given"; else bad "console-local/ingest key not as given"; fi
+  for pk in m2 m3; do
+    if tar -xzOf "${H1B}/packs/${pk}.pack.tgz" ./site.env | grep -q "^CONSOLE_URL=http://127.0.0.13:9101$"; then ok "…the pack for ${pk^^} points to it"; else bad "the ${pk} pack does not point to the console elsewhere"; fi
+  done
+else bad "m1 init --console-url: $(tail -4 "${WORK}/m1b-init.log" | tr '\n' ' ')"; fi
+TBP_SITE_HOME="${H1B}" "${SITE}" m1 reset -y >/dev/null 2>&1
+refuses "a malformed --console-url is refused" "--console-url must look like" env TBP_SITE_HOME="${WORK}/m1c" "${SITE}" m1 init --address "${ADDR1}" --console-url "ftp://x"
+refuses "a malformed --console-key is refused" "--console-key must be 32 hex" env TBP_SITE_HOME="${WORK}/m1c" "${SITE}" m1 init --address "${ADDR1}" --console-key "short"
+
 echo "== the network exposure"
 listen_out=$(M1 listeners 2>&1)
 says "M1's cell listens on the address it was given" "${ADDR1}:8443" "${listen_out}"
 says "M2's application listens on the address it was given" "${ADDR2}:9000" "${listen_out}"
+says "the console listens on M1's address" "${ADDR1}:9100" "${listen_out}"
 says "pepd listens on the loopback only" "127.0.0.1:8443" "${listen_out}"
-if printf '%s' "${listen_out}" | grep -qE '^ +(0\.0\.0\.0|\[::\]):(8443|9000)$'; then bad "something listens on every interface on 8443 or 9000"; else ok "nothing listens on every interface on 8443 or 9000"; fi
+if printf '%s' "${listen_out}" | grep -qE '^ +(0\.0\.0\.0|\[::\]):(8443|9000|9100)$'; then bad "something listens on every interface on 8443, 9000 or 9100"; else ok "nothing listens on every interface on 8443 or 9000"; fi
 if curl -sS -m 3 -o /dev/null "http://${ADDR2}:8443/v1/evaluate" 2>/dev/null; then bad "pepd's data port answered on M2's network address"; else ok "pepd's data port is not reachable on M2's network address (from M3)"; fi
 plain=$(curl -sS -m 3 -X POST -d '{"subject":"agent-i","intent":"{}"}' "http://${ADDR1}:8443/v1/actions" 2>&1 || true)
 if printf '%s' "${plain}" | grep -q '"allow"'; then bad "the cell took a decision over plain HTTP"; else says "the cell takes no decision over plain HTTP" "HTTPS server" "${plain}"; fi
 
 echo "== files changed by hand stop each machine, naming the reason"
 M2 down >/dev/null 2>&1
+# a machine that stops reporting is UNKNOWN on the console within seconds: silence is never shown as green
+unk=""
+for i in $(seq 1 30); do
+  unk=$(con "/api/snapshot?limit=1" | jq -r '.machines[] | select(.machine == "M2") | .status')
+  [ "${unk}" = "unknown" ] && break
+  sleep 0.5
+done
+if [ "${unk}" = "unknown" ]; then ok "console: M2 stopped, and went UNKNOWN (never left green)"; else bad "console: M2 is stopped and shows '${unk}'"; fi
 cp -- "${H2}/issuer-keyring.json" "${WORK}/ik.bak"
 jq '. + {"00112233445566778899aabbccddeeff":"'"$(printf 'ab%.0s' $(seq 1 32))"'"}' "${WORK}/ik.bak" >"${H2}/issuer-keyring.json"
 if M2 up >/dev/null 2>&1; then bad "M2 started with a second issuer key pinned"; else
@@ -363,7 +477,7 @@ ok "deploy/dev-test/site.md and site.fr.md name every documented answer"
 echo "== the monitor page (console.md, both languages) says what the commands print"
 fails_before=${FAILS}
 for doc in console.md console.fr.md; do
-  for kw in "m1 watch" "m1 trace" "m1 sign" "trace-export" "--from" "--id" "--every" "X-TBP-Trace-Id" "without a trace id" "UNKNOWN" "INCOMPLETE" "TOKEN ISSUED" "EXECUTED — although pepd" "REJECTED by the cell (M1)" "REJECTED by pepd (M2)" "REJECTED at the TLS handshake (M1)" "REJECTED by the application (M2)" "reasons.tsv" "#329"; do
+  for kw in "m1 watch" "m1 trace" "m1 sign" "m1 console-url" "console up" "--console-url" "--console-key" "9100" "trace-export" "--from" "--id" "--every" "X-TBP-Trace-Id" "without a trace id" "UNKNOWN" "INCOMPLETE" "TOKEN ISSUED" "EXECUTED — although pepd" "REJECTED by the cell (M1)" "REJECTED by pepd (M2)" "REJECTED at the TLS handshake (M1)" "REJECTED by the application (M2)" "reasons.tsv" "#329"; do
     grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${doc}" || bad "deploy/dev-test/${doc} no longer mentions '${kw}'"
   done
 done

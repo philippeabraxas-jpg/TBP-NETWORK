@@ -76,6 +76,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def handle_any(self):
+        t_start = time.perf_counter()  # durations are measured here, on this machine, with this clock
         path = self.path.split("?")[0]
         if path == "/healthz":
             return self.reply(200, {"ok": True})
@@ -100,6 +101,7 @@ class Handler(BaseHTTPRequestHandler):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        t_pepd = time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 verdict = json.loads(resp.read())
@@ -108,13 +110,15 @@ class Handler(BaseHTTPRequestHandler):
                   detail="503 " + type(err).__name__)
             return self.reply(503, {"refused": True, "why": "pepd gave no verdict: %s" % type(err).__name__})
 
+        rtt_us = int((time.perf_counter() - t_pepd) * 1e6)
         trace(tid, "pepd", "verdict", "allow" if verdict.get("allow") else "deny", reason=verdict.get("reason"),
               intent=subject, mode=verdict.get("mode"), forwarded=verdict.get("forwarded"),
-              elapsed_us=verdict.get("elapsed_us"), detail="verdict as returned to the application")
+              elapsed_us=verdict.get("elapsed_us"), rtt_us=rtt_us, detail="verdict as returned to the application")
+        app_us = int((time.perf_counter() - t_start) * 1e6)
         if verdict.get("forwarded") is True:
-            trace(tid, "app", "outcome", "executed", intent=subject, peer=peer, detail="200")
+            trace(tid, "app", "outcome", "executed", intent=subject, peer=peer, detail="200", app_us=app_us)
             return self.reply(200, {"executed": "%s %s" % (action, resource), "verdict": verdict})
-        trace(tid, "app", "outcome", "refused", reason="not-forwarded", intent=subject, peer=peer, detail="403")
+        trace(tid, "app", "outcome", "refused", reason="not-forwarded", intent=subject, peer=peer, detail="403", app_us=app_us)
         return self.reply(403, {"refused": True, "verdict": verdict})
 
     do_GET = handle_any
