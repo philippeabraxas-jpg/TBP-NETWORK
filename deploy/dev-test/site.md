@@ -228,8 +228,9 @@ What makes a report useful: what you tried (the exact command), what you expecte
 - **M2's measured boot uses two stand-ins** — the `pepd` binary where a broker binary would be, a placeholder file
   where an AI container would be — and records its reference at the first start. A real server measures the real ones.
 - **There is no console.** Everything is done on a command line: `m1 sign` shows you a plan and asks you to type
-  `sign`; `m1 mode-proof` signs the controllers' proofs; `m1 status` and `report` show counters; the audit trail is read
-  with `tbp-audit verify`. There is no dashboard and no screen. `supervisord` (read-only JSON over a Unix socket,
+  `sign`; `m1 mode-proof` signs the controllers' proofs; `m1 status` and `report` show counters; `m1 watch` is a read-only text view of the cell (processes, rules in
+  force, decisions, faults, plans waiting by hash, audit journal; a source that does not answer reads `UNKNOWN`, never
+  green; `--every 5` repeats it); the audit trail is read with `tbp-audit verify`. There is no dashboard and no screen. `supervisord` (read-only JSON over a Unix socket,
   [superviseur.md](../superviseur.md)) exists in this repository but is not part of this test, and nothing in the
   repository lets an operator *sign* from anything but the command line. What a console should show and let people
   do, and in what form, is an open question ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): tell us what you missed.
@@ -245,6 +246,7 @@ What makes a report useful: what you tried (the exact command), what you expecte
 | `m1 up` / `down` / `status` | starts OPA and `brokerd` / stops them / shows them and the counters |
 | `m1 sign <agent> <action> <resource> [--yes]` | the operators' (and for class W the controllers') side of one action: submits the plan, shows it in clear, recomputes its hash, asks you to type `sign`; prints the `m3 act` line to run |
 | `m1 grant <agent> <action> <resource>` | the same as `sign --yes` (no questions; the hash is still recomputed) |
+| `m1 watch [--every SECONDS]` | a read-only view of the cell: processes, rules, decisions, faults, plans waiting (by hash), audit journal; `UNKNOWN` when a source does not answer, exit status non-zero |
 | `m1 mode-proof closed\|monitor [--controllers N]` | the controllers' proof for M2's `pepd`: one controller to close, two to reopen |
 | `m1 pack` | rewrites the two packs |
 | `m2 init --pack <m2.pack.tgz> --listen <M2>:9000 [--env label]` | unpacks, writes `pepd`'s environment (a real measured boot, no development switch) |
