@@ -5,17 +5,21 @@
 #   scripts/devtest/devtest.sh up        # OPA + brokerd, in the background
 #   scripts/devtest/devtest.sh status
 #   scripts/devtest/devtest.sh demo      # first actions: what is refused, what is allowed, and why
+#   scripts/devtest/devtest.sh env       # the sockets, keys and variables to attack with: eval "$(... env)"
+#   scripts/devtest/devtest.sh report    # a report with no secret in it, to paste into an issue
 #   scripts/devtest/devtest.sh down
 #   scripts/devtest/devtest.sh reset     # stop, delete everything this script made
 #
 # ⚠ NOT FOR PRODUCTION. Every key it makes is thrown-away and lives on THIS machine, so it proves nothing
 # about key custody, about separation between real people, or about a genesis ceremony. What it is for: run the
-# real binaries, with the real enforcement, and attack them (deploy/devtest.md).
+# real binaries, with the real enforcement, and attack them (deploy/dev-test/README.md).
 #
 # What is simplified: the ceremony (keys, genesis, rules are generated for you; the issuer key is a seed file
 # instead of an HSM — the one development switch used, which is why /etc/tbp/DEV_ENVIRONMENT is created).
 # What is NOT simplified: the quorum is k = 2 of n = 3, the operator keys keep their roles, brokerd runs the
 # same chain it runs at scale 2, OPA serves a signed bundle on a Unix socket authenticated by its UID.
+#
+# Documentation, in ten minutes from a fresh machine: deploy/dev-test/README.md
 #
 # Needs: opa, openssl, jq, curl, and either `go` (the version pinned by go.mod) or built binaries in dist/
 # (scripts/release/build.sh). Run it as a normal user on a clean Debian 12 virtual machine; `sudo` is used once,
@@ -52,7 +56,7 @@ banner() {
 ================================================================================
   TBP DEV-TEST DEPLOYMENT — NOT FOR PRODUCTION
   Throw-away keys on this machine. No real data, no real agents, no network
-  exposure. Read deploy/devtest.md before you attack it.
+  exposure. Read deploy/dev-test/README.md before you attack it.
 ================================================================================
 EOF
 }
@@ -62,7 +66,7 @@ die() { echo "devtest: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing prerequisite: $1 ($2)"; }
 
 usage() {
-  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -158,6 +162,7 @@ write_sentinel() {
 }
 
 cmd_init() {
+  local t0=${SECONDS}
   banner
   [ ! -e "${HOME_DIR}" ] || [ -z "$(ls -A "${HOME_DIR}" 2>/dev/null)" ] ||
     die "${HOME_DIR} already exists: 'devtest.sh up' to use it, 'devtest.sh reset' to start over"
@@ -261,11 +266,12 @@ cmd_init() {
   write_sentinel
   printf 'devtest home: %s\ncell: %s\n' "${HOME_DIR}" "${CELL_ID}" >"${HOME_DIR}/DEVTEST"
 
+  echo $((SECONDS - t0)) >"${STATE_DIR}/init-seconds"
   INIT_CREATED=0
   trap - EXIT
   echo
   echo "devtest: initialised in ${HOME_DIR}. Next: scripts/devtest/devtest.sh up"
-  echo "         keys are in ${KEYS_DIR}: controller-1..3 (k = 2 of 3), operator-1..4 (see deploy/devtest.md)"
+  echo "         keys are in ${KEYS_DIR}: controller-1..3 (k = 2 of 3), operator-1..4 (see deploy/dev-test/README.md)"
 }
 
 # --- up / down / status / reset --------------------------------------------------------------------
@@ -287,6 +293,7 @@ start_bg() {
 }
 
 cmd_up() {
+  local t0=${SECONDS}
   banner
   require_init
   [ -e "${SENTINEL}" ] || die "${SENTINEL} is missing: brokerd would refuse its seed-file issuer key. Run 'devtest.sh init' again on a clean home."
@@ -306,9 +313,10 @@ cmd_up() {
     die "brokerd warns about a fragile quorum — this deployment is not scale 2 (see ${LOG_DIR}/brokerd.log)"
   fi
   trap - EXIT
+  echo $((SECONDS - t0)) >"${STATE_DIR}/up-seconds"
   echo "devtest: up. OPA on ${OPA_SOCK}, brokerd on ${BROKER_SOCK}, admin on ${ADMIN_SOCK}"
   echo "         expected in ${LOG_DIR}/brokerd.log: a high-priority alarm that a development environment is declared."
-  echo "         Next: deploy/devtest.md (first actions), scripts/devtest/devtest.sh status"
+  echo "         Next: deploy/dev-test/README.md (first actions), scripts/devtest/devtest.sh status"
 }
 
 cmd_down() {
@@ -351,10 +359,75 @@ cmd_reset() {
   echo "devtest: reset"
 }
 
+# --- env / report ----------------------------------------------------------------------------------
+
+# env: shell variables for attacking the cell, to be eval'ed: eval "$(scripts/devtest/devtest.sh env)"
+cmd_env() {
+  require_init
+  local policy_id
+  policy_id=$(sed -n 's/^TBP_POLICY_ID=//p' "${ENV_FILE}")
+  cat <<ENVEOF
+export DT_HOME='${HOME_DIR}'
+export DT_BIN='${BIN_DIR}'
+export DT_KEYS='${KEYS_DIR}'
+export DT_CELL='${CELL_ID}'
+export DT_POLICY_ID='${policy_id}'
+export DT_MANIFEST='${GENESIS_DIR}/manifest.json'
+export DT_AGENT_SOCK='${BROKER_SOCK}'
+export DT_ADMIN_SOCK='${ADMIN_SOCK}'
+export PATH='${BIN_DIR}':"\${PATH}"
+ENVEOF
+}
+
+# percentile P of the numbers on stdin (seconds, one per line), nearest rank, printed in milliseconds
+percentile() { sort -n | awk -v p="$1" '{a[NR]=$1} END {i=int((p/100)*NR+0.999999); if (i<1) i=1; if (i>NR) i=NR; printf "%.1f", a[i]*1000}'; }
+
+# report: what a tester pastes into an issue. No key, no seed, no path, no host name, no address.
+cmd_report() {
+  require_init
+  local commit="unknown" os kernel cpus mem opav gov n=50 i lat
+  if git -C "${REPO_ROOT}" rev-parse --short=12 HEAD >/dev/null 2>&1; then
+    commit=$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)
+    git -C "${REPO_ROOT}" diff --quiet 2>/dev/null || commit="${commit} (modified)"
+  fi
+  os=$(sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release 2>/dev/null || true)
+  kernel=$(uname -r)
+  cpus=$(nproc 2>/dev/null || echo "?")
+  mem=$(awk '/^MemTotal/ {printf "%d MiB", $2/1024}' /proc/meminfo 2>/dev/null || echo "?")
+  opav=$("${BIN_DIR}/opa" version 2>/dev/null | sed -n 's/^Version: //p' | head -1)
+  gov=$(go version 2>/dev/null | awk '{print $3}' || true)
+
+  echo "### TBP dev-test report"
+  echo
+  echo "- commit: ${commit}"
+  echo "- system: ${os:-unknown}, kernel ${kernel}, ${cpus} CPU, ${mem}"
+  echo "- opa: ${opav:-unknown}; go: ${gov:-none}"
+  echo "- init: $(cat "${STATE_DIR}/init-seconds" 2>/dev/null || echo "?") s; up: $(cat "${STATE_DIR}/up-seconds" 2>/dev/null || echo "?") s"
+  echo "- demo: $(cat "${STATE_DIR}/last-demo" 2>/dev/null || echo "not run")"
+  if cmd_status >/dev/null 2>&1; then
+    echo "- broker counters: $(broker_stats)"
+    # The cheapest decision there is: an agent with no plan is refused. This is the refusal path on THIS machine,
+    # not a performance claim.
+    lat=$(mktemp "${STATE_DIR}/lat.XXXXXX")
+    for i in $(seq 1 "${n}"); do
+      jq -cn '{subject:"agent-i",intent:"{\"action\":\"read\",\"resource\":\"doc-1\"}"}' |
+        curl -sS --unix-socket "${BROKER_SOCK}" -X POST -d @- -o /dev/null -w '%{time_total}\n' http://localhost/v1/actions >>"${lat}"
+    done
+    echo "- refusal path, ${n} requests over the Unix socket: p50 $(percentile 50 <"${lat}") ms, p95 $(percentile 95 <"${lat}") ms, max $(percentile 100 <"${lat}") ms"
+    rm -f -- "${lat}"
+  else
+    echo "- the cell is not running: counters and latency not measured"
+  fi
+  echo "- what I tried and what happened: (write here)"
+  echo "- where I got stuck: (write here)"
+}
+
 # --- demo -----------------------------------------------------------------------------------------
 
 DEMO_FAILS=0
+DEMO_TOTAL=0
 check() { # check DESCRIPTION EXPECTED ACTUAL
+  DEMO_TOTAL=$((DEMO_TOTAL + 1))
   if [ "$2" = "$3" ]; then echo "  ok   - $1 ($3)"; else echo "  FAIL - $1: expected '$2', got '$3'"; DEMO_FAILS=$((DEMO_FAILS + 1)); fi
 }
 
@@ -391,6 +464,8 @@ cmd_demo() {
   local policy_id
   policy_id=$(sed -n 's/^TBP_POLICY_ID=//p' "${ENV_FILE}")
   DEMO_FAILS=0
+  DEMO_TOTAL=0
+  local t0=${SECONDS}
 
   echo "1. The cell refuses what it does not know, and what has no plan"
   check "unknown agent" "agent-unknown" "$(act agent-nobody read doc-1 | jq -r .reason)"
@@ -429,6 +504,7 @@ cmd_demo() {
   check "the same proof does not work twice" "false" "$(act agent-w read doc-1 "${binding}" "${proof}" | jq -r .allow)"
 
   echo
+  echo "$((DEMO_TOTAL - DEMO_FAILS))/${DEMO_TOTAL} checks passed in $((SECONDS - t0))s" >"${STATE_DIR}/last-demo"
   if [ "${DEMO_FAILS}" -eq 0 ]; then echo "devtest: demo passed. Every refusal above has a reason in the broker's registry (tbp-audit)."; else die "demo: ${DEMO_FAILS} unexpected result(s) — see above"; fi
 }
 
@@ -438,6 +514,8 @@ case "${1:-}" in
   down) cmd_down ;;
   status) cmd_status ;;
   demo) cmd_demo ;;
+  env) cmd_env ;;
+  report) cmd_report ;;
   reset) shift; cmd_reset "$@" ;;
   *) usage ;;
 esac

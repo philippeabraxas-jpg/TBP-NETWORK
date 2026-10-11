@@ -14,6 +14,24 @@ everything around it — NAC, PEPs, cell registries — that extends TBP's
 governance from a single machine to a network of entities that have to
 trust each other without simply trusting each other.
 
+## Try it: a DEV-TEST deployment in about ten minutes
+
+> **Not for production.** Throw-away keys, one machine, no real data. It exists so that you can try to break
+> it before a production release does.
+
+TBP-NETWORK ships a one-machine deployment of scale 2 — `brokerd` and its OPA, `k = 2` of 3 controllers, four
+operator keys with roles — made with one command. It runs the real binaries with the real enforcement; only the
+key ceremony is simplified.
+
+```bash
+scripts/devtest/devtest.sh init && scripts/devtest/devtest.sh up && scripts/devtest/devtest.sh demo
+```
+
+Everything else is in **[deploy/dev-test/](deploy/dev-test/README.md)**: the exact steps from a fresh Debian 12
+machine, which machine you need (one), what it does and does not prove, three positions to attack it from, and how
+to send us your numbers and comments — we want them. Anything exploitable goes through
+[SECURITY.md](SECURITY.md), not a public issue.
+
 ## What TBP is — and isn't
 
 **TBP does not close every hole; it audits every hole.** That's not a
