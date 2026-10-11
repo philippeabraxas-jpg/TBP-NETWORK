@@ -69,13 +69,17 @@ usage() {
 # --- processes ------------------------------------------------------------------------------------
 
 # pid_of NAME: the pid in the pidfile when it still names a live process of that program, else nothing.
+# The process writes its own pid and then execs the program, so for a few milliseconds its name is still that of
+# the launcher (bash, setsid, nohup): those count as ours. Any other name is a recycled pid, not ours.
 pid_of() {
-  local f="${RUN_DIR}/$1.pid" pid
-  [ -f "$f" ] || return 0
+  local f="${RUN_DIR}/$1.pid" pid comm
+  [ -s "$f" ] || return 0
   pid=$(cat "$f" 2>/dev/null || true)
   [ -n "$pid" ] || return 0
-  # the name check keeps a recycled pid from being mistaken for ours
-  if [ "$(ps -p "$pid" -o comm= 2>/dev/null || true)" = "$1" ]; then echo "$pid"; fi
+  comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+  case "${comm}" in
+    "$1" | bash | sh | setsid | nohup) echo "$pid" ;;
+  esac
 }
 
 stop_one() {
@@ -268,12 +272,18 @@ cmd_init() {
 
 require_init() { [ -f "${HOME_DIR}/DEVTEST" ] || die "not initialised: run 'devtest.sh init' first (home: ${HOME_DIR})"; }
 
-start_bg() { # start_bg NAME LOGFILE COMMAND...   (program name = NAME, used by pid_of)
-  local name=$1 log=$2
+# start_bg NAME LOGFILE COMMAND... : run COMMAND detached. The child writes its OWN pid, then execs: whatever setsid
+# does about forking, the pidfile names the final process.
+start_bg() {
+  local name=$1 log=$2 i
   shift 2
   rm -f "${RUN_DIR}/${name}.pid"
-  setsid nohup "$@" >"${log}" 2>&1 </dev/null &
-  echo $! >"${RUN_DIR}/${name}.pid"
+  setsid nohup bash -c 'echo $$ >"$1"; shift; exec "$@"' _ "${RUN_DIR}/${name}.pid" "$@" >"${log}" 2>&1 </dev/null &
+  for i in $(seq 1 50); do
+    [ -s "${RUN_DIR}/${name}.pid" ] && return 0
+    sleep 0.1
+  done
+  die "${name}: did not start (no pid written)"
 }
 
 cmd_up() {
@@ -283,6 +293,8 @@ cmd_up() {
   [ -z "$(pid_of opa)" ] && [ -z "$(pid_of brokerd)" ] || die "already running: 'devtest.sh status', or 'devtest.sh down' first"
 
   rm -f "${OPA_SOCK}" "${BROKER_SOCK}" "${ADMIN_SOCK}"
+  # a start that fails leaves nothing running
+  trap 'stop_one brokerd; stop_one opa' EXIT
   local opa_args=()
   mapfile -t opa_args <"${LAUNCH_CONF}"
   start_bg opa "${LOG_DIR}/opa.log" "${BIN_DIR}/opa" "${opa_args[@]}"
@@ -293,6 +305,7 @@ cmd_up() {
   if grep -q "AVERTISSEMENT quorum" "${LOG_DIR}/brokerd.log"; then
     die "brokerd warns about a fragile quorum — this deployment is not scale 2 (see ${LOG_DIR}/brokerd.log)"
   fi
+  trap - EXIT
   echo "devtest: up. OPA on ${OPA_SOCK}, brokerd on ${BROKER_SOCK}, admin on ${ADMIN_SOCK}"
   echo "         expected in ${LOG_DIR}/brokerd.log: a high-priority alarm that a development environment is declared."
   echo "         Next: deploy/devtest.md (first actions), scripts/devtest/devtest.sh status"

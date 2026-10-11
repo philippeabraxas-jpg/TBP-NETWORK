@@ -81,10 +81,10 @@ fi
 if grep -q '^TBP_QUORUM_MIN=2$' "${TBP_DEVTEST_HOME}/brokerd.env"; then ok "k = 2"; else bad "TBP_QUORUM_MIN is not 2"; fi
 if [ "$(jq '.pubkeys | length' "${TBP_DEVTEST_HOME}/genesis/manifest.json")" = "3" ]; then ok "three controllers (n = 3)"; else bad "the manifest does not hold three controllers"; fi
 if [ "$(jq -c 'map(.roles)' "${TBP_DEVTEST_HOME}/operators.json")" = '[["approve"],["approve"],["revoke","arbitrate"],["submit"]]' ]; then ok "operator roles: two approvers, a night duty that only cuts, a submitter"; else bad "operator roles are not the expected split"; fi
-if "${DEVTEST}" up >"${WORK}/up.log" 2>&1; then ok "up"; else bad "up: $(tail -3 "${WORK}/up.log" | tr '\n' ' ')"; fi
+if "${DEVTEST}" up >"${WORK}/up.log" 2>&1; then ok "up"; else bad "up: $(tail -12 "${WORK}/up.log" | tr '\n' ' ')"; fi
 if "${DEVTEST}" status >/dev/null 2>&1; then ok "status"; else bad "status"; fi
 refuses "up while running is refused" "already running" "${DEVTEST}" up
-if "${DEVTEST}" demo >"${WORK}/demo.log" 2>&1; then ok "demo"; else bad "demo: $(grep -E 'FAIL|expected' "${WORK}/demo.log" | tr '\n' ' ')"; fi
+if "${DEVTEST}" demo >"${WORK}/demo.log" 2>&1; then ok "demo"; else bad "demo: $(tail -12 "${WORK}/demo.log" | tr '\n' ' ')"; fi
 if [ "$(grep -c '^  ok   -' "${WORK}/demo.log")" -eq 12 ]; then ok "the demo ran all its 12 checks"; else bad "the demo ran $(grep -c '^  ok   -' "${WORK}/demo.log") checks, not 12"; fi
 # the demo must be able to fail: a copy that expects the wrong refusal reason must NOT pass
 sed 's/"plan-binding-required"/"a-reason-the-broker-never-gives"/' "${DEVTEST}" >"${WORK}/devtest-wrong.sh"
@@ -97,6 +97,7 @@ echo "== the scale cannot be lowered by editing the environment (#224)"
 cp -- "${TBP_DEVTEST_HOME}/brokerd.env" "${WORK}/brokerd.env.orig"
 sed -i 's/^TBP_QUORUM_MIN=2$/TBP_QUORUM_MIN=1/' "${TBP_DEVTEST_HOME}/brokerd.env"
 refuses "TBP_QUORUM_MIN=1 is refused at start" "exited at start" "${DEVTEST}" up
+if pgrep -f -- "${TBP_DEVTEST_HOME}/bin/" >/dev/null 2>&1; then bad "a failed up left a process running"; else ok "a failed up leaves nothing running"; fi
 if grep -q "quorum-settings" "${TBP_DEVTEST_HOME}/log/brokerd.log"; then ok "brokerd names quorum-settings"; else bad "brokerd did not name quorum-settings"; fi
 "${DEVTEST}" down >/dev/null 2>&1
 cp -- "${WORK}/brokerd.env.orig" "${TBP_DEVTEST_HOME}/brokerd.env"
