@@ -32,7 +32,7 @@ collects the cells' leaves (superviseur.md step 4).
 # Executable reference for the §9.1 measurement points (T27):
 go test ./tests/p1_friction/ -count=1
 # On each PEP:
-curl -s http://127.0.0.1:8443/v1/mode    # expected: {"mode":"monitor"}
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode    # expected: {"mode":"monitor"}
 ```
 
 **Observable success criterion**: the §9.1 measurement points (forwarded,
@@ -84,7 +84,7 @@ public keys; the rollback window (step 4) is decided.
 # is refused as soon as it is read: 400 with {"detail":{"code":
 # "unknown-field","key":"signers","accepted":[…]}}, and the posture does
 # not move:
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
+curl -s -o /dev/null -w '%{http_code}\n' --unix-socket /run/tbp/pepd-admin.sock -X POST http://localhost/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
 # expected: 400 (unknown field). A body in the right shape with no
 # signature gets 403, and a signature by a key that is not a pinned controller
@@ -93,7 +93,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
 # mono phase for the full worked example (signCtrl helper) with real
 # per-controller signatures:
 go run ./deploy/selftest -phase mono
-curl -s http://127.0.0.1:8443/v1/mode
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode
 ```
 
 **Observable success criterion**: 403 without a valid proof (at least

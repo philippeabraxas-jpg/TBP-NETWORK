@@ -40,7 +40,7 @@ shared; `/etc/tbp/pepd.env` at 0600).
 go build -o /usr/local/bin/pepd ./src/pep/cmd/pepd
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
-curl -s http://127.0.0.1:8443/v1/mode
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode
 ```
 
 **Observable success criterion**: `{"mode":"monitor"}`; `/healthz` 200;
@@ -65,7 +65,7 @@ ls src/pep/postgres-extension/
 # POST /v1/consume at execution time (quota passport §4.1-bis).
 curl -s -X POST http://127.0.0.1:8443/v1/evaluate \
   -H 'Content-Type: application/json' \
-  -d '{"token":"<cwt base64>","action":"read","resource":"doc-1","epoch":0}'
+  -d '{"token":"<cwt base64>","action":"read","resource":"doc-1"}'
 ```
 
 **Observable success criterion**: the JSON verdict returns `allow`, `mode`
@@ -117,7 +117,7 @@ window elapsed; the supervisor collects the leaves
 # Counters exposed by the listener (GET /v1/stats if wired, otherwise
 # registry): forwarded, would-deny, denied, latencies. Executable
 # reference for the measurement points: tests/p1_friction/ (T27).
-curl -s http://127.0.0.1:8443/healthz
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
 ```
 
 **Observable success criterion**: the §9.1 measurement points are

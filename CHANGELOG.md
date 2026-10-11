@@ -8,6 +8,19 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Added
+- **A DEV-TEST deployment, to run and attack before a production release**
+  ([deploy/dev-test/](deploy/dev-test/README.md)). **Not for production**: the keys are thrown away, and the issuer
+  key is a seed file, so the cell declares the development sentinel.
+  - **Three machines** (`scripts/devtest/site.sh`): M1 the cell (`brokerd`, OPA, an mTLS listener, an agent CA), M2 an
+    application server (`pepd` with a real measured boot and no development switch, a small application that acts
+    only when `pepd` forwards), M3 an agent. It tests that the whole path works: enrolment by certificate, a
+    decision, a signed token, the token checked on another machine, the server's posture closed and reopened by the
+    controllers, a restart that comes back refused. M2 and M3 hold no governance key.
+  - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
+  - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
+    gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**
+    issue template. `test_site.sh` and `test_devtest.sh` run in CI, including every attempt the pages tell testers
+    to make.
 - Deployment guides for **scale 1** and **scale 2** (English and French), executed by the `scale1` and `scale2`
   phases of `deploy/selftest` ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
 - **Trust files are measured at every start** by `pepd`, `brokerd` and `anod` (witness signed by the cell key).
@@ -82,6 +95,9 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   `registry-disk-high`: a list read by the operator must not suggest a lock that does not exist. A test now
   refuses a registered condition without a detector
   ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)).
+- The server guide (`serveur.md`) and `monitor-to-closed.md`, in both languages, called `/v1/mode` and `/healthz` on
+  `pepd`'s data port, where they answer 404 since the admin plane moved to a Unix socket (#95), and sent an `epoch`
+  field to `/v1/evaluate` that `pepd` now refuses (strict bodies, #289). Found by running the three-machine DEV-TEST.
 - Flaky teardown of the Tessera POSIX logs in tests
   ([#266](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/266),
   [#312](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/312)).

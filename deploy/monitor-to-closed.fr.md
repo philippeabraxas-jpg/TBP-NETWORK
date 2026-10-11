@@ -32,7 +32,7 @@ collecte les feuilles des cellules (superviseur.md étape 4).
 # Référence exécutable des points de mesure §9.1 (T27) :
 go test ./tests/p1_friction/ -count=1
 # Sur chaque PEP :
-curl -s http://127.0.0.1:8443/v1/mode    # attendu : {"mode":"monitor"}
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode    # attendu : {"mode":"monitor"}
 ```
 
 **Critère de succès observable** : les points de mesure §9.1 (forwarded,
@@ -83,7 +83,7 @@ clés publiques ; la fenêtre de rollback (étape 4) est décidée.
 # plus même un champ valide — le corps est décodé strictement (#289), donc
 # refusé dès sa lecture : 400 avec {"detail":{"code":"unknown-field",
 # "key":"signers","accepted":[…]}}, et la posture ne bouge pas :
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
+curl -s -o /dev/null -w '%{http_code}\n' --unix-socket /run/tbp/pepd-admin.sock -X POST http://localhost/v1/mode \
   -H 'Content-Type: application/json' -d '{"mode":"closed","signers":["op-1","op-2"]}'
 # attendu : 400 (champ inconnu). Un corps de la bonne forme sans aucune
 # signature rend 403, de même qu'une signature d'une clé qui n'est pas un
@@ -92,7 +92,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8443/v1/mode \
 # mono de deploy/selftest/mono.go pour l'exemple complet (helper signCtrl) avec
 # de vraies signatures par contrôleur :
 go run ./deploy/selftest -phase mono
-curl -s http://127.0.0.1:8443/v1/mode
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode
 ```
 
 **Critère de succès observable** : 403 sans preuve valide (au moins
