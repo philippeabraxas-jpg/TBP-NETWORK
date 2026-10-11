@@ -8,6 +8,11 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Added
+- **A DEV-TEST deployment, in one command** (`scripts/devtest/devtest.sh`, [deploy/devtest.md](deploy/devtest.md)):
+  keys, signed rules and environment for a scale-2 cell (`k = 2` of 3, four operator keys with roles), then
+  `brokerd` and its OPA, to run the real binaries and attack them on a throw-away machine. **Not for production**:
+  the keys are thrown away and sit on one machine, and the issuer key is a seed file, so it declares the
+  development sentinel. `devtest.sh demo` runs 12 checks; `test_devtest.sh` runs in CI.
 - Deployment guides for **scale 1** and **scale 2** (English and French), executed by the `scale1` and `scale2`
   phases of `deploy/selftest` ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
 - **Trust files are measured at every start** by `pepd`, `brokerd` and `anod` (witness signed by the cell key).

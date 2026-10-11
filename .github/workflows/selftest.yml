@@ -80,3 +80,7 @@ jobs:
         run: sudo install -d -m 0777 /etc/tbp
       - name: deploy/selftest/selftest.sh (selftest Go réel + guides + non-vacuité du vérificateur)
         run: bash deploy/selftest/selftest.sh
+      - name: déploiement DEV-TEST (scripts/devtest/test_devtest.sh — init, up, demo, et ce que l'amorçage doit refuser)
+        # Même sentinel que ci-dessus : /etc/tbp est ouvert en écriture, le script y écrit son propre sentinel
+        # s'il n'y est pas et le retire à la fin.
+        run: bash scripts/devtest/test_devtest.sh
