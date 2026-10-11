@@ -84,7 +84,7 @@ jobs:
         # Même sentinel que ci-dessus : /etc/tbp est ouvert en écriture, le script y écrit son propre sentinel
         # s'il n'y est pas et le retire à la fin.
         run: bash scripts/devtest/test_devtest.sh
-      - name: DEV-TEST à trois machines (scripts/devtest/test_site.sh — M1, M2, M3 simulées sur l'hôte : le scénario de la page, les attaques, les rapports)
+      - name: "DEV-TEST à trois machines (scripts/devtest/test_site.sh — M1, M2, M3 simulées sur l'hôte, le scénario de la page, les attaques, les rapports)"
         # Trois « machines » sur 127.0.0.11 / 127.0.0.12, chacune avec son dossier et ses paquets échangés en fichiers.
         # Cela prouve les scripts et le déroulé de deploy/dev-test/site.md, pas qu'un vrai réseau fonctionne.
         run: bash scripts/devtest/test_site.sh
