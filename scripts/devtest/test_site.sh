@@ -143,6 +143,30 @@ says "class W with two operators and two controllers" '"executed": "read doc-1"'
 says "an agent using another agent's certificate" "agent-transport-unbound" "$(M3 act agent-i read doc-1 --as agent-w 2>&1)"
 says "no client certificate: refused at the TLS handshake" "refused at the TLS handshake" "$(M3 act agent-i read doc-1 --no-cert 2>&1)"
 
+echo "== the operator's side, as a person does it: m1 sign"
+out=$(printf 'sign\n' | M1 sign agent-i read doc-s1 2>&1)
+says "sign shows the plan in clear" "may      : read doc-s1" "${out}"
+says "sign recomputes the hash itself" "is the hash of this plan" "${out}"
+cmd=$(printf '%s\n' "${out}" | grep 'site.sh m3 act' | sed 's/^ *scripts\/devtest\/site.sh m3 //')
+# shellcheck disable=SC2086
+says "…and what the operator signed is what the agent can then do" '"executed": "read doc-s1"' "$(M3 ${cmd} 2>&1)"
+sleep 1.1
+out=$(printf 'no\n' | M1 sign agent-i read doc-s2 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "nothing was approved" && ! printf '%s' "${out}" | grep -q "plan approved"; then ok "an operator who does not type 'sign' approves nothing"; else bad "sign approved without the word (rc=${rc})"; fi
+out=$(M1 sign agent-i read doc-s3 </dev/null 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -ne 0 ] && ! printf '%s' "${out}" | grep -q "plan approved"; then ok "no answer at all approves nothing"; else bad "sign approved with no answer"; fi
+out=$(printf 'sign\nno\n' | M1 sign agent-w read doc-s4 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "no controllers' proof" && ! printf '%s' "${out}" | grep -q -- "--proof"; then ok "class W: the operators sign, the controllers refuse: no proof is made"; else bad "class W: a proof was made without the controllers' confirmation"; fi
+# a broker that sealed ANOTHER plan than the one shown: the operator's own recomputation must stop it
+sed 's|^  cp "${w}/plan.json" "${w}/submitted-plan.json".*$|  jq '"'"'.steps[0].resource="doc-other"'"'"' "${w}/plan.json" >"${w}/submitted-plan.json"|' "${SITE}" >"${WORK}/site-forged.sh"
+chmod +x "${WORK}/site-forged.sh"
+if cmp -s "${SITE}" "${WORK}/site-forged.sh"; then bad "the forged copy of site.sh changed nothing"; else
+  out=$(TBP_SITE_HOME="${H1}" "${WORK}/site-forged.sh" m1 sign agent-i read doc-s5 --yes 2>&1) && rc=0 || rc=$?
+  if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "NOTHING is signed" && printf '%s' "${out}" | grep -q "DIFFÉRENT" && ! printf '%s' "${out}" | grep -q "plan approved"; then
+    ok "the broker sealed another plan: the operator's recomputation refuses, even with --yes"
+  else bad "a plan the broker sealed differently was signed (rc=${rc}): $(printf '%s' "${out}" | tail -3 | tr '\n' ' ')"; fi
+fi
+
 echo "== closing and reopening pepd: governed by the controllers"
 p=$(M1 mode-proof closed 2>&1 | proof_of)
 says "one controller closes (restricting is not widening)" '"mode":"closed"' "$(M2 mode closed --proof "${p}" 2>&1)"
@@ -229,7 +253,7 @@ done
 if [ "${leak}" -eq 0 ]; then ok "no report holds a key, seed, path, address or host name"; else bad "a report leaks something"; fi
 
 echo "== the page (both languages) still names what it announces"
-for kw in "site.sh m1 grant" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
+for kw in "site.sh m1 sign" "m1 grant" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
   for lang in site.md site.fr.md; do
     if grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${lang}"; then :; else bad "deploy/dev-test/${lang} no longer mentions '${kw}'"; fi
   done
