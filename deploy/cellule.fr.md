@@ -953,8 +953,11 @@ suggère jamais un verrou qui n'existe pas
 ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)) :
 `anchor-lag` (§6.2 : aucun démon ne produit d'ancrage pour l'instant, donc personne
 ne peut mesurer ce retard ; voir [scales.fr.md](scales.fr.md)) et `registry-disk-high`
-(le backpressure du registre refuse les écritures quand son quota est atteint,
-`src/registry/backpressure.go`).
+(le registre a une bibliothèque de quota disque, `src/registry/backpressure.go`, mais
+**aucun démon ne s'en sert** : rien n'arrête la cellule à 80 % d'un quota et rien
+n'écrit de feuille d'arrêt — [#334](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/334)).
+Tant qu'elle n'est pas branchée, **surveillez vous-même le système de fichiers du registre**
+(`TBP_REGISTRY_DIR`) : un disque plein n'est pas un arrêt propre).
 
 Lire et lever depuis le socket d'administration (l'accès au socket est le
 contrôle d'accès, #95) :

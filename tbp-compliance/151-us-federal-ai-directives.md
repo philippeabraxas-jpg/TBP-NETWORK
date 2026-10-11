@@ -1,6 +1,6 @@
 # US Federal AI Directives — M-25-21 / M-25-22
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #151](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/151)
 **Reference**: originally requested as EO 14110 / OMB M-24-10 — **both are repealed** (EO 14110 repealed by EO 14148 on 2025-01-28; OMB M-24-10/M-24-18 superseded in April 2025 by **M-25-21** — agency AI use — and **M-25-22** — agency AI acquisition). This catalog covers the currently-in-force instruments.
 **Last verified**: 2026-09-29 — **regulatory texts move fast; re-verify before citing.**

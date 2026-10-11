@@ -1,6 +1,6 @@
 # OWASP API Security Top 10 (2023)
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #162](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/162) · fix: [issue #163 / PR #164](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/163)
 **Reference**: OWASP API Security Top 10, 2023 edition (still current).
 **Last verified**: 2026-09-29

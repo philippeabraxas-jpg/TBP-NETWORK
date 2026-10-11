@@ -60,10 +60,15 @@ both directions must agree).
 
 ### Backpressure (`backpressure.go` — T5)
 
-The disk-quota policy described below is enforced as a `BackpressureChecker`
-seam wired into `CellLog.Append`: when engaged, appends fail closed; the
-stop is itself a leaf and an alarm, same doctrine as the telemetry-cut case
-in §5.3 ("classe W" treatment) — not a silent degradation.
+The disk-quota policy described below is implemented **in the library**: a `BackpressureChecker` seam is
+consulted by `CellLog.Append` when it is set, and when engaged appends fail closed; the stop is itself a leaf
+and an alarm, same doctrine as the telemetry-cut case in §5.3 ("classe W" treatment) — not a silent
+degradation.
+
+> **Not wired into any daemon** ([#334](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/334)).
+> `pepd`, `brokerd`, `anod`, `supervisord` and `opawatchdog` open their cell log without a `Backpressure`
+> option, `NewMonitor` is only called by tests, and there is no setting for the quota: on a running cell the
+> log grows until the filesystem is full. The tests below prove the library, not a running cell.
 
 ### Async bounded durability (`async_writer.go` — T38, issue #71)
 

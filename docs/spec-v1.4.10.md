@@ -17,7 +17,7 @@ TBP does not replace business protections: the power plant has its locks, the LL
 
 TBP governs **agent capabilities**, not their models. An LLM is probabilistic: security can never depend on what it produces — it depends on what its action is allowed to do, verified by a deterministic system before execution, with third-party-verifiable proof.
 
-![Figure 1 — The TBP governance chain](figs/fig1_chaine.png)
+![Figure 1 — The TBP governance chain](../figs/fig1_chaine.png)
 
 **New in v1.4**: bounded-capability passports (signed quota, counter at the PEP, per-epoch egress envelope, metadata telemetry) · ephemeral keys · explicit time (NTS) · arbitrated plan = contract · jti anti-replay · OPA circuit breaker · classification governance · normalization glossary · epistemic status.
 
@@ -52,7 +52,7 @@ TBP governs **agent capabilities**, not their models. An LLM is probabilistic: s
 
 The handshake proves three things: **(1) under which rules the entity operates** (`policy_id = hash(P)`, mechanical subsumption); **(2) that its history is continuous** (O(log n) consistency proof; any modification is a signed transition event; discontinuity = corruption = refusal); **(3) that it is operational right now** (verifier nonce → real OPA cycle → leaf → HSM signature; targets accepting only tokens issued in-flight).
 
-![Figure 2 — Handshake](figs/fig2_handshake.png)
+![Figure 2 — Handshake](../figs/fig2_handshake.png)
 
 ### 3.2 · Bootstrap: genesis, late joiners, legitimacy limit
 
@@ -87,7 +87,7 @@ Any heavy-path opening (session, tunnel, SDN rule) is issued as a passport: a to
 - **Metadata telemetry**: bytes per interval, destination, pace (NetFlow/IPFIX style); registry leaves. **Content inspection of passport flows is prohibited** — it would destroy the data-plane speed gain: anti-dribble relies exclusively on post-processing flow metadata (trickling, sub-threshold exfiltrations).
 - **Doctrine**: prevent what costs little, detect what costs much — every open door is born with its counter and its instrument (§5.3).
 
-![Figure 5 — Bounded-capability passport](figs/fig5_passeport.png)
+![Figure 5 — Bounded-capability passport](../figs/fig5_passeport.png)
 
 *Separation of temperatures: quota = counted at execution (PEP); envelope = counted at issuance (broker).*
 
@@ -131,7 +131,7 @@ The translator is a friction parameter, not a security parameter: it illuminates
 
 No direct client → server path; the server accepts only the broker. The NAC is a **switch** in the railway sense: authenticated (802.1X, EAP-TLS) → VLAN giving access to the broker; unknown → **captive VLAN** whose only route is enrollment or the forced broker. EAP-TLS reuses **the same PKI as the handshake** — a single identity infrastructure. L2 anti-bypass: strict server VLAN, DHCP snooping + DAI, AP isolation.
 
-![Figure 3 — Network topology](figs/fig3_reseau.png)
+![Figure 3 — Network topology](../figs/fig3_reseau.png)
 
 ### 5.2 · Catalogue of paths bypassing the router
 
@@ -165,7 +165,7 @@ No direct client → server path; the server accepts only the broker. The NAC is
 
 Each cell keeps its own chain (sessions, batches) — hot path without coordination. Periodically, `hash(broker_id, head, TSA)` of each cell is recorded in the **master chain** (CT pattern, RFC 6962). Engine: **Tessera** (GA library, POSIX driver — one directory = one cell log); bootstrap: veritrail (test against RFC 6962 vectors); Rekor/cosign = **artifact** registry (§1), never decisions. Fully in-house ruled out: leaf/node domain separation is the most audited part of the ecosystem — and third-party-verifiable proof loses its value if the auditor has to re-read the code. Ecosystem signal: Let's Encrypt is migrating its RFC 6962 logs to the Static CT / tiled API — the Tessera direction is that of the entire field.
 
-![Figure 4 — Two-level registry](figs/fig4_registre.png)
+![Figure 4 — Two-level registry](../figs/fig4_registre.png)
 
 ### 6.2 · Temperatures — and explicit time
 
@@ -206,7 +206,7 @@ During the TTL of the active epoch, a component holding its local keys can issue
 ### 7.7 · Policy evolution (agility under contract)
 Verifiable monotonicity (§11); legitimate weakening = motivated, visible transition updating verifier consent; negotiated workflow without stop or window; historically continuous compliance.
 
-![Figure 6 — Key hierarchy and time](figs/fig6_cles.png)
+![Figure 6 — Key hierarchy and time](../figs/fig6_cles.png)
 
 ## 8 · Threats ↔ mechanisms matrix
 

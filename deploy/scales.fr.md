@@ -47,6 +47,7 @@ dans #86.
 | Démarrage mesuré | `TBP_MEASURED_BOOT_*` | requis | requis | requis | requis |
 | Superviseur / moniteur indépendant | `superviseur.md` | absent | optionnel | requis | requis |
 | Ancrage dans la master chain et retard d'ancrage borné (§6.2) | `registry.Anchorer` (bibliothèque) | absent | absent | exigé par la spec, **non construit** : aucun démon ne lance l'ancreur, donc la borne de retard n'est pas appliquée (#265) | défini au handshake (#33) |
+| Quota disque du registre et arrêt propre à 80 % (`src/registry/README.md`) | `registry.Monitor` (bibliothèque) | absent | absent | exigé par la politique du registre, **non construit** : aucun démon n'utilise la bibliothèque de quota, donc rien n'arrête la cellule avant que le disque de l'hôte soit plein ; surveillez vous-même le système de fichiers du registre (#334) | défini au handshake (#33) |
 | Transport inter-cellules chiffré | #187 | sans objet | sans objet | requis | requis |
 | Règles inaliénables | (à définir) | à définir | à définir | à définir | à définir au handshake (#33) |
 

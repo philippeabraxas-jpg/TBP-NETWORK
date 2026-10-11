@@ -1,6 +1,6 @@
 # OWASP GenAI LLM Top 10 (2026)
 
-**Status: Partial**
+**Status: Open code gaps**
 **Source**: [issue #143](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/143) · fix: [issue #168 / PR #169](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/168) (Unicode instruction-smuggling)
 **Reference**: [OWASP GenAI LLM Top 10 2026](https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/tree/main/2026/final) (LLM01–LLM10)
 **Last verified**: 2026-09-29

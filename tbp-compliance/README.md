@@ -23,58 +23,62 @@ of scope rather than force-fit into a false ✅.
 
 There is no "partial" status: a partial control is split into its ✅ part and its 🔴/⚪ part.
 
-**File status** (aggregate per standard, derived mechanically from the rows —
-`python3 tbp-compliance/check_catalog.py` enforces it):
-- **Full** — no 🔴 row remains; everything applicable is ✅ or ⚪ with its guide.
-- **Partial** — at least one 🔴 row (listed under "Open gaps that need code" below).
+**File status and counters** (aggregate per standard, derived mechanically from the rows —
+`python3 tbp-compliance/check_catalog.py` enforces it, and `--update` rewrites the counters):
+- **No code gap** — no 🔴 row remains; everything applicable is ✅ or ⚪ with its guide. It does **not** mean the
+  standard is "fully met": ⚪ rows are left to the deployer or to an organizational process, and a standard is
+  never described as "Full" anywhere in this repository.
+- **Open code gaps** — at least one 🔴 row (listed under "Open gaps that need code" below).
+- **Rows ✅ · 🔴 · ⚪** — how many rows of the file are covered, real gaps, or not TBP's concern (a row split
+  between statuses counts under each of them).
 - **Not applicable** — the standard has no controls to catalog (terminology
   reference only).
 
 ## AI security & agentic-threat frameworks
 
-| Standard | Status | File |
-|---|---|---|
-| OWASP Agentic Skills Top 10 (AST10) | Full | [142-owasp-agentic-skills-top10.md](142-owasp-agentic-skills-top10.md) |
-| OWASP GenAI LLM Top 10 (2026) | Partial | [143-owasp-llm-top10.md](143-owasp-llm-top10.md) |
-| CSA MAESTRO (7-layer threat model) | Full | [144-csa-maestro.md](144-csa-maestro.md) |
-| MITRE ATLAS (16 tactics) | Partial | [145-mitre-atlas.md](145-mitre-atlas.md) |
+| Standard | Status | Rows | File |
+|---|---|---|---|
+| OWASP Agentic Skills Top 10 (AST10) | No code gap | ✅ 28 · 🔴 0 · ⚪ 31 | [142-owasp-agentic-skills-top10.md](142-owasp-agentic-skills-top10.md) |
+| OWASP GenAI LLM Top 10 (2026) | Open code gaps | ✅ 25 · 🔴 4 · ⚪ 21 | [143-owasp-llm-top10.md](143-owasp-llm-top10.md) |
+| CSA MAESTRO (7-layer threat model) | Open code gaps | ✅ 3 · 🔴 1 · ⚪ 4 | [144-csa-maestro.md](144-csa-maestro.md) |
+| MITRE ATLAS (16 tactics) | Open code gaps | ✅ 12 · 🔴 1 · ⚪ 4 | [145-mitre-atlas.md](145-mitre-atlas.md) |
 
 ## AI regulatory / governance frameworks
 
-| Standard | Status | File |
-|---|---|---|
-| EU AI Act | Full | [146-eu-ai-act.md](146-eu-ai-act.md) |
-| NIST AI RMF 1.0 (Govern/Map/Measure/Manage) | Full | [147-nist-ai-rmf.md](147-nist-ai-rmf.md) |
-| ISO/IEC 42001:2023 (AIMS) | Full | [148-iso-iec-42001.md](148-iso-iec-42001.md) |
-| ISO/IEC 22989:2022 (AI terminology) | Not applicable | [149-iso-iec-22989.md](149-iso-iec-22989.md) |
-| ISO/IEC 23894:2023 (AI risk management) | Full | [150-iso-iec-23894.md](150-iso-iec-23894.md) |
-| US federal AI directives (M-25-21 / M-25-22) | Full | [151-us-federal-ai-directives.md](151-us-federal-ai-directives.md) |
+| Standard | Status | Rows | File |
+|---|---|---|---|
+| EU AI Act | Open code gaps | ✅ 3 · 🔴 1 · ⚪ 7 | [146-eu-ai-act.md](146-eu-ai-act.md) |
+| NIST AI RMF 1.0 (Govern/Map/Measure/Manage) | No code gap | ✅ 1 · 🔴 0 · ⚪ 3 | [147-nist-ai-rmf.md](147-nist-ai-rmf.md) |
+| ISO/IEC 42001:2023 (AIMS) | No code gap | ✅ 3 · 🔴 0 · ⚪ 7 | [148-iso-iec-42001.md](148-iso-iec-42001.md) |
+| ISO/IEC 22989:2022 (AI terminology) | Not applicable | ✅ 0 · 🔴 0 · ⚪ 0 | [149-iso-iec-22989.md](149-iso-iec-22989.md) |
+| ISO/IEC 23894:2023 (AI risk management) | No code gap | ✅ 7 · 🔴 0 · ⚪ 4 | [150-iso-iec-23894.md](150-iso-iec-23894.md) |
+| US federal AI directives (M-25-21 / M-25-22) | No code gap | ✅ 4 · 🔴 0 · ⚪ 8 | [151-us-federal-ai-directives.md](151-us-federal-ai-directives.md) |
 
 ## General cybersecurity & privacy frameworks
 
-| Standard | Status | File |
-|---|---|---|
-| ISO/IEC 27001/27002:2022 | Full | [152-iso-iec-27001-27002.md](152-iso-iec-27001-27002.md) |
-| NIST CSF 2.0 / SP 800-53 | Partial | [153-nist-csf-800-53.md](153-nist-csf-800-53.md) |
-| SOC 2 (5 Trust Services Criteria) | Full | [154-soc2.md](154-soc2.md) |
-| GDPR | Full | [155-gdpr.md](155-gdpr.md) |
+| Standard | Status | Rows | File |
+|---|---|---|---|
+| ISO/IEC 27001/27002:2022 | Open code gaps | ✅ 8 · 🔴 1 · ⚪ 3 | [152-iso-iec-27001-27002.md](152-iso-iec-27001-27002.md) |
+| NIST CSF 2.0 / SP 800-53 | Open code gaps | ✅ 3 · 🔴 1 · ⚪ 3 | [153-nist-csf-800-53.md](153-nist-csf-800-53.md) |
+| SOC 2 (5 Trust Services Criteria) | No code gap | ✅ 4 · 🔴 0 · ⚪ 2 | [154-soc2.md](154-soc2.md) |
+| GDPR | No code gap | ✅ 5 · 🔴 0 · ⚪ 6 | [155-gdpr.md](155-gdpr.md) |
 
 ## Supply-chain frameworks
 
-| Standard | Status | File |
-|---|---|---|
-| SLSA v1.0 (build provenance) | Full | [156-slsa.md](156-slsa.md) |
-| OWASP SCVS (component verification) | Full | [157-owasp-scvs.md](157-owasp-scvs.md) |
-| CIS Benchmarks | Full | [158-cis-benchmarks.md](158-cis-benchmarks.md) |
+| Standard | Status | Rows | File |
+|---|---|---|---|
+| SLSA v1.0 (build provenance) | No code gap | ✅ 3 · 🔴 0 · ⚪ 0 | [156-slsa.md](156-slsa.md) |
+| OWASP SCVS (component verification) | No code gap | ✅ 6 · 🔴 0 · ⚪ 0 | [157-owasp-scvs.md](157-owasp-scvs.md) |
+| CIS Benchmarks | No code gap | ✅ 1 · 🔴 0 · ⚪ 2 | [158-cis-benchmarks.md](158-cis-benchmarks.md) |
 
 ## Architecture-specific frameworks
 
-| Standard | Status | File |
-|---|---|---|
-| NIST SP 800-207 (Zero Trust Architecture) | Full (strongest match in the series) | [159-nist-800-207-zero-trust.md](159-nist-800-207-zero-trust.md) |
-| IEC 62443 (OT/industrial) | Full | [160-iec-62443.md](160-iec-62443.md) |
-| FIPS 140-3 (cryptographic module validation) | Full (documentary scoping only) | [161-fips-140-3.md](161-fips-140-3.md) |
-| OWASP API Security Top 10 (2023) | Full | [162-owasp-api-security-top10.md](162-owasp-api-security-top10.md) |
+| Standard | Status | Rows | File |
+|---|---|---|---|
+| NIST SP 800-207 (Zero Trust Architecture) | No code gap (strongest match in the series) | ✅ 7 · 🔴 0 · ⚪ 1 | [159-nist-800-207-zero-trust.md](159-nist-800-207-zero-trust.md) |
+| IEC 62443 (OT/industrial) | No code gap | ✅ 5 · 🔴 0 · ⚪ 2 | [160-iec-62443.md](160-iec-62443.md) |
+| FIPS 140-3 (cryptographic module validation) | No code gap (documentary scoping only) | ✅ 2 · 🔴 0 · ⚪ 3 | [161-fips-140-3.md](161-fips-140-3.md) |
+| OWASP API Security Top 10 (2023) | No code gap | ✅ 10 · 🔴 0 · ⚪ 2 | [162-owasp-api-security-top10.md](162-owasp-api-security-top10.md) |
 
 ## Recurring threads across the whole series
 
@@ -124,9 +128,10 @@ catalogue's contribution to the backlog; when one of these is closed, its rows
 move to ✅ in the same pull request.
 
 | Issue | Gap | Rows |
-|---|---|---|
-| [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181) | Behavioural profile by sequence (salami / decomposition, cost anomalies, per-run cost cap, downstream monitoring) | [143](143-owasp-llm-top10.md), [145](145-mitre-atlas.md) Impact, [153](153-nist-csf-800-53.md) DETECT |
-| [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | [143](143-owasp-llm-top10.md) LLM06 human confirmation |
+|---|---|---|---|
+| [#181](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/181) | Behavioural profile by sequence (salami / decomposition, cost anomalies, per-run cost cap, downstream monitoring) | ✅ 25 · 🔴 3 · ⚪ 15 |
+| [#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86) | Operator console that renders the exact translated action before approval | ✅ 25 · 🔴 3 · ⚪ 15 |
+| [#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265) | Master-chain anchoring: the anchoring library exists but no daemon runs it, so a cell's audit chain is not anchored outside the cell | ✅ 3 · 🔴 1 · ⚪ 4 |
 
 ## Rule packs that close catalogue rows
 
@@ -135,9 +140,9 @@ The rows a Rego rule can close are closed by named, tested packs under
 
 | Pack | Closes |
 |---|---|
-| `tbp.pack.agent_hardening` | agent memory files, credential stores, egress allowlist, command allowlist, explicit paths ([142](142-owasp-agentic-skills-top10.md) AST 1.6/3.3/3.4/3.6/3.7/3.8/5.4, [143](143-owasp-llm-top10.md) memory) |
-| `tbp.pack.skill_tier` | `risk_tier` gating ([142](142-owasp-agentic-skills-top10.md) AST 4.5/9.2) |
-| `tbp.pack.agent_scope` | per-agent action and resource allowlist ([143](143-owasp-llm-top10.md) LLM06) |
+| `tbp.pack.agent_hardening` | agent memory files, credential stores, egress allowlist, command allowlist, explicit paths ([142](142-owasp-agentic-skills-top10.md) AST 1.6/3.3/3.4/3.6/3.7/3.8/5.4, [143](143-owasp-llm-top10.md) memory) | ✅ 28 · 🔴 0 · ⚪ 31 |
+| `tbp.pack.skill_tier` | `risk_tier` gating ([142](142-owasp-agentic-skills-top10.md) AST 4.5/9.2) | ✅ 28 · 🔴 0 · ⚪ 31 |
+| `tbp.pack.agent_scope` | per-agent action and resource allowlist ([143](143-owasp-llm-top10.md) LLM06) | ✅ 25 · 🔴 4 · ⚪ 21 |
 
 ## Maintaining the catalogue
 

@@ -4,7 +4,7 @@ Documentation license for this directory (docs/) and figs/
 Copyright (c) Philippe Collet.
 
 The documentation and figures in this repository — including
-docs/spec-v1.4.2.md, docs/glossaire.md, docs/audits/, and figs/ — are
+docs/spec-en-v1.0.md, docs/spec-v1.4.10.md and its French version, docs/glossaire.md, docs/audits/, and figs/ — are
 licensed under the Creative Commons Attribution 4.0 International License
 (CC BY 4.0).
 
@@ -17,5 +17,7 @@ Human-readable summary: https://creativecommons.org/licenses/by/4.0/
 
 This license applies to the documentation only. The source code and
 configuration elsewhere in this repository (config/, src/, policies/,
-lab/, tests/, .github/) are covered by the separate, closed LICENSE file
-at the repository root — see that file for the code's terms.
+lab/, tests/, deploy/, scripts/, .github/) are covered by the Apache License
+2.0 in the LICENSE file at the repository root — see that file for the code's
+terms. (An earlier version of this notice described that file as closed: the
+code was closed during an initial pilot phase, and is not any more.)

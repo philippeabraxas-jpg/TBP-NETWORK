@@ -8,11 +8,14 @@ machine to enterprise deployments up to WWW scale.
 > you're allowed to do once inside — and proves it. We govern capabilities,
 > not models. »*
 
-**Never a partnership by trust — only by an attested handshake.** That's
-what this repository is: the inter-entity handshake (spec §3) and
-everything around it — NAC, PEPs, cell registries — that extends TBP's
-governance from a single machine to a network of entities that have to
-trust each other without simply trusting each other.
+**Never a partnership by trust — only by an attested handshake.** That is the
+goal: the inter-entity handshake (spec §3) lets entities that do not trust
+each other prove policy, history and liveness to each other. **The
+handshake itself is not built yet** ([#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)).
+What this repository contains today is what comes before it and what it will
+rest on — the PEPs, the cell broker and registries, NAC, supervision, the
+deployment guides — which extends TBP's governance from a single machine to a
+small network of machines under one organization.
 
 ## Try it: a DEV-TEST of TBP, on three machines
 
@@ -126,8 +129,9 @@ as a git submodule pinned to a specific commit — a pointer, not a fork:
 this repository is never the place to file an issue or PR against that
 code, only against the network-rollout pieces below. **This repository
 is the network-scale rollout** of that same protocol: NAC, local PEPs,
-cell registries, the inter-entity handshake — the pieces needed to take
-TBP from a single governed machine to a governed network. As of this
+cell registries (the inter-entity handshake is the goal, and is not built yet) —
+the pieces needed to take TBP from a single governed machine to a governed
+network. As of this
 notice, this repository's own code is Apache 2.0 too (see Licensing
 below) — the same license as the core protocol, one license across both
 repositories, not two. It previously used a closed license during an
@@ -150,42 +154,40 @@ structurally outside TBP's scope. The full breakdown (one file per standard,
 with citations to the exact mechanism behind every ✅) lives in
 [`tbp-compliance/`](tbp-compliance/README.md); this table is the summary.
 
-| Standard | Status | Detail |
-|---|---|---|
-| OWASP Agentic Skills Top 10 (AST10) | 🟡 Partial | [tbp-compliance/142-…](tbp-compliance/142-owasp-agentic-skills-top10.md) |
-| OWASP GenAI LLM Top 10 (2026) | 🟡 Partial | [tbp-compliance/143-…](tbp-compliance/143-owasp-llm-top10.md) |
-| CSA MAESTRO (7-layer threat model) | 🟡 Partial | [tbp-compliance/144-…](tbp-compliance/144-csa-maestro.md) |
-| MITRE ATLAS (16 tactics) | 🟢 Full | [tbp-compliance/145-…](tbp-compliance/145-mitre-atlas.md) |
-| EU AI Act | 🟡 Partial | [tbp-compliance/146-…](tbp-compliance/146-eu-ai-act.md) |
-| NIST AI RMF 1.0 | 🟡 Partial | [tbp-compliance/147-…](tbp-compliance/147-nist-ai-rmf.md) |
-| ISO/IEC 42001:2023 (AIMS) | 🟢 Full | [tbp-compliance/148-…](tbp-compliance/148-iso-iec-42001.md) |
-| ISO/IEC 22989:2022 (terminology) | ⚪ N/A | [tbp-compliance/149-…](tbp-compliance/149-iso-iec-22989.md) |
-| ISO/IEC 23894:2023 (AI risk mgmt) | 🟡 Partial | [tbp-compliance/150-…](tbp-compliance/150-iso-iec-23894.md) |
-| US federal AI directives (M-25-21/22) | 🟡 Partial | [tbp-compliance/151-…](tbp-compliance/151-us-federal-ai-directives.md) |
-| ISO/IEC 27001/27002:2022 | 🟢 Full | [tbp-compliance/152-…](tbp-compliance/152-iso-iec-27001-27002.md) |
-| NIST CSF 2.0 / SP 800-53 | 🟡 Partial | [tbp-compliance/153-…](tbp-compliance/153-nist-csf-800-53.md) |
-| SOC 2 (5 Trust Services Criteria) | 🟡 Partial | [tbp-compliance/154-…](tbp-compliance/154-soc2.md) |
-| GDPR | 🟡 Partial | [tbp-compliance/155-…](tbp-compliance/155-gdpr.md) |
-| SLSA v1.0 (build provenance) | 🟢 Full | [tbp-compliance/156-…](tbp-compliance/156-slsa.md) |
-| OWASP SCVS (component verification) | 🟢 Full | [tbp-compliance/157-…](tbp-compliance/157-owasp-scvs.md) |
-| CIS Benchmarks | 🟢 Full | [tbp-compliance/158-…](tbp-compliance/158-cis-benchmarks.md) |
-| NIST SP 800-207 (Zero Trust) | 🟡 Partial — strongest match | [tbp-compliance/159-…](tbp-compliance/159-nist-800-207-zero-trust.md) |
-| IEC 62443 (OT/industrial) | 🟡 Partial | [tbp-compliance/160-…](tbp-compliance/160-iec-62443.md) |
-| FIPS 140-3 (crypto module validation) | 🟢 Full — documentary scoping | [tbp-compliance/161-…](tbp-compliance/161-fips-140-3.md) |
-| OWASP API Security Top 10 (2023) | 🟢 Full | [tbp-compliance/162-…](tbp-compliance/162-owasp-api-security-top10.md) |
+| Standard | ✅ | 🔴 | ⚪ | Detail |
+|---|--:|--:|--:|---|
+| OWASP Agentic Skills Top 10 (AST10) | 28 | 0 | 31 | [tbp-compliance/142-…](tbp-compliance/142-owasp-agentic-skills-top10.md) |
+| OWASP GenAI LLM Top 10 (2026) | 25 | 4 | 21 | [tbp-compliance/143-…](tbp-compliance/143-owasp-llm-top10.md) |
+| CSA MAESTRO (7-layer threat model) | 3 | 1 | 4 | [tbp-compliance/144-…](tbp-compliance/144-csa-maestro.md) |
+| MITRE ATLAS (16 tactics) | 12 | 1 | 4 | [tbp-compliance/145-…](tbp-compliance/145-mitre-atlas.md) |
+| EU AI Act | 3 | 1 | 7 | [tbp-compliance/146-…](tbp-compliance/146-eu-ai-act.md) |
+| NIST AI RMF 1.0 | 1 | 0 | 3 | [tbp-compliance/147-…](tbp-compliance/147-nist-ai-rmf.md) |
+| ISO/IEC 42001:2023 (AIMS) | 3 | 0 | 7 | [tbp-compliance/148-…](tbp-compliance/148-iso-iec-42001.md) |
+| ISO/IEC 22989:2022 (terminology) | 0 | 0 | 0 | [tbp-compliance/149-…](tbp-compliance/149-iso-iec-22989.md) |
+| ISO/IEC 23894:2023 (AI risk mgmt) | 7 | 0 | 4 | [tbp-compliance/150-…](tbp-compliance/150-iso-iec-23894.md) |
+| US federal AI directives (M-25-21/22) | 4 | 0 | 8 | [tbp-compliance/151-…](tbp-compliance/151-us-federal-ai-directives.md) |
+| ISO/IEC 27001/27002:2022 | 8 | 1 | 3 | [tbp-compliance/152-…](tbp-compliance/152-iso-iec-27001-27002.md) |
+| NIST CSF 2.0 / SP 800-53 | 3 | 1 | 3 | [tbp-compliance/153-…](tbp-compliance/153-nist-csf-800-53.md) |
+| SOC 2 (5 Trust Services Criteria) | 4 | 0 | 2 | [tbp-compliance/154-…](tbp-compliance/154-soc2.md) |
+| GDPR | 5 | 0 | 6 | [tbp-compliance/155-…](tbp-compliance/155-gdpr.md) |
+| SLSA v1.0 (build provenance) | 3 | 0 | 0 | [tbp-compliance/156-…](tbp-compliance/156-slsa.md) |
+| OWASP SCVS (component verification) | 6 | 0 | 0 | [tbp-compliance/157-…](tbp-compliance/157-owasp-scvs.md) |
+| CIS Benchmarks | 1 | 0 | 2 | [tbp-compliance/158-…](tbp-compliance/158-cis-benchmarks.md) |
+| NIST SP 800-207 (Zero Trust) | 7 | 0 | 1 | [tbp-compliance/159-…](tbp-compliance/159-nist-800-207-zero-trust.md) |
+| IEC 62443 (OT/industrial) | 5 | 0 | 2 | [tbp-compliance/160-…](tbp-compliance/160-iec-62443.md) |
+| FIPS 140-3 (crypto module validation) | 2 | 0 | 3 | [tbp-compliance/161-…](tbp-compliance/161-fips-140-3.md) |
+| OWASP API Security Top 10 (2023) | 10 | 0 | 2 | [tbp-compliance/162-…](tbp-compliance/162-owasp-api-security-top10.md) |
 
-**8 standards Full, 12 Partial, 1 Not applicable** (terminology-only, no
-controls to rate). "Partial" is not a failing grade here — several frameworks
-(EU AI Act, NIST AI RMF, SOC 2 Availability) are inherently partial because
-part of what they ask for is an organizational process TBP cannot itself be;
-each file states plainly which gaps are real code work versus a documented,
-deliberate design tradeoff (fail-closed over availability) versus genuinely
-out of scope. Two recurring findings drove real fixes: a `SkillRegistry`
-gap independently confirmed by seven frameworks (#165/PR #166), and a
-BOLA/Broken-Authentication gap on `POST /v1/actions` found by the OWASP API
-Security Top 10 catalog (#163/PR #164) — see
-[`tbp-compliance/README.md`](tbp-compliance/README.md) for the full list of
-threads running across the series.
+<!-- catalogue-totals -->**140 ✅ covered, 9 🔴 real gaps (each with its issue), 113 ⚪ not TBP's concern** — rows counted over the 21 sheets (a row split between statuses counts under each)<!-- /catalogue-totals -->. **These are counters, not grades**: each
+standard is read control by control, and every row is ✅ covered by a named mechanism, 🔴 a real gap that needs code
+(each one has an issue), or ⚪ not TBP's concern (the executor, the OS, the deployer, an organizational process).
+A standard with no 🔴 row is **not** "fully met": its ⚪ rows are what the deployer or the organization still has to
+do, and each file says what (*To close:*). Nothing here is a certification or an attestation of compliance. The
+counters are recomputed from the rows by `python3 tbp-compliance/check_catalog.py`, which CI runs, so this table cannot
+drift from the files. Two recurring findings drove real fixes: a `SkillRegistry`
+gap independently confirmed by seven frameworks (#165/PR #166), and a BOLA/Broken-Authentication gap on
+`POST /v1/actions` found by the OWASP API Security Top 10 catalog (#163/PR #164) — see
+[`tbp-compliance/README.md`](tbp-compliance/README.md) for the full list of threads running across the series.
 
 ## Repository structure
 
@@ -221,11 +223,23 @@ src/
 │                        (m-of-n verified, monotone, equivocation-detected),
 │                        k-of-n quorum for class W, mirror/canary promotion
 ├── registry/             Cell registry (§6): Tessera POSIX cell log with signed
-│                        checkpoints, disk backpressure, anchoring + TSA,
-│                        attested state manifest, measured boot (§6.3)
+│                        checkpoints, attested state manifest, measured boot
+│                        (§6.3); disk-quota and anchoring (+ TSA) LIBRARIES
+│                        exist but no daemon uses them yet (#334, #265)
 ├── supervision/          Independent monitor (§2, §6.2, §7.1): verified chain
 │                        reading (ChainWatcher), divergence alerting, failover
 │                        detection, read-only console, supervisord
+├── arbiter/              Human arbitration of degraded requests (§4.5): the
+│                        queue and the signed operator decision
+├── ano/                  Anonymiser (`anod`): masks fields by path before data
+│                        leaves the perimeter
+├── strictjson/           Strict JSON decoding shared by the daemons (no
+│                        duplicate key, unknown field or trailing content)
+├── devmode/              The development sentinel (`/etc/tbp/DEV_ENVIRONMENT`)
+│                        every «dev» escape hatch requires (#113)
+├── devtrace/, devconsole/ TEST tools of the DEV-TEST deployment, never
+│                        production: the decision trace, and the live console
+│                        (`deploy/dev-test/console.md`)
 ├── telemetry/            Flow metadata exporters, anti-dribble (§4.1-bis)
 └── translator/            Translator (§4.5): runtime hardening (hardened systemd
                            unit, seccomp allowlist, confinement audit) + controlled
@@ -382,15 +396,22 @@ increasing accordingly:
   machines instead. One more daemon, one more subsystem, same registry model as
   scale 1. Guide: [`deploy/scale-2.md`](deploy/scale-2.md), executed by the
   `scale2` selftest phase.
-- **Scale 3 — Resilient multi-cell.** What is already fully built and
-  documented as the pilot P1 deployment above: 2+ cells, cluster fencing
-  (epoch issuance/rotation, k-of-n quorum for class-W actions,
-  mirror/canary promotion), an independent supervisor with a read-only
-  console, the hardened translator with controlled degradation, the full
-  `deploy/` guide sequence and its selftest. For organizations
-  that can't tolerate a single cell going down, or whose governed agents
-  justify the extra machines. Still being developed beyond the pilot cut
-  (stream 2 below).
+- **Scale 3 — Resilient multi-cell.** The pilot P1 pieces exist and are tested:
+  2+ cells, cluster fencing (epoch issuance/rotation, k-of-n quorum for
+  class-W actions, mirror/canary promotion), an independent supervisor with
+  a read-only console, the hardened translator with controlled degradation,
+  the `deploy/` guide sequence and its selftest. **It is not operable over
+  time yet**: the epoch lease has to be renewed by an m-of-n quorum before
+  each expiry, every 10–300 s, and no guide describes it
+  ([#197](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/197));
+  there is no encrypted transport between cells
+  ([#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187));
+  the promotion architecture is not fixed
+  ([#233](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/233));
+  and no daemon anchors the registry
+  ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)).
+  For organizations that can't tolerate a single cell going down; read
+  stream 2 below before planning on it.
 - **Scale full — Multi-entity.** The inter-entity handshake (§3):
   proving policy, history continuity, and liveness across organizational
   boundaries, not just across cells of the same organization —
@@ -479,33 +500,14 @@ of effort. They run in parallel.
 3. **Foundations of the full-scale handshake** ([#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)).
    One handshake package, with shared wire formats and golden test vectors
    first; inter-cell and inter-entity trust come later on the same code.
-4. **Standards alignment — from a proprietary policy model to an
-   interoperable one** ([#87](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/87)).
-   TBP's rule taxonomy (classes F/I/W/OUT, §5.3),
-   its audit trail (hash-only Merkle-logged leaves, §6.2), and its
-   control set (fail-closed, monitor-before-closed, quorum for
-   high-stakes actions) are TBP-specific today — internally consistent
-   and tested, but not mapped to any external framework an auditor or a
-   regulator would already recognize. The work is to identify which
-   existing (and emerging) standards this maps to, and where the gaps
-   are — not to assume any of these apply, or that TBP already satisfies
-   them, without doing that mapping first. Candidates worth evaluating
-   as a starting point: **ISO/IEC 42001** (AI management system
-   standard — the closest fit for an "AI governance" claim), the **NIST
-   AI Risk Management Framework**, the **EU AI Act**'s logging and
-   human-oversight obligations for high-risk systems (§4.1's leaf-per-
-   decision and §4.2's plan-as-contract arbitration are structurally
-   close to what Article 12/14 ask for — unverified, needs a real
-   mapping, not an assumption), **NIST SP 800-207** (Zero Trust
-   Architecture — the spec already positions TBP against Zero Trust in
-   §3.3, a formal control-by-control comparison is the natural next
-   step), and **OSCAL** (NIST's machine-readable control/assessment
-   format — a plausible export target so TBP's own audit trail can feed
-   standard compliance tooling instead of requiring a bespoke reader).
-   This is research and specification work before it's code: the
-   product is a gap analysis and, where a real mapping exists, either
-   adapter code or documented equivalence — not a rewrite of the rule
-   engine.
+4. **Standards alignment.** The mapping to 21 external frameworks exists:
+   one sheet per standard in [`tbp-compliance/`](tbp-compliance/README.md),
+   with counters (not grades) recomputed from the rows by a CI check. What
+   remains is to keep it current — a pull request that changes what TBP covers
+   updates its sheets — to close the 🔴 rows it lists, and, as an option, to
+   export TBP's own audit trail in a machine-readable assessment format
+   (**OSCAL**) so that compliance tooling does not need a bespoke reader. The
+   original proposal is [#87](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/87).
 
 ## Licensing
 

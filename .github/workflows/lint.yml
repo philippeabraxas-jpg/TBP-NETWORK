@@ -55,14 +55,19 @@ jobs:
         run: opa test policies/rego/ policies/tests/
 
   # Le catalogue de conformité (tbp-compliance/) est un actif vivant : ce job
-  # échoue s'il dérive (ligne partielle, 🔴 sans issue, ⚪ sans motif, état de
-  # fiche ou du README qui ne découle pas des lignes).
+  # échoue s'il dérive (ligne partielle, 🔴 sans issue, ⚪ sans motif, état ou compteurs d'une
+  # fiche, dans le README du catalogue ET le README racine, qui ne découlent pas des lignes).
   compliance-catalog:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: cohérence du catalogue de conformité
         run: python3 tbp-compliance/check_catalog.py
+      # Les liens et images relatifs des documents existent (revue externe : 17 figures des specs cassées).
+      - name: liens relatifs des documents
+        run: |
+          python3 .github/scripts/check_doc_links.py
+          python3 .github/scripts/test_check_doc_links.py
       # Issue #193 : toute action doit être épinglée par SHA de commit.
       - name: actions épinglées par SHA (#193)
         run: |
@@ -81,13 +86,25 @@ jobs:
             sudo nft -c -f "$f"
           done
 
-  # Placeholder — pas de Dockerfile ni de code src/ pour l'instant (voir
-  # src/*/README.md). À activer une fois qu'il y a quelque chose à builder.
-  # docker:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-  #     - run: docker compose -f lab/docker-compose.yml config
+  # Les tests Python du dépôt : ils n'étaient lancés par aucun job (revue externe du 11/10). Bibliothèque standard
+  # seulement. `deploy/selftest/test_check_steps.py` est déjà exécuté par selftest.sh ; les tests de l'extension
+  # PostgreSQL (src/pep/postgres-extension/tests/) demandent un serveur PostgreSQL et ne sont pas lancés ici.
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: traducteur (mesure, échantillonnage humain)
+        run: |
+          cd src/translator
+          python3 -m unittest -v test_measure test_sample_human
+      - name: red team (couverture des feuilles)
+        run: |
+          cd tests/p2_redteam
+          python3 -m unittest -v test_assert_logged
+      - name: budget de friction (indicateurs avancés)
+        run: |
+          cd tests/p1_friction
+          python3 -m unittest -v test_leading_indicators
 
   # Catalogue de conformité #157 (OWASP SCVS), famille « Analyse de
   # composants » : aucun scanner de vulnérabilités des dépendances n'était

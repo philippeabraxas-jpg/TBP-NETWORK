@@ -1,6 +1,6 @@
 # OWASP SCVS (6 control families)
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #157](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/157) · fix: [issue #170 / PR #171](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/170)
 **Reference**: OWASP Software Component Verification Standard (SCVS) — 6 control families (Inventory, SBOM, Build Environment, Package Management, Component Analysis, Pedigree & Provenance), 3 increasing rigor levels.
 **Last verified**: 2026-09-29

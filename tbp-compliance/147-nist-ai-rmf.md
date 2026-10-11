@@ -1,6 +1,6 @@
 # NIST AI RMF 1.0 (Govern / Map / Measure / Manage)
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #147](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/147)
 **Reference**: NIST AI 100-1 — voluntary US AI risk-management framework, 4 functions (Govern, Map, Measure, Manage), each broken into categories/subcategories in the companion Playbook.
 **Last verified**: 2026-09-29

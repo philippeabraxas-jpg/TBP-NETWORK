@@ -897,8 +897,11 @@ fail-closed point that refuses every decision):
 are reserved and **not registered**, so that the list never suggests a lock that
 does not exist ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)):
 `anchor-lag` (§6.2: no daemon produces anchors yet, so nobody can measure the lag;
-see [scales.md](scales.md)) and `registry-disk-high` (the registry's own backpressure
-refuses writes when its quota is reached, `src/registry/backpressure.go`).
+see [scales.md](scales.md)) and `registry-disk-high` (the registry has a disk-quota library,
+`src/registry/backpressure.go`, but **no daemon uses it**: nothing stops the cell at 80 % of a quota, and
+nothing writes a stop leaf — [#334](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/334)). Until
+it is wired, **watch the filesystem that holds the registry yourself** (`TBP_REGISTRY_DIR`): a full disk is
+not a clean stop.
 
 Read and lift from the admin socket (access to the socket is the access control,
 #95):

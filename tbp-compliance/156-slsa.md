@@ -1,6 +1,6 @@
 # SLSA v1.0 (build provenance levels)
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #156](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/156) · fix: [issue #174 / PR #175](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/174)
 **Reference**: SLSA v1.0 (Supply-chain Levels for Software Artifacts) — 4 levels (L0–L3) of build-chain provenance guarantee for a software artifact.
 **Last verified**: 2026-09-28
