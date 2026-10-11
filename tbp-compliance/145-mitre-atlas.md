@@ -1,6 +1,6 @@
 # MITRE ATLAS (16 tactics)
 
-**Status: Partial**
+**Status: Open code gaps**
 **Source**: [issue #145](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/145) · fix: [issue #165 / PR #166](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) (SkillRegistry)
 **Reference**: [MITRE ATLAS](https://github.com/mitre-atlas/atlas-data) — [`ATLAS.yaml`](https://github.com/mitre-atlas/atlas-data/blob/main/dist/ATLAS.yaml), an ATT&CK-style kill-chain for attacks against AI systems (16 `AML.TA####` tactics)
 **Last verified**: 2026-09-29

@@ -23,7 +23,7 @@ TBP ne remplace pas les protections métier : la centrale a ses verrous, le LLM 
 
 TBP gouverne les **capacités des agents**, pas leurs modèles. Un LLM est probabiliste : la sécurité ne peut jamais dépendre de ce qu'il produit — elle dépend de ce que son action est autorisée à faire, vérifié par un système déterministe avant exécution, avec preuve vérifiable par un tiers.
 
-![Figure 1 — La chaîne de gouvernance TBP](figs/fig1_chaine.png)
+![Figure 1 — La chaîne de gouvernance TBP](../figs/fig1_chaine.png)
 
 **Nouveautés de la v1.4** : passeports à capacité bornée (quota signé, compteur au PEP, enveloppe d'egress par époque, télémétrie de métadonnées) · clés éphémères · temps explicite (NTS) · plan d'arbitré = contrat · anti-rejeu jti · circuit-breaker OPA · gouvernance de la classification · glossaire de normalisation · statut épistémique.
 
@@ -58,7 +58,7 @@ TBP gouverne les **capacités des agents**, pas leurs modèles. Un LLM est proba
 
 Le handshake prouve trois choses : **(1) sous quelles règles l'entité opère** (`policy_id = hash(P)`, subsomption mécanique) ; **(2) que son historique est continu** (preuve de consistance O(log n) ; toute modification est un événement de transition signé ; discontinuité = corruption = refus) ; **(3) qu'elle est opérationnelle à l'instant** (nonce vérifieur → cycle réel OPA → feuille → signature HSM ; cibles n'acceptant que des tokens émis in-flight).
 
-![Figure 2 — Handshake](figs/fig2_handshake.png)
+![Figure 2 — Handshake](../figs/fig2_handshake.png)
 
 ### 3.2 · Bootstrap : genèse, arrivants tardifs, limite de légitimité
 
@@ -93,7 +93,7 @@ Toute ouverture de chemin lourd (session, tunnel, règle SDN) est délivrée sou
 - **Télémétrie de métadonnées** : octets par intervalle, destination, rythme (style NetFlow/IPFIX) ; feuilles du registre. **L'inspection du contenu des flux du passeport est proscrite** — elle détruirait le gain de vitesse du plan de données : l'anti-dribble repose exclusivement sur le post-traitement des métadonnées de flux (goutte-à-goutte, exfiltrations sous-seuil).
 - **Doctrine** : prévenir ce qui coûte peu, détecter ce qui coûte cher — toute porte ouverte naît avec son compteur et son instrument (§5.3).
 
-![Figure 5 — Passeport à capacité bornée](figs/fig5_passeport.png)
+![Figure 5 — Passeport à capacité bornée](../figs/fig5_passeport.png)
 
 *Séparation des températures : quota = compté à l'exécution (PEP) ; enveloppe = comptée à l'émission (broker).*
 
@@ -137,7 +137,7 @@ Le traducteur est un paramètre de friction, pas un paramètre de sécurité : i
 
 Aucun chemin direct client → serveur ; le serveur n'accepte que le broker. Le NAC est un **aiguillage** : authentifié (802.1X, EAP-TLS) → VLAN donnant accès au broker ; inconnu → **VLAN captif** dont la seule route est l'enrôlement ou le broker-forcé. EAP-TLS réutilise **la même PKI que le handshake** — une seule infrastructure d'identité. Anti-détour L2 : VLAN serveurs strict, DHCP snooping + DAI, AP isolation.
 
-![Figure 3 — Topologie réseau](figs/fig3_reseau.png)
+![Figure 3 — Topologie réseau](../figs/fig3_reseau.png)
 
 ### 5.2 · Catalogue des chemins hors routeur
 
@@ -171,7 +171,7 @@ Aucun chemin direct client → serveur ; le serveur n'accepte que le broker. Le 
 
 Chaque cellule tient sa propre chaîne (sessions, batchs) — chemin chaud sans coordination. Périodiquement, `hash(broker_id, tête, TSA)` de chaque cellule est inscrit dans la **chaîne maîtresse** (motif CT, RFC 6962). Moteur : **Tessera** (bibliothèque GA, driver POSIX — un dossier = un log de cellule) ; amorçage : veritrail (tester contre les vecteurs RFC 6962) ; Rekor/cosign = registre d'**artefacts** (§1), jamais de décisions. Maison complet écarté : la séparation de domaine feuille/nœud est la partie la plus auditée de l'écosystème — et une preuve vérifiable par un tiers perd sa valeur si l'auditeur doit relire le code. Signal d'écosystème : Let's Encrypt migre ses logs RFC 6962 vers l'API Static CT / tiled — la direction Tessera est celle du champ entier.
 
-![Figure 4 — Registre à deux niveaux](figs/fig4_registre.png)
+![Figure 4 — Registre à deux niveaux](../figs/fig4_registre.png)
 
 ### 6.2 · Températures — et le temps explicite
 
@@ -212,7 +212,7 @@ Pendant le TTL de l'époque active, un composant qui détient ses clés locales 
 ### 7.7 · Évolution de politique (agilité sous contrat)
 Monotonicité vérifiable (§11) ; affaiblissement légitime = transition motivée, visible, mettant à jour le consentement des vérificateurs ; workflow négocié sans arrêt ni fenêtre ; conformité historiquement continue.
 
-![Figure 6 — Hiérarchie de clés et temps](figs/fig6_cles.png)
+![Figure 6 — Hiérarchie de clés et temps](../figs/fig6_cles.png)
 
 ## 8 · Matrice menaces ↔ mécanismes
 

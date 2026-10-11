@@ -7,7 +7,31 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 
 ## [Unreleased]
 
+### Changed
+- **Documentation brought back in line with the code** (external review of 2026-10-11):
+  the root README no longer says the inter-entity handshake is what this repository is (it is not built,
+  [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)) nor that scale 3 is "already fully built"
+  (the epoch-lease renewal [#197](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/197), encrypted
+  transport between cells [#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187), the promotion
+  architecture [#233](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/233) and anchoring
+  [#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265) are open); its repository structure lists
+  `arbiter`, `ano`, `strictjson`, `devmode` and the test tools.
+- **The compliance catalogue has counters, not grades.** The root README said "8 Full, 12 Partial", the sheets said
+  17 and 3. The tables now show, per standard, the number of ✅ covered, 🔴 gap and ⚪ not-TBP's rows, recomputed from
+  the sheets by `check_catalog.py` (which now also checks the root README and that every issue cited by a 🔴 row is in
+  the gaps list); "Full" and "Partial" are gone from every standard ("No code gap" / "Open code gaps" in the sheets,
+  with a note that it is not a statement of compliance). Three sheets (CSA MAESTRO, EU AI Act, ISO/IEC 27001) counted
+  master-chain anchoring as covered: it is a 🔴 row now ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)).
+- **The registry's disk quota is declared not built** ([#334](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/334)):
+  `deploy/cellule.md` (EN/FR) said it refuses writes when the quota is reached; no daemon uses it. `scales.md`,
+  `src/registry/README.md` and the known limitations say so.
+- `docs/LICENSE` no longer calls the code's licence closed (it is Apache 2.0) nor names a spec file that is gone;
+  17 figure links in the three specs pointed to `figs/…` instead of `../figs/…`.
+
 ### Added
+- **CI**: a `python-tests` job (translator measurement and sampling, red-team coverage, friction indicators: 53 tests
+  that no job ran), and `check_doc_links.py` (relative links and images of the README, `docs/`, `deploy/dev-test/` and
+  `tbp-compliance/` must exist). The commented-out docker job is gone.
 - **A DEV-TEST deployment, to run and attack before a production release**
   ([deploy/dev-test/](deploy/dev-test/README.md)). **Not for production**: the keys are thrown away, and the issuer
   key is a seed file, so the cell declares the development sentinel.
@@ -129,6 +153,11 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265),
   [#233](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/233),
   [#187](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/187)).
+- **No disk quota on the registry**: the quota library (`registry.Monitor`) exists and is tested, but no daemon uses
+  it, so nothing stops a cell at 80 % of a quota and no stop leaf is written; a full disk is not a clean stop.
+  Monitor the filesystem that holds `TBP_REGISTRY_DIR` yourself
+  ([#334](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/334); T5 / #5 was closed when the library
+  existed, not when a cell used it).
 - **One `brokerd`**: if it is down, governed actions stop within about a minute (tokens live 30–60 s). This is
   fail-closed by design; there is no bypass.
 - **Changing the rules is a cold, whole-cell operation**: stop every component, change, have the controllers

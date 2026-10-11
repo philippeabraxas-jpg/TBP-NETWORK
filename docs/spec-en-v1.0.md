@@ -16,7 +16,7 @@ This document is a specification, not an implementation report. The evidence beh
 
 Claims in this document are assigned to one of these three classes throughout. Targets are labeled as targets; mechanisms that exist only as specifications are labeled as such. Nothing here is presented as measured that has not been measured. This class assignment is itself dated evidence (§15) — re-verify against the running code before citing it externally.
 
-![Figure 1 — The TBP governance chain](figs/fig1_chaine.png)
+![Figure 1 — The TBP governance chain](../figs/fig1_chaine.png)
 
 ## 1 · Doctrine
 
@@ -74,7 +74,7 @@ Any heavy path opening (session, tunnel, SDN rule) is issued as a **quota-bound 
 - **Flow-metadata telemetry**: bytes per interval, destination, rhythm (NetFlow/IPFIX-style — **content inspection of passport flows is proscribed**, it would destroy the data-plane speed gain): anti-dribble relies exclusively on metadata post-treatment (dribble, sub-threshold exfiltration). Metadata leaves feed the registry like decision leaves.
 - **Doctrine**: prevent what is cheap, detect what is expensive — every opened door is born with its counter and its instrument (§5.3).
 
-![Figure 5 — Quota-bound passport](figs/fig5_passeport.png)
+![Figure 5 — Quota-bound passport](../figs/fig5_passeport.png)
 
 ### 4.2 · Arbitration is a signature, not a reading
 
@@ -121,7 +121,7 @@ Effect integrity belongs to the business. The PEP validates the envelope, not hi
 
 No direct client → server path; the server accepts only the broker. NAC is **steering**: authenticated (802.1X, EAP-TLS) → VLAN giving access to the broker; unknown → **captive VLAN** whose only route is enrolment or broker-forced governance. EAP-TLS reuses **the same PKI as the handshake** — one identity infrastructure for network admission and application attestation. L2 anti-detour: strict server VLAN, DHCP snooping + DAI, AP isolation.
 
-![Figure 3 — Network topology](figs/fig3_reseau.png)
+![Figure 3 — Network topology](../figs/fig3_reseau.png)
 
 ### 5.2 · Catalogue of off-router paths
 
@@ -155,7 +155,7 @@ No direct client → server path; the server accepts only the broker. NAC is **s
 
 Each cell keeps its own chain (sessions, batches) — hot path without coordination. Periodically, `hash(broker_id, head, TSA)` from each cell is inscribed in the **master chain** (CT pattern, RFC 6962). Engine: **Tessera** (GA library, POSIX driver — one directory = one cell log); bootstrapping: veritrail (test against RFC 6962 vectors); Rekor/cosign = the **artifacts** registry (§1), never decisions. A full homebrew is ruled out: leaf/node domain separation is the most publicly audited part of the ecosystem — and a proof verifiable by a third party loses its value if the auditor must re-read your code. Ecosystem signal: Let's Encrypt is migrating its RFC 6962 logs to the Static CT / tiled API — Tessera's direction is the field's direction.
 
-![Figure 4 — Two-level registry](figs/fig4_registre.png)
+![Figure 4 — Two-level registry](../figs/fig4_registre.png)
 
 ### 6.2 · Temperatures — and explicit time
 
@@ -203,7 +203,7 @@ During an epoch's TTL, a component holding its local keys can issue allow tokens
 
 Verifiable monotonicity (§11); legitimate weakening = motivated transition, visible, updating verifiers' consent; negotiated workflow without downtime or window; historically continuous compliance.
 
-![Figure 6 — Key and time hierarchy](figs/fig6_cles.png)
+![Figure 6 — Key and time hierarchy](../figs/fig6_cles.png)
 
 ## 8 · Threats ↔ mechanisms
 

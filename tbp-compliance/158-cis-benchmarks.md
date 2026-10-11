@@ -1,6 +1,6 @@
 # CIS Benchmarks (Docker/Kubernetes/OS)
 
-**Status: Full** (scope: a documented deployment prerequisite, not a TBP feature)
+**Status: No code gap** (scope: a documented deployment prerequisite, not a TBP feature)
 **Source**: [issue #158](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/158) · fix: [issue #172 / PR #173](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/172)
 **Reference**: CIS Benchmarks — secure baseline configurations for systems/containers (Docker: 7 sections, 94 controls; Kubernetes: control plane, API server, kubelet, etc.)
 **Last verified**: 2026-09-28

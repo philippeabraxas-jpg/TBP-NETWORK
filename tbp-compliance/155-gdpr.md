@@ -1,6 +1,6 @@
 # GDPR
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #155](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/155)
 **Reference**: EU Regulation 2016/679. Full treatment of the privacy strand left open by [SOC 2 (#154)](154-soc2.md).
 **Last verified**: 2026-09-29

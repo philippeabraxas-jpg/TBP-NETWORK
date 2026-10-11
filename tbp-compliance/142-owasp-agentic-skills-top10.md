@@ -1,6 +1,6 @@
 # OWASP Agentic Skills Top 10 (AST10)
 
-**Status: Full**
+**Status: No code gap**
 **Source**: [issue #142](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/142) (analysis) · [issue #165 / PR #166](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/165) (SkillRegistry fix)
 **Reference**: [OWASP Agentic Skills Top 10](https://github.com/OWASP/www-project-agentic-skills-top-10) (AST01–AST10, 2026 checklist)
 **Last verified**: 2026-09-29

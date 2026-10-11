@@ -43,6 +43,7 @@ the table, not only those two). Tracked in #86.
 | Measured boot | `TBP_MEASURED_BOOT_*` | required | required | required | required |
 | Supervisor / independent monitor | `superviseur.md` | absent | optional | required | required |
 | Master-chain anchoring and bounded anchor lag (§6.2) | `registry.Anchorer` (library) | absent | absent | required by the spec, **not built**: no daemon runs the anchorer, so the lag bound is not enforced (#265) | defined in the handshake (#33) |
+| Registry disk quota and clean stop at 80 % (`src/registry/README.md`) | `registry.Monitor` (library) | absent | absent | required by the registry policy, **not built**: no daemon uses the quota library, so nothing stops the cell before the host disk fills; monitor the registry's filesystem yourself (#334) | defined in the handshake (#33) |
 | Inter-cell encrypted transport | #187 | n/a | n/a | required | required |
 | Inalienable rules | (to define) | to define | to define | to define | to define in the handshake (#33) |
 
