@@ -12,14 +12,14 @@
 #
 # ⚠ NOT FOR PRODUCTION. Every key it makes is thrown-away and lives on THIS machine, so it proves nothing
 # about key custody, about separation between real people, or about a genesis ceremony. What it is for: run the
-# real binaries, with the real enforcement, and attack them (deploy/dev-test/README.md).
+# real binaries, with the real enforcement, and attack them (deploy/dev-test/solo.md).
 #
 # What is simplified: the ceremony (keys, genesis, rules are generated for you; the issuer key is a seed file
 # instead of an HSM — the one development switch used, which is why /etc/tbp/DEV_ENVIRONMENT is created).
 # What is NOT simplified: the quorum is k = 2 of n = 3, the operator keys keep their roles, brokerd runs the
 # same chain it runs at scale 2, OPA serves a signed bundle on a Unix socket authenticated by its UID.
 #
-# Documentation, in ten minutes from a fresh machine: deploy/dev-test/README.md
+# Documentation, in ten minutes from a fresh machine: deploy/dev-test/solo.md (the three-machine site: deploy/dev-test/site.md)
 #
 # Needs: opa, openssl, jq, curl, and either `go` (the version pinned by go.mod) or built binaries in dist/
 # (scripts/release/build.sh). Run it as a normal user on a clean Debian 12 virtual machine; `sudo` is used once,
@@ -56,7 +56,7 @@ banner() {
 ================================================================================
   TBP DEV-TEST DEPLOYMENT — NOT FOR PRODUCTION
   Throw-away keys on this machine. No real data, no real agents, no network
-  exposure. Read deploy/dev-test/README.md before you attack it.
+  exposure. Read deploy/dev-test/solo.md before you attack it.
 ================================================================================
 EOF
 }
@@ -271,7 +271,7 @@ cmd_init() {
   trap - EXIT
   echo
   echo "devtest: initialised in ${HOME_DIR}. Next: scripts/devtest/devtest.sh up"
-  echo "         keys are in ${KEYS_DIR}: controller-1..3 (k = 2 of 3), operator-1..4 (see deploy/dev-test/README.md)"
+  echo "         keys are in ${KEYS_DIR}: controller-1..3 (k = 2 of 3), operator-1..4 (see deploy/dev-test/solo.md)"
 }
 
 # --- up / down / status / reset --------------------------------------------------------------------
@@ -316,7 +316,7 @@ cmd_up() {
   echo $((SECONDS - t0)) >"${STATE_DIR}/up-seconds"
   echo "devtest: up. OPA on ${OPA_SOCK}, brokerd on ${BROKER_SOCK}, admin on ${ADMIN_SOCK}"
   echo "         expected in ${LOG_DIR}/brokerd.log: a high-priority alarm that a development environment is declared."
-  echo "         Next: deploy/dev-test/README.md (first actions), scripts/devtest/devtest.sh status"
+  echo "         Next: deploy/dev-test/solo.md (first actions), scripts/devtest/devtest.sh status"
 }
 
 cmd_down() {

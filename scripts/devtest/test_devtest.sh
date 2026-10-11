@@ -103,7 +103,7 @@ if grep -q "quorum-settings" "${TBP_DEVTEST_HOME}/log/brokerd.log"; then ok "bro
 cp -- "${WORK}/brokerd.env.orig" "${TBP_DEVTEST_HOME}/brokerd.env"
 if "${DEVTEST}" up >/dev/null 2>&1 && "${DEVTEST}" demo >/dev/null 2>&1; then ok "restored, it starts and the demo passes again"; else bad "restored environment does not start"; fi
 
-echo "== the attempts written in deploy/dev-test/README.md give the answers it announces"
+echo "== the attempts written in deploy/dev-test/solo.md give the answers it announces"
 # The documentation says what each attempt must return; if the cell stops saying it, this fails, and so does the doc.
 eval "$("${DEVTEST}" env)"
 post() { curl -sS --unix-socket "$1" -X POST "${@:3}" -w ' [%{http_code}]\n' "http://localhost$2"; }
@@ -164,20 +164,20 @@ done
 if grep -qE '/(home|tmp|root|var|etc)/' "${WORK}/report.md"; then leak=1; echo "      the report contains a path"; fi
 if [ "${leak}" -eq 0 ]; then ok "the report holds no key, seed, path or host name"; else bad "the report leaks something"; fi
 
-echo "== the README (both languages) still names what the attempts above return"
+echo "== the solo page (both languages) still names what the attempts above return"
 for kw in "duplicate-key" "unknown-field" "body-unreadable" "quorum-required" "DIFFÉRENT" "agent-registry" "quorum-settings" "load error: bundle" "failed to verify JWT signature" "devtest.sh report" "SECURITY.md"; do
-  for lang in README.md README.fr.md; do
+  for lang in solo.md solo.fr.md; do
     if grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${lang}"; then :; else bad "deploy/dev-test/${lang} no longer mentions '${kw}'"; fi
   done
 done
 # the page must keep saying what it does not test yet, in each language
-for kw in "nothing checks them yet" "stage 2" "stage 3"; do
-  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/README.md" || bad "deploy/dev-test/README.md no longer says '${kw}'"
+for kw in "nothing checks them here" "site.md"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/solo.md" || bad "deploy/dev-test/solo.md no longer says '${kw}'"
 done
-for kw in "personne ne les vérifie encore" "étape 2" "étape 3"; do
-  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/README.fr.md" || bad "deploy/dev-test/README.fr.md ne dit plus '${kw}'"
+for kw in "personne ne les vérifie ici" "site.fr.md"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/solo.fr.md" || bad "deploy/dev-test/solo.fr.md ne dit plus '${kw}'"
 done
-ok "deploy/dev-test/README.md and README.fr.md name every documented answer, and what is not tested yet"
+ok "deploy/dev-test/solo.md and solo.fr.md name every documented answer, and what is not tested here"
 
 echo "== reset"
 "${DEVTEST}" down >/dev/null 2>&1

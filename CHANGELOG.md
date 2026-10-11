@@ -8,13 +8,19 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Added
-- **A DEV-TEST of the decision plane of a scale-2 cell, in one command** (`scripts/devtest/devtest.sh`, [deploy/dev-test/](deploy/dev-test/README.md)):
-  keys, signed rules and environment (`k = 2` of 3, four operator keys with roles), then `brokerd` and its OPA, to
-  run the real binaries and attack them on a throw-away machine. It does not yet include `pepd` (so nothing checks
-  the tokens `brokerd` issues) nor machines enrolled over the network; the stages that add them are in the page. **Not for production**:
-  the keys are thrown away and sit on one machine, and the issuer key is a seed file, so it declares the
-  development sentinel. `devtest.sh demo` runs 12 checks, `devtest.sh report` prints numbers with no secret for testers to send us, and
-  `test_devtest.sh` runs in CI, including every attempt the documentation tells testers to make.
+- **A DEV-TEST deployment, to run and attack before a production release**
+  ([deploy/dev-test/](deploy/dev-test/README.md)). **Not for production**: the keys are thrown away, and the issuer
+  key is a seed file, so the cell declares the development sentinel.
+  - **Three machines** (`scripts/devtest/site.sh`): M1 the cell (`brokerd`, OPA, an mTLS listener, an agent CA), M2 an
+    application server (`pepd` with a real measured boot and no development switch, a small application that acts
+    only when `pepd` forwards), M3 an agent. It tests that the whole path works: enrolment by certificate, a
+    decision, a signed token, the token checked on another machine, the server's posture closed and reopened by the
+    controllers, a restart that comes back refused. M2 and M3 hold no governance key.
+  - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
+  - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
+    gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**
+    issue template. `test_site.sh` and `test_devtest.sh` run in CI, including every attempt the pages tell testers
+    to make.
 - Deployment guides for **scale 1** and **scale 2** (English and French), executed by the `scale1` and `scale2`
   phases of `deploy/selftest` ([#86](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/86)).
 - **Trust files are measured at every start** by `pepd`, `brokerd` and `anod` (witness signed by the cell key).
@@ -89,6 +95,9 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   `registry-disk-high`: a list read by the operator must not suggest a lock that does not exist. A test now
   refuses a registered condition without a detector
   ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)).
+- The server guide (`serveur.md`) and `monitor-to-closed.md`, in both languages, called `/v1/mode` and `/healthz` on
+  `pepd`'s data port, where they answer 404 since the admin plane moved to a Unix socket (#95), and sent an `epoch`
+  field to `/v1/evaluate` that `pepd` now refuses (strict bodies, #289). Found by running the three-machine DEV-TEST.
 - Flaky teardown of the Tessera POSIX logs in tests
   ([#266](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/266),
   [#312](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/312)).

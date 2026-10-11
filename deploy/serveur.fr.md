@@ -40,7 +40,7 @@ partagé ; `/etc/tbp/pepd.env` en 0600).
 go build -o /usr/local/bin/pepd ./src/pep/cmd/pepd
 set -a; . /etc/tbp/pepd.env; set +a
 /usr/local/bin/pepd &
-curl -s http://127.0.0.1:8443/v1/mode
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/v1/mode
 ```
 
 **Critère de succès observable** : `{"mode":"monitor"}` ; `/healthz` 200 ;
@@ -65,7 +65,7 @@ ls src/pep/postgres-extension/
 # POST /v1/consume à l'exécution (passeport de quota §4.1-bis).
 curl -s -X POST http://127.0.0.1:8443/v1/evaluate \
   -H 'Content-Type: application/json' \
-  -d '{"token":"<cwt base64>","action":"read","resource":"doc-1","epoch":0}'
+  -d '{"token":"<cwt base64>","action":"read","resource":"doc-1"}'
 ```
 
 **Critère de succès observable** : le verdict JSON rend `allow`, `mode`
@@ -118,7 +118,7 @@ monitor convenue écoulée ; le superviseur collecte les feuilles
 # Compteurs exposés par le listener (GET /v1/stats si câblé, sinon
 # registre) : forwarded, would-deny, denied, latences. Référence
 # exécutable des points de mesure : tests/p1_friction/ (T27).
-curl -s http://127.0.0.1:8443/healthz
+curl -s --unix-socket /run/tbp/pepd-admin.sock http://localhost/healthz
 ```
 
 **Critère de succès observable** : les points de mesure §9.1 sont
