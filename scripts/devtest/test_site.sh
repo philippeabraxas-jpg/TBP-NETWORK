@@ -213,6 +213,75 @@ p=$(M1 mode-proof monitor 2>&1 | proof_of)
 says "reopening with two controllers" '"mode":"monitor"' "$(M2 mode monitor --proof "${p}" 2>&1)"
 refuses "a closed-proof cannot be used to reopen" "not for 'monitor'" env TBP_SITE_HOME="${H2}" "${SITE}" m2 mode monitor --proof "$(M1 mode-proof closed 2>&1 | proof_of)"
 
+echo "== following a request from its emission to its execution or rejection: m1 trace"
+traceid_of() { sed -n 's/.*\[trace \(t-[A-Za-z0-9.-]*\)\].*/\1/p' | head -1; }
+out=$(grant_and_act agent-i read doc-t1); id_ok=$(printf '%s' "${out}" | traceid_of)
+out=$(M3 call 2>&1); id_replay=$(printf '%s' "${out}" | traceid_of)
+out=$(M3 act agent-i read doc-t2 2>&1); id_noplan=$(printf '%s' "${out}" | traceid_of)
+out=$(M3 act agent-i read doc-t3 --no-cert 2>&1); id_nocert=$(printf '%s' "${out}" | traceid_of)
+out=$(M3 act agent-i read doc-t4 --as agent-w 2>&1); id_wrongcert=$(printf '%s' "${out}" | traceid_of)
+p=$(M1 mode-proof closed 2>&1 | proof_of)
+M2 mode closed --proof "${p}" >/dev/null 2>&1
+grant_and_act agent-i read doc-t5 >/dev/null
+out=$(M3 call 2>&1); id_closed=$(printf '%s' "${out}" | traceid_of)
+p=$(M1 mode-proof monitor 2>&1 | proof_of)
+M2 mode monitor --proof "${p}" >/dev/null 2>&1
+# a client that does not send a trace id: a red team using curl directly, at the cell and at the application
+curl -sS --cacert "${H3}/server-ca.pem" --cert "${H3}/agents/agent-i.pem" --key "${H3}/agents/agent-i.key" -X POST \
+  -d "$(jq -cn '{subject:"agent-i",intent:"{\"action\":\"read\",\"resource\":\"doc-direct\"}"}')" "$(sed -n 's/^BROKER_URL=//p' "${H3}/site.env")/v1/actions" >/dev/null 2>&1
+curl -sS -o /dev/null "http://${ADDR2}:9000/read/doc-direct2" 2>/dev/null
+M2 trace-export >/dev/null 2>&1
+M3 trace-export >/dev/null 2>&1
+view() { M1 trace --from "${H2}/trace-m2.tgz" --from "${H3}/trace-m3.tgz" "$@" 2>&1; }
+if [ -n "${id_ok}" ] && [ -n "${id_replay}" ] && [ -n "${id_noplan}" ] && [ -n "${id_nocert}" ] && [ -n "${id_wrongcert}" ] && [ -n "${id_closed}" ]; then ok "every act and call prints the id to follow"; else bad "an act or call did not print its trace id"; fi
+t=$(view --id "${id_ok}")
+says "executed: the agent's emission" "agent-i asks: read doc-t1" "${t}"
+says "executed: the cell's decision, with who asked" "brokerd   ALLOW ok" "${t}"
+says "executed: …and the certificate it came with" "certificate agent-i" "${t}"
+says "executed: pepd's verdict on M2" "pepd      verdict allow ok" "${t}"
+says "executed: what the application did" "EXECUTED   [HTTP 200]" "${t}"
+says "executed: the ending" "→ EXECUTED" "${t}"
+for m in M1 M2 M3; do says "executed: the timeline shows ${m}" "${m}  " "${t}"; done
+t=$(view --id "${id_replay}")
+says "monitor, a replay: pepd said deny" "verdict deny replay" "${t}"
+says "…and the ending says it was not blocked" "although pepd's verdict was replay" "${t}"
+t=$(view --id "${id_noplan}")
+says "no plan: rejected by the cell, naming the stage" "REJECTED by the cell (M1) — plan-binding-required — the cell: plan contract" "${t}"
+if printf '%s' "${t}" | grep -q "pepd"; then bad "a request refused by the cell shows a pepd step"; else ok "…and it never reached M2"; fi
+t=$(view --id "${id_nocert}")
+says "no certificate: the handshake refused on M1" "REJECTED at the TLS handshake (M1)" "${t}"
+says "…seen by M1's own log, matched by time" "TLS handshake failed" "${t}"
+t=$(view --id "${id_wrongcert}")
+says "another agent's certificate: refused for identity" "agent-transport-unbound — the cell: identity (mutual TLS)" "${t}"
+says "…naming the certificate that was presented" "certificate agent-w" "${t}"
+t=$(view --id "${id_closed}")
+says "closed: rejected by pepd on M2" "REJECTED by pepd (M2) — replay" "${t}"
+t=$(view)
+says "a client without a trace id is listed apart" "without a trace id" "${t}"
+says "…the direct request to the cell, with its certificate" "doc-direct" "${t}"
+says "…and the direct request to the application, refused for want of a token" "REFUSED no-token" "${t}"
+says "an unknown id" "no request recorded yet" "$(view --id t-unknown)"
+refuses "an id that is not an id is refused" "letters, digits" env TBP_SITE_HOME="${H1}" "${SITE}" m1 trace --id 'a/b'
+# the trace shows what is needed to follow a request, and never a token or a key
+tok=$(cat "${H3}/state/last-token" 2>/dev/null)
+leak=0
+for f in "${H1}"/trace/*.jsonl "${H2}"/trace/*.jsonl "${H3}"/trace/*.jsonl; do
+  [ -n "${tok}" ] && grep -qF -- "${tok:0:40}" "$f" && leak=1
+  grep -q "BEGIN\|issuer.seed" "$f" && leak=1
+  [ "$(stat -c %a "$f")" = "600" ] || { leak=1; echo "    (not 0600: $f)"; }
+done
+if [ "${leak}" -eq 0 ] && [ -n "${tok}" ]; then ok "no trace file holds a token or a key, and each is 0600"; else bad "a trace file leaks a token or a key, or is not 0600"; fi
+says "M1 declares the trace as a development switch" "TBP_DECISION_TRACE_DEV" "$(cat "${H1}/log/brokerd.log")"
+mkdir -p "${WORK}/none/trace" && echo "site M3" >"${WORK}/none/SITE"
+refuses "an export with nothing recorded is refused" "nothing recorded yet" env TBP_SITE_HOME="${WORK}/none" "${SITE}" m3 trace-export
+# every reason the viewer explains exists in the code or in the scripts: the catalogue cannot drift away silently
+drift=""
+while IFS=$'\t' read -r reason _; do
+  case "${reason}" in '#'* | '') continue ;; esac
+  if ! grep -rqs --include='*.go' --exclude='*_test.go' "\"${reason}\"" "${SCRIPT_DIR}/../../src" && ! grep -qs "${reason}" "${SCRIPT_DIR}/site.sh" "${SCRIPT_DIR}/site-app.py"; then drift="${drift} ${reason}"; fi
+done <"${SCRIPT_DIR}/reasons.tsv"
+if [ -z "${drift}" ]; then ok "every reason in reasons.tsv exists in the code"; else bad "reasons.tsv explains reasons that no code produces:${drift}"; fi
+
 echo "== the network exposure"
 listen_out=$(M1 listeners 2>&1)
 says "M1's cell listens on the address it was given" "${ADDR1}:8443" "${listen_out}"
@@ -284,7 +353,7 @@ done
 if [ "${leak}" -eq 0 ]; then ok "no report holds a key, seed, path, address or host name"; else bad "a report leaks something"; fi
 
 echo "== the page (both languages) still names what it announces"
-for kw in "site.sh m1 sign" "m1 grant" "m1 watch" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
+for kw in "site.sh m1 sign" "m1 grant" "m1 watch" "m1 trace" "trace-export" "X-TBP-Trace-Id" "TBP_DECISION_TRACE_DEV" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
   for lang in site.md site.fr.md; do
     if grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${lang}"; then :; else bad "deploy/dev-test/${lang} no longer mentions '${kw}'"; fi
   done

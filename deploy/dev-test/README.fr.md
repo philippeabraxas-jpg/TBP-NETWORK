@@ -30,7 +30,8 @@ Si vous n'essayez qu'une chose, essayez le site : c'est celui qui correspond à 
 | | Dans les deux | Pourquoi |
 |---|---|---|
 | Clés, genèse | générées pour vous, sans cérémonie ni HSM | **simplifié** : la garde des clés et la séparation de vraies personnes ne sont pas testées ici |
-| Clé d'émission | un fichier de graine au lieu d'un HSM — sur la cellule seulement | **simplifié**, la seule échappatoire de développement utilisée : la cellule déclare `/etc/tbp/DEV_ENVIRONMENT` et lève une alarme de haute priorité à chaque démarrage |
+| Trace de décision | profil Site seulement : chaque machine consigne les requêtes qu'elle voit, `m1 trace` les présente (qui a demandé, ce que chaque composant a décidé, pourquoi) | **ajouté pour le test**, un second interrupteur de développement sur la cellule (la trace contient noms et intentions en clair) ; `pepd` n'est pas modifié |
+| Clé d'émission | un fichier de graine au lieu d'un HSM — sur la cellule seulement | **simplifié**, un interrupteur de développement utilisé : la cellule déclare `/etc/tbp/DEV_ENVIRONMENT` et lève une alarme de haute priorité à chaque démarrage |
 | Quorum, rôles | `k = 2` sur 3 contrôleurs, quatre clés d'opérateur avec rôles | **non simplifié** |
 | Règles | le bundle d'exemple, capabilities restreintes, signé ; OPA refuse un bundle altéré | **non simplifié** |
 | Provisionnement, démarrage mesuré | actifs : un fichier de confiance ou une échelle modifiés arrêtent le démarrage | **non simplifié** |

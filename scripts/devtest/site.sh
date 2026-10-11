@@ -2,11 +2,11 @@
 # scripts/devtest/site.sh — a three-machine DEV-TEST site: M1 the cell, M2 an application server, M3 an agent.
 #
 #   scripts/devtest/site.sh m1 init --address <M1 address> [--listen <addr:port>] [--env <label>]
-#   scripts/devtest/site.sh m1 up | down | status | watch | sign | grant | mode-proof | pack | report | reset
+#   scripts/devtest/site.sh m1 up | down | status | watch | trace | trace-export | sign | grant | mode-proof | pack | report | reset
 #   scripts/devtest/site.sh m2 init --pack m2.pack.tgz --listen <addr:port> [--env <label>]
-#   scripts/devtest/site.sh m2 up | down | status | mode | report | reset
+#   scripts/devtest/site.sh m2 up | down | status | mode | trace-export | report | reset
 #   scripts/devtest/site.sh m3 init --pack m3.pack.tgz --app http://<M2 address:port> [--env <label>]
-#   scripts/devtest/site.sh m3 check | act | call | report | reset
+#   scripts/devtest/site.sh m3 check | act | call | trace-export | report | reset
 #   scripts/devtest/site.sh <role> listeners       # what this machine listens on, to check the exposure
 #
 # ⚠ NOT FOR PRODUCTION. Throw-away keys, a seed-file issuer key on M1, no HSM, no real people behind the roles.
@@ -50,6 +50,7 @@ PACK_DIR="${HOME_DIR}/packs"
 RUN_DIR="${HOME_DIR}/run"
 LOG_DIR="${HOME_DIR}/log"
 STATE_DIR="${HOME_DIR}/state"
+TRACE_DIR="${HOME_DIR}/trace" # what each machine records about the requests it sees (issue #329)
 OPA_SOCK="${RUN_DIR}/opa.sock"
 BROKER_SOCK="${RUN_DIR}/broker.sock"
 ADMIN_SOCK="${RUN_DIR}/broker-admin.sock"
@@ -146,7 +147,7 @@ SITE_CREATED=0
 begin_home() {
   trap 'if [ "${SITE_CREATED}" -eq 1 ]; then echo "site: init failed — removing ${HOME_DIR}" >&2; rm -rf -- "${HOME_DIR}"; fi' EXIT
   umask 077
-  mkdir -p "${HOME_DIR}" "${RUN_DIR}" "${LOG_DIR}" "${STATE_DIR}" "${BIN_DIR}"
+  mkdir -p "${HOME_DIR}" "${RUN_DIR}" "${LOG_DIR}" "${STATE_DIR}" "${BIN_DIR}" "${TRACE_DIR}"
   SITE_CREATED=1
 }
 end_home() { SITE_CREATED=0; trap - EXIT; }
@@ -380,6 +381,7 @@ extendedKeyUsage=serverAuth"
     echo "TBP_OPA_EXPECTED_UID=$(id -u)"
     echo "TBP_TRANSLATOR=structured"
     echo "TBP_ISSUER_SEED_FILE=${HOME_DIR}/issuer.seed"
+    echo "TBP_DECISION_TRACE_DEV=${TRACE_DIR}/brokerd.jsonl" # a test-only trace of every decision (issue #329): also a dev switch
     echo "TBP_GENESIS_DIR=${GENESIS_DIR}"
     echo "TBP_QUORUM_MIN=2"
     echo "TBP_TOPOLOGY=mono"
@@ -510,6 +512,55 @@ m1_watch_once() {
     else echo "! the journal does not verify ($(tail -1 <<<"${recs}"))"; rc=1; fi
   else echo "no record yet"; fi
   return "${rc}"
+}
+
+# trace_export: this machine's trace files in one archive, to carry to the machine that reads them (M1, `m1 trace`).
+trace_export() {
+  require_init
+  local out="${HOME_DIR}/trace-${ROLE}.tgz" n
+  n=$(find "${TRACE_DIR}" -maxdepth 1 -name '*.jsonl' | wc -l)
+  [ "${n}" -gt 0 ] || die "nothing recorded yet on this machine (${TRACE_DIR})"
+  tar -C "${TRACE_DIR}" -czf "${out}" $(cd "${TRACE_DIR}" && ls -- *.jsonl)
+  echo "site ${ROLE^^}: ${n} trace file(s) packed in ${out}"
+  echo "    it holds the requests this machine saw (action, resource, who called) and no key, token or secret."
+  [ "${ROLE}" = m1 ] || echo "    carry it to M1:   scp ${out} <user>@<M1>:    then on M1:  $0 m1 trace --from trace-${ROLE}.tgz"
+}
+
+# m1_trace [--from FILE|DIR ...] [--id TRACE-ID]: follow requests from their emission to their execution or rejection.
+# It reads what M1 recorded (the cell's decisions, and the TLS handshakes that never became a request) plus what the other
+# machines recorded, given as archives from `m2 trace-export` / `m3 trace-export` or as directories. Reading only.
+m1_trace() {
+  require_init
+  local only="" sources=("${TRACE_DIR}") src work files=() f
+  while [ $# -gt 0 ]; do case "$1" in
+    --from) [ -n "${2:-}" ] || die "trace: --from needs a file or a directory"; sources+=("$2"); shift 2 ;;
+    --id) only=${2:-}; [[ "${only}" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "trace: --id is the id printed by 'm3 act' (letters, digits, . _ -)"; shift 2 ;;
+    *) die "usage: $0 m1 trace [--from <archive or directory> ...] [--id <trace id>]" ;; esac; done
+  work=$(mktemp -d "${STATE_DIR}/trace.XXXXXX")
+  # shellcheck disable=SC2064
+  trap "rm -rf -- '${work}'" EXIT
+  for src in "${sources[@]}"; do
+    if [ -d "${src}" ]; then
+      for f in "${src}"/*.jsonl; do [ -f "${f}" ] && files+=("${f}"); done
+    elif [ -f "${src}" ] && [[ "${src}" == *.tgz ]]; then
+      mkdir -p "${work}/$(basename "${src}")"
+      tar -C "${work}/$(basename "${src}")" -xzf "${src}" --wildcards '*.jsonl' 2>/dev/null || die "trace: cannot read ${src} (an archive made by '$0 m2|m3 trace-export')"
+      for f in "${work}/$(basename "${src}")"/*.jsonl; do [ -f "${f}" ] && files+=("${f}"); done
+    elif [ -f "${src}" ]; then files+=("${src}")
+    else die "trace: ${src} is neither a file nor a directory"
+    fi
+  done
+  # the TLS handshakes that failed never reach the cell's decision code: only brokerd's own log knows them
+  if [ -f "${LOG_DIR}/brokerd.log" ]; then
+    grep -a 'http: TLS handshake error from' "${LOG_DIR}/brokerd.log" | sed -E 's/^([0-9]{4})\/([0-9]{2})\/([0-9]{2}) ([0-9:]{8}) http: TLS handshake error from ([^:]+:[0-9]+): (.*)$/\1-\2-\3T\4.0Z\t\5\t\6/' |
+      while IFS=$'\t' read -r ts peer msg; do
+        jq -cn --arg ts "${ts}" --arg peer "${peer}" --arg d "TLS handshake failed: ${msg}" \
+          '{ts:$ts,component:"transport",stage:"handshake",outcome:"deny",reason:"tls-handshake-error",detail:$d,peer:$peer}'
+      done >"${work}/transport.jsonl"
+    [ -s "${work}/transport.jsonl" ] && files+=("${work}/transport.jsonl")
+  fi
+  [ "${#files[@]}" -gt 0 ] || { echo "no request recorded yet"; return 0; }
+  jq -rs --rawfile reasons "${SCRIPT_DIR}/reasons.tsv" --arg only "${only}" -f "${SCRIPT_DIR}/trace.jq" "${files[@]}"
 }
 
 # m1_sign AGENT ACTION RESOURCE [--yes]: the operators' side of ONE action of an agent. It is what a person does at
@@ -743,7 +794,7 @@ m2_up() {
   start_opa
   start_bg pepd bash -c 'set -a; . "$1"; set +a; exec "$2"' _ "${ENV_FILE}" "${BIN_DIR}/pepd"
   wait_for pepd 30 "pepd admin socket" curl -fsS --unix-socket "${PEPD_ADMIN_SOCK}" http://localhost/v1/mode
-  APP_LISTEN=$(cat "${STATE_DIR}/app-listen") PEPD_URL="http://${PEPD_ADDR}" start_bg app python3 "${HOME_DIR}/app/site-app.py"
+  APP_LISTEN=$(cat "${STATE_DIR}/app-listen") PEPD_URL="http://${PEPD_ADDR}" APP_TRACE_FILE="${TRACE_DIR}/app.jsonl" start_bg app python3 "${HOME_DIR}/app/site-app.py"
   wait_for app 10 "the application" curl -fsS "http://$(cat "${STATE_DIR}/app-listen")/healthz"
   trap - EXIT
   echo $((SECONDS - t0)) >"${STATE_DIR}/up-seconds"
@@ -853,12 +904,25 @@ m3_init() {
   echo "site M3: initialised in ${HOME_DIR}. Next: $0 m3 check"
 }
 
+# m3_event STAGE OUTCOME REASON DETAIL [CERT]: what the agent side records about the request it is making (issue #329).
+# The trace id is the one sent to the cell and to the application in the header X-TBP-Trace-Id.
+m3_event() {
+  [ -n "${TRACE_ID:-}" ] || return 0
+  (umask 077; : >>"${TRACE_DIR}/m3.jsonl")
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" --arg id "${TRACE_ID}" --arg st "$1" --arg o "$2" --arg r "$3" --arg d "$4" --arg c "${5:-}" \
+    '{ts:$ts,trace_id:$id,component:"agent",stage:$st,outcome:$o} + (if $r != "" then {reason:$r} else {} end) + (if $d != "" then {detail:$d} else {} end) + (if $c != "" then {peer_cn:$c} else {} end)' \
+    >>"${TRACE_DIR}/m3.jsonl" # (the file is made 0600 on first write, whatever the caller's umask)
+}
+m3_new_trace_id() { TRACE_ID="t-$(date +%s)-$(openssl rand -hex 3)"; }
+
 m3_broker_url() { sed -n 's/^BROKER_URL=//p' "${HOME_DIR}/site.env"; }
 
 # m3_decide AGENT CERT-AGENT JSON-BODY -> the cell's JSON answer on stdout (mTLS)
 m3_decide() {
+  local th=()
+  [ -z "${TRACE_ID:-}" ] || th=(-H "X-TBP-Trace-Id: ${TRACE_ID}")
   curl -sS --cacert "${HOME_DIR}/server-ca.pem" --cert "${HOME_DIR}/agents/$2.pem" --key "${HOME_DIR}/agents/$2.key" \
-    -X POST -d "$3" "$(m3_broker_url)/v1/actions"
+    "${th[@]}" -X POST -d "$3" "$(m3_broker_url)/v1/actions"
 }
 
 m3_intent_body() { # m3_intent_body SUBJECT ACTION RESOURCE [BINDING [PROOF]]
@@ -872,12 +936,14 @@ hex_to_b64() { perl -ne 'chomp; print pack("H*",$_)' | base64 -w0; }
 
 # m3_present TOKEN-B64 ACTION RESOURCE -> prints "[HTTP code] body" from the application on M2
 m3_present() {
-  curl -sS -H "X-TBP-Token: $1" -w ' [%{http_code}]\n' "$(cat "${STATE_DIR}/app-url")/$2/$3"
+  local th=()
+  [ -z "${TRACE_ID:-}" ] || th=(-H "X-TBP-Trace-Id: ${TRACE_ID}")
+  curl -sS -H "X-TBP-Token: $1" "${th[@]}" -w ' [%{http_code}]\n' "$(cat "${STATE_DIR}/app-url")/$2/$3"
 }
 
 m3_act() {
   require_init
-  local agent="" action="" resource="" binding="" proof="" as="" nocert=0 positional=() resp tok
+  local agent="" action="" resource="" binding="" proof="" as="" nocert=0 positional=() resp tok out
   while [ $# -gt 0 ]; do
     case "$1" in
       --binding) binding=${2:-}; shift 2 ;;
@@ -890,36 +956,53 @@ m3_act() {
   done
   [ "${#positional[@]}" -eq 3 ] || die "usage: $0 m3 act <agent> <action> <resource> [--binding HEX] [--proof HEX] [--as <agent-cert>] [--no-cert]"
   agent=${positional[0]}; action=${positional[1]}; resource=${positional[2]}
-  echo "1. ask the cell (M1) for a decision: ${agent} may ${action} ${resource}?"
+  m3_new_trace_id
+  echo "1. ask the cell (M1) for a decision: ${agent} may ${action} ${resource}?   [trace ${TRACE_ID}]"
+  m3_event request emitted "" "${agent} asks: ${action} ${resource}$([ "${nocert}" -eq 1 ] && echo ' (no client certificate)')" "$([ "${nocert}" -eq 1 ] && echo none || echo "${as:-${agent}}")"
   if [ "${nocert}" -eq 1 ]; then
-    if resp=$(curl -sS --cacert "${HOME_DIR}/server-ca.pem" -X POST -d "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")" "$(m3_broker_url)/v1/actions" 2>&1); then
+    if resp=$(curl -sS --cacert "${HOME_DIR}/server-ca.pem" -H "X-TBP-Trace-Id: ${TRACE_ID}" -X POST -d "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")" "$(m3_broker_url)/v1/actions" 2>&1); then
       echo "   answered without a client certificate: ${resp}"
+      m3_event answer allow "answered-without-certificate" "the cell answered a request that carried no certificate"
     else
       echo "   refused at the TLS handshake, as it must be: $(printf '%s' "${resp}" | tail -1 | cut -c1-160)"
+      m3_event answer deny "tls-handshake-refused" "$(printf '%s' "${resp}" | tail -1 | cut -c1-160)"
     fi
     return 0
   fi
-  resp=$(m3_decide "${agent}" "${as:-${agent}}" "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")") || die "no answer from the cell"
+  resp=$(m3_decide "${agent}" "${as:-${agent}}" "$(m3_intent_body "${agent}" "${action}" "${resource}" "${binding}" "${proof}")") || { m3_event answer deny "no-answer" "the cell did not answer"; die "no answer from the cell"; }
   echo "   $(printf '%s' "${resp}" | jq -c '{allow,reason}')"
+  m3_event answer "$(printf '%s' "${resp}" | jq -r 'if .allow then "allow" else "deny" end')" "$(printf '%s' "${resp}" | jq -r '.reason // ""')" "answer received from the cell"
   tok=$(printf '%s' "${resp}" | jq -r '.token // empty')
   if [ -z "${tok}" ]; then echo "   no token: nothing to present."; return 0; fi
   printf '%s' "${tok}" | hex_to_b64 >"${STATE_DIR}/last-token"
   printf '%s %s\n' "${action}" "${resource}" >"${STATE_DIR}/last-call"
   echo "2. present the token to the application on M2:"
-  echo "   $(m3_present "$(cat "${STATE_DIR}/last-token")" "${action}" "${resource}")"
+  m3_event request presenting "" "token presented to the application: ${action} ${resource}"
+  out=$(m3_present "$(cat "${STATE_DIR}/last-token")" "${action}" "${resource}")
+  echo "   ${out}"
+  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }"
+}
+
+# m3_http_outcome "<body> [200]" -> executed | refused | no-answer (for the agent's own record)
+m3_http_outcome() {
+  case "${1##* }" in "[200]") echo executed ;; "[000]" | "") echo no-answer ;; *) echo refused ;; esac
 }
 
 # m3_call [ACTION RESOURCE] [--forge]: present the LAST token again (a replay), for another resource, or forged
 m3_call() {
   require_init
-  local forge=0 positional=() action resource tok
+  local forge=0 positional=() action resource tok out
   while [ $# -gt 0 ]; do case "$1" in --forge) forge=1; shift ;; --*) die "call: unknown option $1" ;; *) positional+=("$1"); shift ;; esac; done
   [ -f "${STATE_DIR}/last-token" ] || die "no token yet: '$0 m3 act …' first"
   if [ "${#positional[@]}" -eq 2 ]; then action=${positional[0]}; resource=${positional[1]}; else read -r action resource <"${STATE_DIR}/last-call"; fi
   tok=$(cat "${STATE_DIR}/last-token")
   if [ "${forge}" -eq 1 ]; then tok=$(printf '%s' "${tok}" | base64 -d | perl -0777 -pe 'substr($_,length($_)-1,1)=chr(ord(substr($_,length($_)-1,1))^1)' | base64 -w0); fi
-  echo "present the last token for: ${action} ${resource}$([ "${forge}" -eq 1 ] && echo ' (one byte flipped)')"
-  echo "   $(m3_present "${tok}" "${action}" "${resource}")"
+  m3_new_trace_id
+  echo "present the last token for: ${action} ${resource}$([ "${forge}" -eq 1 ] && echo ' (one byte flipped)')   [trace ${TRACE_ID}]"
+  m3_event request presenting "" "token presented again: ${action} ${resource}$([ "${forge}" -eq 1 ] && echo ' (one byte flipped)')"
+  out=$(m3_present "${tok}" "${action}" "${resource}")
+  echo "   ${out}"
+  m3_event answer "$(m3_http_outcome "${out}")" "" "the application answered ${out##* }"
 }
 
 CHECK_FAILS=0
@@ -996,6 +1079,8 @@ case "${ROLE}:${CMD}" in
   m1:down) m1_down ;;
   m1:status) m1_status ;;
   m1:watch) m1_watch "$@" ;;
+  m1:trace) m1_trace "$@" ;;
+  m1:trace-export | m2:trace-export | m3:trace-export) trace_export ;;
   m1:grant) m1_sign --yes "$@" ;;
   m1:sign) m1_sign "$@" ;;
   m1:mode-proof) m1_mode_proof "$@" ;;

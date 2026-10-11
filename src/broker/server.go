@@ -49,6 +49,7 @@ import (
 	"os"
 	"time"
 
+	devtrace "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devtrace"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
 )
@@ -109,6 +110,7 @@ type Server struct {
 	broker  *Broker
 	maxBody int64
 	mux     *http.ServeMux
+	trace   *devtrace.Sink // trace de décision d'un banc d'essai (devtrace) ; nil en production
 }
 
 // ServerOptions paramètre le serveur. Fail-closed dès la configuration.
@@ -117,6 +119,10 @@ type ServerOptions struct {
 	Broker *Broker
 	// MaxBody borne le corps des demandes. 0 ⇒ 64 Kio. Négatif ⇒ erreur.
 	MaxBody int64
+	// Trace (optionnel) : trace de décision pour un banc d'essai (issue #329). N'est jamais fournie en production :
+	// brokerd ne l'ouvre que derrière l'échappatoire dev TBP_DECISION_TRACE_DEV (sentinel #113). Elle s'écrit APRÈS
+	// le verdict et ne peut pas le changer.
+	Trace *devtrace.Sink
 }
 
 // NewServer construit la porte. Fail-closed : broker requis.
@@ -131,7 +137,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	if maxBody == 0 {
 		maxBody = defaultMaxBody
 	}
-	s := &Server{broker: opts.Broker, maxBody: maxBody}
+	s := &Server{broker: opts.Broker, maxBody: maxBody, trace: opts.Trace}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/actions", s.handleAction)
 	s.mux = mux
@@ -141,6 +147,15 @@ func NewServer(opts ServerOptions) (*Server, error) {
 // Handler expose le routeur (tests httptest, montage dans un serveur
 // existant de la cellule).
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// jtiForTrace : le jti relie la trace aux feuilles du registre (§4.3). Un refus qui n'a pas ouvert de feuille le rend
+// nul, qu'on n'écrit pas.
+func jtiForTrace(res Result) string {
+	if res.JTI == ([16]byte{}) {
+		return ""
+	}
+	return hex.EncodeToString(res.JTI[:])
+}
 
 // peerCertCN rend le CN du certificat client mTLS présenté sur CETTE
 // requête, ou "" si la requête n'arrive pas sur une connexion TLS (chemin
@@ -160,8 +175,15 @@ func peerCertCN(r *http.Request) string {
 // décision. Jamais de contenu métier dans les logs ni les feuilles (§6.2).
 func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBody)
+	start := time.Now()
+	transport := "unix"
+	if r.TLS != nil {
+		transport = "mtls"
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		s.trace.Emit(devtrace.Event{TraceID: devtrace.ID(r), Component: "brokerd", Stage: "request", Outcome: "deny",
+			Reason: ReasonRequestInvalid, Detail: "body-unreadable", PeerCN: peerCertCN(r), Transport: transport, Peer: devtrace.Peer(r)})
 		writeRequestRefused(w, &strictjson.Detail{Code: "body-unreadable"})
 		return
 	}
@@ -175,11 +197,24 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 			dd := se.Detail
 			d = &dd
 		}
+		ev := devtrace.Event{TraceID: devtrace.ID(r), Component: "brokerd", Stage: "request", Outcome: "deny",
+			Reason: ReasonRequestInvalid, PeerCN: peerCertCN(r), Transport: transport, Peer: devtrace.Peer(r)}
+		if d != nil {
+			ev.Detail = d.Code
+		}
+		s.trace.Emit(ev)
 		writeRequestRefused(w, d)
 		return
 	}
 
 	res := s.broker.HandleAction(r.Context(), req.Subject, req.Intent, peerCertCN(r))
+	outcome := "deny"
+	if res.Allow {
+		outcome = "allow"
+	}
+	s.trace.Emit(devtrace.Event{TraceID: devtrace.ID(r), Component: "brokerd", Stage: "decision", Outcome: outcome,
+		Reason: res.Reason, Subject: req.Subject, Intent: req.Intent, PeerCN: peerCertCN(r), Transport: transport, Peer: devtrace.Peer(r),
+		JTI: jtiForTrace(res), ElapsedUs: time.Since(start).Microseconds()})
 
 	resp := actionResponseJSON{
 		Allow:  res.Allow,
