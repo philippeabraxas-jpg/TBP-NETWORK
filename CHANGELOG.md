@@ -29,6 +29,8 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
     trace behind a new development switch, `TBP_DECISION_TRACE_DEV` (sentinel required, start-up alarm, listed with the
     active development switches); it is written after the verdict and cannot change it. `pepd` is untouched: M2's side
     is the verdict it returned to the application. Requests without a trace id (`curl`) are listed apart.
+  - **[deploy/dev-test/console.md](deploy/dev-test/console.md)** (EN/FR): where the monitor is (three commands on M1, no
+    screen), how to read `m1 watch` and `m1 trace` line by line, how to use them, recipes, and what they do not show.
   - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
   - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
     gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**

@@ -160,6 +160,8 @@ The proofs live a few minutes (about four): do steps 6–7, 9 and 10, and 14 wit
 
 ## Follow a request: from its emission to its execution or its rejection
 
+> Where the monitor is, how to read each line and how to use it: **[console.md](console.md)**.
+
 Seeing *that* a request was refused is not enough in a test: you want to know **which component stopped it, and why**.
 The three machines each record what they see, and M1 lays it out as one timeline per request.
 
@@ -281,7 +283,7 @@ What makes a report useful: what you tried (the exact command), what you expecte
 - **There is no console.** Everything is done on a command line: `m1 sign` shows you a plan and asks you to type
   `sign`; `m1 mode-proof` signs the controllers' proofs; `m1 status` and `report` show counters; `m1 watch` is a read-only text view of the cell (processes, rules in
   force, decisions, faults, plans waiting by hash, audit journal; a source that does not answer reads `UNKNOWN`, never
-  green; `--every 5` repeats it); the audit trail is read with `tbp-audit verify`. There is no dashboard and no screen. `supervisord` (read-only JSON over a Unix socket,
+  green; `--every 5` repeats it); the audit trail is read with `tbp-audit verify`. There is no dashboard and no screen: [console.md](console.md) says where the monitor is and how to read it. `supervisord` (read-only JSON over a Unix socket,
   [superviseur.md](../superviseur.md)) exists in this repository but is not part of this test, and nothing in the
   repository lets an operator *sign* from anything but the command line. What a console should show and let people
   do, and in what form, is an open question ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): tell us what you missed.

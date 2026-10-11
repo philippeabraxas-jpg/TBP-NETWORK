@@ -167,6 +167,8 @@ entre les machines.
 
 ## Suivre une requête : de son émission à son exécution ou à son rejet
 
+> Où est le moniteur, comment lire chaque ligne et s'en servir : **[console.fr.md](console.fr.md)**.
+
 Savoir *qu'*une requête est refusée ne suffit pas dans un test : il faut savoir **quel composant l'a arrêtée, et pourquoi**.
 Chacune des trois machines consigne ce qu'elle voit, et M1 en fait une chronologie par requête.
 
@@ -297,7 +299,7 @@ passé, et les rapports.
   taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ; `m1 watch` est une vue texte en lecture seule de la cellule
   (processus, règles en vigueur, décisions, fautes, plans en attente par hash, journal d'audit ; une source qui ne
   répond pas s'affiche `UNKNOWN`, jamais en vert ; `--every 5` la répète) ; la piste d'audit se lit avec
-  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran. `supervisord` (JSON en lecture seule sur un socket Unix,
+  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran : [console.fr.md](console.fr.md) dit où est le moniteur et comment le lire. `supervisord` (JSON en lecture seule sur un socket Unix,
   [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test, et rien dans le
   dépôt ne permet à un opérateur de *signer* autrement qu'en ligne de commande. Ce qu'une console doit montrer et
   permettre de faire, et sous quelle forme, est une question ouverte ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.

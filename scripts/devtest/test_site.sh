@@ -360,6 +360,22 @@ for kw in "site.sh m1 sign" "m1 grant" "m1 watch" "m1 trace" "trace-export" "X-T
 done
 ok "deploy/dev-test/site.md and site.fr.md name every documented answer"
 
+echo "== the monitor page (console.md, both languages) says what the commands print"
+fails_before=${FAILS}
+for doc in console.md console.fr.md; do
+  for kw in "m1 watch" "m1 trace" "m1 sign" "trace-export" "--from" "--id" "--every" "X-TBP-Trace-Id" "without a trace id" "UNKNOWN" "INCOMPLETE" "TOKEN ISSUED" "EXECUTED — although pepd" "REJECTED by the cell (M1)" "REJECTED by pepd (M2)" "REJECTED at the TLS handshake (M1)" "REJECTED by the application (M2)" "reasons.tsv" "#329"; do
+    grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${doc}" || bad "deploy/dev-test/${doc} no longer mentions '${kw}'"
+  done
+done
+# what the page quotes must be what the code prints
+for kw in "processes  :" "rules      :" "decisions  :" "faults     :" "epoch      :" "pending    :" "audit      :" "the journal does not verify" "no request recorded yet"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/site.sh" "${SCRIPT_DIR}/trace.jq" || bad "the page quotes '${kw}' but no code prints it"
+done
+for kw in "INCOMPLETE" "TOKEN ISSUED by the cell" "EXECUTED — although pepd" "REJECTED by the cell (M1)" "REJECTED by pepd (M2)" "REJECTED at the TLS handshake (M1)" "REJECTED by the application (M2)" "without a trace id"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/trace.jq" || bad "the page quotes '${kw}' but trace.jq does not print it"
+done
+if [ "${FAILS}" -eq "${fails_before}" ]; then ok "the monitor page names every command and ending, and the code prints what it quotes"; fi
+
 echo "== reset"
 M3 reset -y >/dev/null 2>&1; M2 reset -y >/dev/null 2>&1; M1 reset -y >/dev/null 2>&1
 if [ ! -e "${H1}" ] && [ ! -e "${H2}" ] && [ ! -e "${H3}" ]; then ok "reset deletes the three homes"; else bad "reset left a home"; fi
