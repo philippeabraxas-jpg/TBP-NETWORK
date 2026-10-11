@@ -4,10 +4,10 @@ package pep
 //
 // Toute défaillance doit aboutir à un refus, jamais à un passage
 // silencieux : OPA injoignable (T11), horloge au-delà de la borne NTS
-// (T13), ancrage en retard (T6, fencing §6.2), cache jti saturé (T10),
-// registre de quota saturé (T12), disque registre à 80 % (T5). Le README
-// de src/registry l'exige : UN SEUL endroit décide « refuser maintenant »
-// — pas deux implémentations qui peuvent dériver.
+// (T13), cache jti saturé (T10), registre de quota saturé (T12). Les conditions
+// « ancrage en retard » (T6, §6.2) et « disque registre à 80 % » (T5) sont réservées
+// mais n'ont pas de détecteur (#265). Le README de src/registry l'exige : UN SEUL
+// endroit décide « refuser maintenant » — pas deux implémentations qui peuvent dériver.
 //
 // Ce module est ce point. Les détecteurs y basculent leurs conditions
 // (Trip — directement ou via l'adaptateur OnTrip() qui épouse la couture
@@ -42,9 +42,11 @@ import (
 // Conditions de défaillance sans constante existante dans leur détecteur
 // (T5 et T6 sont des phases ultérieures — le nom est déclaré ici, unique).
 const (
-	// CondRegistryDiskHigh : disque du registre ≥ 80 % (T5).
+	// CondRegistryDiskHigh : disque du registre ≥ 80 % (T5). RÉSERVÉE : aucun détecteur ne la déclenche et pepd
+	// ne l'enregistre pas (#265) ; le disque est protégé par le backpressure du registre (src/registry).
 	CondRegistryDiskHigh = "registry-disk-high"
-	// CondAnchorLag : ancrage en retard au-delà du seuil §6.2 (T6, fencing).
+	// CondAnchorLag : ancrage en retard au-delà du seuil §6.2 (T6, fencing). RÉSERVÉE : aucun démon ne produit
+	// d'ancrage, donc aucun détecteur ne la déclenche et pepd ne l'enregistre pas (#265).
 	CondAnchorLag = "anchor-lag"
 )
 

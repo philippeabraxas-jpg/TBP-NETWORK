@@ -78,6 +78,10 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   `security-posture`; one transition proof adopts it.
 
 ### Fixed
+- `pepd` no longer lists two fail-closed conditions that nothing could trip, `anchor-lag` and
+  `registry-disk-high`: a list read by the operator must not suggest a lock that does not exist. A test now
+  refuses a registered condition without a detector
+  ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)).
 - Flaky teardown of the Tessera POSIX logs in tests
   ([#266](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/266),
   [#312](https://github.com/philippeabraxas-jpg/TBP-NETWORK/pull/312)).

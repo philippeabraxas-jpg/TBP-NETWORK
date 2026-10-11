@@ -945,7 +945,16 @@ et laisse une feuille — cela ne change pas. Ce qui change, c'est le verrou
   `TBP_OPA_AUTOCLEAR_PROBES=0` la désactive : levée manuelle seulement, le
   profil le plus strict ;
 - jamais levés automatiquement : `opa-bad-response`, `opa-revision-mismatch`,
-  dérive d'horloge, saturations, retard d'ancrage.
+  dérive d'horloge, saturations.
+
+`pepd` n'enregistre que des conditions que quelque chose dans ce dépôt peut
+déclencher. Deux sont réservées et **non enregistrées**, pour que la liste ne
+suggère jamais un verrou qui n'existe pas
+([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)) :
+`anchor-lag` (§6.2 : aucun démon ne produit d'ancrage pour l'instant, donc personne
+ne peut mesurer ce retard ; voir [scales.fr.md](scales.fr.md)) et `registry-disk-high`
+(le backpressure du registre refuse les écritures quand son quota est atteint,
+`src/registry/backpressure.go`).
 
 Lire et lever depuis le socket d'administration (l'accès au socket est le
 contrôle d'accès, #95) :

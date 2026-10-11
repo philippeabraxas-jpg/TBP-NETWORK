@@ -891,7 +891,14 @@ fail-closed point that refuses every decision):
   by reflex nor drowns the operator in alarms. `TBP_OPA_AUTOCLEAR_PROBES=0`
   disables it: manual lifting only, the strictest profile;
 - never lifted automatically: `opa-bad-response`, `opa-revision-mismatch`,
-  clock skew, saturation, anchor lag.
+  clock skew, saturation.
+
+`pepd` registers only conditions that something in this repository can trip. Two
+are reserved and **not registered**, so that the list never suggests a lock that
+does not exist ([#265](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/265)):
+`anchor-lag` (§6.2: no daemon produces anchors yet, so nobody can measure the lag;
+see [scales.md](scales.md)) and `registry-disk-high` (the registry's own backpressure
+refuses writes when its quota is reached, `src/registry/backpressure.go`).
 
 Read and lift from the admin socket (access to the socket is the access control,
 #95):
