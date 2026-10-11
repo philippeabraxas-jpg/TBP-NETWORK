@@ -204,6 +204,40 @@ func main() {
 	}
 }
 
+// failClosedCondition est une condition que pepd enregistre dans le point unique fail-closed, avec sa classe.
+type failClosedCondition struct {
+	name  string
+	class pep.Class
+}
+
+// failClosedConditions : les conditions enregistrées au démarrage. Une condition n'y figure QUE si un détecteur
+// de ce dépôt peut la déclencher : la liste est lue par l'opérateur (GET /v1/failclosed), et une condition
+// enregistrée mais jamais déclenchée lui ferait croire à un verrou qui n'existe pas (#265). Deux constantes
+// de pep sont dans ce cas et ne sont PAS enregistrées : CondAnchorLag (« ancrage en retard », §6.2 — aucun démon
+// ne produit d'ancrage, registry.Anchorer n'est lancé par aucun binaire, donc personne ne mesure ce retard) et
+// CondRegistryDiskHigh (le disque du registre est protégé par le backpressure de src/registry, qui refuse
+// l'écriture, pas par cette condition). Un détecteur qui en déclencherait une un jour l'enregistre ici, avec son
+// test ; failclosed_conditions_test.go refuse une condition enregistrée sans déclencheur.
+func failClosedConditions() []failClosedCondition {
+	return []failClosedCondition{
+		{pep.ReasonOPATimeout, pep.ClassI},
+		{pep.ReasonOPAStalled, pep.ClassI}, // OPA ne répond plus du tout : le superviseur le redémarre (opa_admission.go)
+		{pep.ReasonOPAUnreachable, pep.ClassI},
+		{pep.ReasonOPAError, pep.ClassI},
+		{pep.ReasonOPABadResponse, pep.ClassI},
+		// Watcher de révision (#92.A5). Enregistrées EXPLICITEMENT (issue
+		// #205) : une condition inconnue s'auto-enregistre en classe W, la
+		// plus dure à lever — or « unverifiable » se déclenche à chaque
+		// redémarrage d'OPA. Injoignable = classe I (levée automatique
+		// possible) ; bundle substitué = classe W (quorum, jamais automatique).
+		{pep.ReasonOPARevisionUnverifiable, pep.ClassI},
+		{pep.ReasonOPARevisionMismatch, pep.ClassW},
+		{pep.ReasonClockSkew, pep.ClassI},
+		{pep.TripReasonJTISaturated, pep.ClassI},
+		{pep.TripReasonQuotaSaturated, pep.ClassI},
+	}
+}
+
 func run() error {
 	cellID, err := envRequired("TBP_CELL_ID")
 	if err != nil {
@@ -409,28 +443,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, cond := range []struct {
-		name  string
-		class pep.Class
-	}{
-		{pep.ReasonOPATimeout, pep.ClassI},
-		{pep.ReasonOPAStalled, pep.ClassI}, // OPA ne répond plus du tout : le superviseur le redémarre (opa_admission.go)
-		{pep.ReasonOPAUnreachable, pep.ClassI},
-		{pep.ReasonOPAError, pep.ClassI},
-		{pep.ReasonOPABadResponse, pep.ClassI},
-		// Watcher de révision (#92.A5). Enregistrées EXPLICITEMENT (issue
-		// #205) : une condition inconnue s'auto-enregistre en classe W, la
-		// plus dure à lever — or « unverifiable » se déclenche à chaque
-		// redémarrage d'OPA. Injoignable = classe I (levée automatique
-		// possible) ; bundle substitué = classe W (quorum, jamais automatique).
-		{pep.ReasonOPARevisionUnverifiable, pep.ClassI},
-		{pep.ReasonOPARevisionMismatch, pep.ClassW},
-		{pep.ReasonClockSkew, pep.ClassI},
-		{pep.TripReasonJTISaturated, pep.ClassI},
-		{pep.TripReasonQuotaSaturated, pep.ClassI},
-		{pep.CondRegistryDiskHigh, pep.ClassI},
-		{pep.CondAnchorLag, pep.ClassW},
-	} {
+	for _, cond := range failClosedConditions() {
 		if err := failClosed.Register(cond.name, cond.class); err != nil {
 			return err
 		}

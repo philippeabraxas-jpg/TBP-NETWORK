@@ -46,6 +46,7 @@ dans #86.
 | Règles servies chez `brokerd` (bundle, config OPA, identifiant de politique) | `TBP_PROVISIONING_POLICY_BUNDLE`, `TBP_PROVISIONING_OPA_CONFIG` | sans objet (pas de broker) | requis (un changement est une transition de quorum, #313) | requis | requis |
 | Démarrage mesuré | `TBP_MEASURED_BOOT_*` | requis | requis | requis | requis |
 | Superviseur / moniteur indépendant | `superviseur.md` | absent | optionnel | requis | requis |
+| Ancrage dans la master chain et retard d'ancrage borné (§6.2) | `registry.Anchorer` (bibliothèque) | absent | absent | exigé par la spec, **non construit** : aucun démon ne lance l'ancreur, donc la borne de retard n'est pas appliquée (#265) | défini au handshake (#33) |
 | Transport inter-cellules chiffré | #187 | sans objet | sans objet | requis | requis |
 | Règles inaliénables | (à définir) | à définir | à définir | à définir | à définir au handshake (#33) |
 

@@ -42,6 +42,7 @@ the table, not only those two). Tracked in #86.
 | Served rules at `brokerd` (bundle, OPA config, policy id) | `TBP_PROVISIONING_POLICY_BUNDLE`, `TBP_PROVISIONING_OPA_CONFIG` | n/a (no broker) | required (a change is a quorum transition, #313) | required | required |
 | Measured boot | `TBP_MEASURED_BOOT_*` | required | required | required | required |
 | Supervisor / independent monitor | `superviseur.md` | absent | optional | required | required |
+| Master-chain anchoring and bounded anchor lag (§6.2) | `registry.Anchorer` (library) | absent | absent | required by the spec, **not built**: no daemon runs the anchorer, so the lag bound is not enforced (#265) | defined in the handshake (#33) |
 | Inter-cell encrypted transport | #187 | n/a | n/a | required | required |
 | Inalienable rules | (to define) | to define | to define | to define | to define in the handshake (#33) |
 
