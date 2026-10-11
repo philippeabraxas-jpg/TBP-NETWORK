@@ -23,7 +23,7 @@ demande si l'ensemble **fonctionne**, et si vous pouvez passer à travers.
 | Ce que cela ne teste pas | la garde des clés, la séparation entre de vraies personnes, une cérémonie de genèse | les jetons chez un serveur, l'inscription, le réseau |
 | Pour | le test fonctionnel et le red team : **c'est la release DEV-TEST** | un coup d'œil rapide à la cellule |
 
-**Voir ce qui se passe :** il n'y a pas d'écran — [console.fr.md](console.fr.md) dit où est le moniteur (trois commandes sur M1), comment le lire et s'en servir, pour que vous n'ayez rien à chercher.
+**Voir ce qui se passe :** ouvrez la **console temps réel** dans un navigateur — après `m1 up`, une adresse montre le trajet de chaque requête à travers les trois machines, l'état de chaque composant et la latence de chaque étape. [console.fr.md](console.fr.md) dit où elle est, comment la lire et comment elle mesure.
 
 Si vous n'essayez qu'une chose, essayez le site : c'est celui qui correspond à la façon dont TBP se déploie.
 

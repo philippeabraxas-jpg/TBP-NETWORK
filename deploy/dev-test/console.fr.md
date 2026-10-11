@@ -1,157 +1,176 @@
-# Le moniteur : où il est, comment le lire, comment s'en servir
+# La console temps réel : voir une requête traverser les trois machines, dans un navigateur
 
 _English version: [console.md](console.md). Fait partie de [deploy/dev-test](README.fr.md) ; les machines sont décrites
 dans [site.fr.md](site.fr.md)._
 
-> **Il n'y a pas d'écran à ouvrir.** La « console » du site DEV-TEST, ce sont trois commandes que vous tapez dans un
-> terminal **sur M1**, la cellule. Rien n'écoute pour elle, pas d'URL, pas de connexion : celui qui peut lancer `site.sh`
-> avec l'utilisateur qui a fait `m1 init` est l'opérateur. (Ce que devrait être une vraie console est une question
-> ouverte, [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) : dites-nous ce qui vous a manqué.)
+> **Pas pour la production.** La console est un outil de test : elle montre en clair les noms, ressources et adresses de
+> vos machines de test, en HTTP simple, derrière une clé. Elle est **en lecture seule** : rien sur la page n'agit sur le
+> test.
 
-## Que voulez-vous savoir ?
+Vous déployez les trois machines, vous ouvrez **une adresse** dans un navigateur, et vous voyez — pendant que vous agissez —
+**le trajet** de chaque requête (agent → TLS et identité → décision de la cellule → application → `pepd` → exécutée ou
+rejetée), **l'état** de chaque composant, et **la latence** de chaque étape.
 
-| Vous voulez savoir | Lancez | Sur | Cela montre |
+![ce que montre la page : les composants en haut, les requêtes et le trajet de la requête choisie en dessous, le tableau des latences](console.png)
+
+## L'ouvrir
+
+`m1 up` affiche l'adresse, avec sa clé :
+
+```
+site M1: up. Agents reach the cell at https://10.0.0.5:8443 (mutual TLS).
+         the live console (open it in a browser): http://10.0.0.5:9100/?key=07a79b9cd60a7332e79ab8c779273240
+```
+
+Ouvrez cette adresse depuis votre propre machine. (`site.sh m1 console-url` la réaffiche.) La clé est gardée dans un
+cookie et retirée de la barre d'adresse. Il existe deux clés, différentes : celle de l'adresse **ouvre la page** ; l'autre
+**permet à M1, M2 et M3 d'envoyer** ce qu'elles voient. Qui peut envoyer ne peut pas lire, et qui peut lire ne peut pas
+envoyer.
+
+La console tourne **sur M1 par défaut**, et **écoute sur l'adresse de M1, port 9100**. Elle demande trois flux réseau en
+plus de ceux de [site.fr.md](site.fr.md#le-réseau) :
+
+| De → vers | Port | Quoi | Ouvert à |
 |---|---|---|---|
-| La cellule va-t-elle bien, qu'a-t-elle décidé jusqu'ici, quelque chose attend-il ? | `scripts/devtest/site.sh m1 watch` | M1 | une page d'état de 7 lignes |
-| Ce qui est arrivé à **ma requête** : qui l'a arrêtée, et pourquoi ? | `scripts/devtest/site.sh m1 trace` | M1 | une chronologie par requête, à travers les trois machines |
-| Que vais-je signer, et est-ce ce que la cellule a scellé ? | `scripts/devtest/site.sh m1 sign <agent> <action> <ressource>` | M1 | le plan en clair, un hash recalculé, une question |
-| Les processus de cette machine tournent-ils ? | `scripts/devtest/site.sh m1\|m2 status` | M1, M2 | up / DOWN, compteurs |
-| Sur quoi cette machine écoute-t-elle ? | `scripts/devtest/site.sh m1\|m2\|m3 listeners` | toutes | ports et adresses |
-| Que vous envoyer quand quelque chose a mal tourné ? | `scripts/devtest/site.sh m1\|m2\|m3 report` | toutes | des chiffres, aucun secret |
+| vous (navigateur) → la console | 9100/tcp | la page | votre adresse seulement |
+| M2 → la console | 9100/tcp | les événements et l'état des composants de M2 | l'adresse de M2 seulement |
+| M3 → la console | 9100/tcp | les événements de M3 | l'adresse de M3 seulement |
 
-## Y accéder
+(Les événements de M1 ne quittent pas M1 quand la console y est.) Filtrez le port 9100 comme le 22 : votre adresse et les
+trois machines, **rien depuis Internet**.
 
-1. Connectez-vous à **M1** (SSH) avec l'utilisateur qui a lancé `site.sh m1 init`, dans la copie du dépôt. Si vous avez
-   donné à `init` un autre répertoire, positionnez d'abord `TBP_SITE_HOME` dessus (défaut `~/tbp-site-m1`).
-2. Tout ce qui suit se lance de là. Les commandes ne font que **lire** (`watch`, `trace`) ou vous demandent avant d'agir
-   (`sign`) ; aucune ne change l'état du test.
-3. Pour voir ce qu'ont consigné **M2** et **M3**, vous apportez leurs fichiers sur M1 (le moniteur lit des fichiers ; il
-   n'appelle pas ces machines) :
+### Sur une machine à part, ou n'importe où
 
-```
-# sur M2 et sur M3, une fois vos requêtes faites
-scripts/devtest/site.sh m2 trace-export      # → ~/tbp-site-m2/trace-m2.tgz
-scripts/devtest/site.sh m3 trace-export      # → ~/tbp-site-m3/trace-m3.tgz
-# sur M1
-scp <user>@<M2>:tbp-site-m2/trace-m2.tgz <user>@<M3>:tbp-site-m3/trace-m3.tgz .
-scripts/devtest/site.sh m1 trace --from trace-m2.tgz --from trace-m3.tgz
+« Sur M1 ou ailleurs » : la console peut tourner sur toute machine que M1, M2, M3 et votre navigateur atteignent — une
+quatrième machine, ou votre portable. Donnez son adresse à M1 à l'`init`, puis démarrez la console là avec la même clé :
+
+```bash
+KEY=$(openssl rand -hex 16)
+# sur M1 (à la place de la console par défaut sur M1) :
+scripts/devtest/site.sh m1 init --address <M1> --console-url http://<C>:9100 --console-key "$KEY" --env "…"
+# sur la machine C (Go, `curl`, `openssl` ; le dépôt) :
+scripts/devtest/site.sh console up --listen <C>:9100 --ingest-key "$KEY"      # affiche l'adresse à ouvrir
 ```
 
-Sans `--from`, `m1 trace` ne montre que ce que M1 a vu : une requête refusée par la cellule est complète, une requête
-acceptée se termine par *TOKEN ISSUED … not presented* parce que les fichiers de M2 et M3 manquent — c'est normal, pas une
-faute. Refaites l'export après de nouvelles requêtes : une archive est un instantané.
+M2 et M3 apprennent l'adresse et la clé par leurs paquets : rien d'autre à configurer. `console down`, `console url`,
+`console status` et `console reset` font ce qu'ils disent.
 
-## Lire `m1 watch`
+## Ce que montre la page
 
-```
-cell cell-site · 2026-10-11T11:05:27Z · read-only view (a line says UNKNOWN when its source does not answer)
-processes  : opa up · brokerd up
-rules      : 601b4836a09855f4… (signed bundle) · OPA healthy · unanswered 0 · shed 0
-decisions  : 12 requests · 4 allowed · 8 denied (quorum 0, plan 5, envelope 0)
-faults     : none (issuance, ledger leaves, translation)
-epoch      : single cell, no fencing (epoch 0)
-pending    : 2 plan(s) waiting (hash only — the cell keeps no plan in clear)
-audit      : 14 record(s) checked, 0 failure(s) (hash match only; inclusion in the signed log: tbp-audit verify -log …)
-```
+**Composants.** Une carte par machine, avec l'état de chaque composant et **depuis combien de temps il a rapporté pour la
+dernière fois** : `M1` — OPA et `brokerd` (décisions jusqu'ici, refus par cause, fautes de la cellule elle-même, règles en
+vigueur, plans en attente) ; `M2` — OPA, `pepd` (sa **posture**, `monitor`/`closed`/`refused`, ses verdicts et leur durée
+moyenne et maximale) et l'application ; `M3` — l'agent, qui n'a pas de démon : il est `idle`, jamais `down`, et la carte dit
+quand il a agi pour la dernière fois. **Une machine qui ne rapporte plus passe `UNKNOWN` après 8 secondes — elle n'est
+jamais laissée en vert.**
 
-| Ligne | Signifie | Inquiétez-vous quand |
+**Requêtes.** La plus récente en haut. Chaque ligne : l'heure, ce qui a été demandé, un mini-trajet de six points, comment
+cela s'est terminé, la durée de bout en bout. Filtrez par issue, **Pause** pour lire, cliquez une ligne pour l'ouvrir (son
+adresse prend `#<identifiant de trace>` : vous pouvez l'envoyer à quelqu'un).
+
+**Le trajet de la requête choisie.** Six étapes — *agent → TLS / identité → décision de la cellule → application → verdict
+de pepd → exécutée* — chacune verte (passée), ambre (passée bien que `pepd` ait dit non : la posture monitor), rouge
+(**c'est ici qu'elle a été arrêtée**), ou grise (non atteinte, ou pas encore). Dessous, **la dernière ligne dit comment
+cela s'est terminé et pourquoi**, en mots : *« REJECTED by the cell (M1) — plan-binding-required — the cell: plan
+contract: an action of class I or W needs a plan approved by operators, and none was given »*. Chaque code de raison est
+expliqué ([`reasons.tsv`](../../scripts/devtest/reasons.tsv), en anglais comme la page).
+
+**La latence de la requête choisie**, étape par étape, et **les percentiles sur les 500 dernières requêtes** (p50, p95,
+p99, max) dans le tableau plus bas.
+
+**Sans identifiant de trace.** Un client qui n'est pas nos scripts — `curl`, un scanner, un red team — n'envoie pas
+d'identifiant. Ce que la cellule et l'application en ont vu est listé ici, une ligne par événement, avec le certificat
+présenté et l'adresse d'où cela venait. C'est là qu'apparaît **votre propre attaque**.
+
+## Comment la latence est mesurée
+
+Chaque durée est mesurée **sur une seule machine, avec une seule horloge** : il ne faut donc jamais comparer les horloges
+des trois machines (elles diffèrent) :
+
+| Étape | Mesurée par | Comment |
 |---|---|---|
-| `processes` | OPA (le moteur de règles) et `brokerd` (la cellule) tournent | `DOWN` |
-| `rules` | les 16 premiers chiffres hexa des règles signées en vigueur, si OPA répond, s'il délaisse des requêtes | `STALLED`, `unanswered` ou `shed` qui grandit |
-| `decisions` | requêtes décidées par la cellule depuis son démarrage, et les refus par cause | `quorum` ou `plan` qui grandit sans que vous l'attendiez : quelqu'un demande sans plan approuvé |
-| `faults` | échecs **de la cellule elle-même** (n'a pas pu signer un jeton, écrire une feuille, traduire) | autre chose que `none` : une faute n'est jamais un refus normal |
-| `epoch` | l'époque de la cellule ; une cellule seule n'a pas de fencing | — |
-| `pending` | plans soumis et pas encore approuvés, par hash seulement : la cellule ne garde aucun plan en clair, ce qu'un plan *dit* se lit là où vous signez (`m1 sign`), pas ici | un nombre qui ne redescend jamais |
-| `audit` | le journal d'audit de la cellule correspond toujours à ses feuilles | `! the journal does not verify` |
+| connexion TCP, poignée de main TLS | M3 | les chronomètres de `curl` |
+| **réseau + HTTP** vers la cellule | M3 et M1 | l'attente du premier octet côté M3, **moins** le temps de décision de la cellule |
+| **décision de la cellule** | M1 (`brokerd`) | de la lecture de la requête au verdict |
+| aller-retour vers la cellule | M3 | le total de `curl` |
+| **réseau + HTTP** vers l'application | M3 et M2 | l'attente côté M3, moins le temps de traitement de l'application |
+| **traitement de l'application** | M2 (l'application) | de la réception de la requête à sa réponse |
+| **verdict de `pepd`** | M2 (`pepd`) | la mesure de `pepd` lui-même |
+| aller-retour vers l'application | M3 | le total de `curl` |
+| de bout en bout | M3 | les deux allers-retours additionnés (hors le temps entre les deux) |
 
-**`UNKNOWN` et `DOWN` ne sont jamais verts.** Si une source ne répond pas, sa ligne le dit et la commande **sort en code
-non nul**, un script peut donc s'y fier. Une cellule arrêtée affiche `UNKNOWN` sur chaque ligne. `--every 5` répète la
-vue toutes les 5 secondes (Ctrl-C pour arrêter).
+« Réseau + HTTP » est ce qui reste d'une attente une fois le travail propre de l'autre côté retiré : le réseau, la pile
+HTTP et les files d'attente. S'il est grand, regardez le réseau ; si la décision de la cellule ou le verdict de `pepd`
+est grand, regardez ce composant. L'ordre des lignes d'une requête suit les étapes qu'elle a traversées, pas les horloges.
 
-## Lire `m1 trace`
+## Lire le reste
 
-```
-t-1791718709-30e71f   token presented again: read doc-1
-  +0.000s  M3  agent     token presented again: read doc-1
-  +0.015s  M2  app       request received: read doc-1 with a token   [from 10.0.0.9]
-  +0.017s  M2  pepd      verdict deny replay   [posture monitor · forwarded true · 0.7 ms]
-  +0.017s  M2  app       EXECUTED   [HTTP 200]
-  → EXECUTED — although pepd's verdict was replay: in the monitor posture pepd records and blocks nothing
-```
-
-**L'en-tête** est l'**identifiant de trace** de la requête, affiché par `m3 act` et `m3 call` (`[trace t-…]`). Le même
-identifiant voyage jusqu'à la cellule et l'application dans l'en-tête `X-TBP-Trace-Id` : c'est ainsi que les
-enregistrements de trois machines sont joints.
-
-**Chaque ligne :** `+décalage` depuis le premier événement · la machine (`M1` cellule, `M2` serveur, `M3` agent) · le
-composant · ce qu'il a fait, détails entre crochets.
-
-| Composant | Machine | C'est | Sa ligne dit |
-|---|---|---|---|
-| `agent` | M3 | le script qui joue l'agent | ce qu'il a demandé, avec quel certificat, ce qu'il a reçu |
-| `brokerd` | M1 | la cellule | `ALLOW`/`DENY` et la **raison** ; entre crochets : l'agent, l'action, le **certificat** présenté, mTLS ou socket Unix, l'**adresse** d'où cela venait, la durée, l'identifiant du jeton (`jti`) |
-| `transport` | M1 | la couche TLS devant la cellule | une connexion qui a échoué **avant** de devenir une requête (pas de certificat client, ou le mauvais) |
-| `pepd` | M2 | le point d'application | son **verdict** sur le jeton, la posture (`monitor`, `closed`, `refused`) et `forwarded` |
-| `app` | M2 | la petite application | la requête reçue, et ce qu'elle en a fait : `EXECUTED` ou `REFUSED` |
-
-**La dernière ligne (`→`) répond à « que s'est-il passé ? » :**
+**La fin d'une requête :**
 
 | Elle dit | Signifie |
 |---|---|
 | `EXECUTED` | l'application a agi |
 | `EXECUTED — although pepd's verdict was …` | `pepd` a dit non mais la posture est `monitor` : elle enregistre et ne bloque rien. Fermez pour bloquer ([monitor-to-closed.fr.md](../monitor-to-closed.fr.md)) |
-| `REJECTED by the cell (M1) — <raison> — <où> : <pourquoi>` | la cellule a refusé : aucun jeton émis. Le `où` nomme l'étape (identité, contrat de plan, quorum, politique…) |
+| `REJECTED by the cell (M1) — <raison> — <où> : <pourquoi>` | la cellule a refusé : aucun jeton émis |
 | `REJECTED at the TLS handshake (M1)` | pas de certificat client (ou le mauvais) : la cellule n'a jamais vu de requête |
 | `REJECTED by pepd (M2) — <raison> …` | le jeton était mauvais, rejoué ou pour autre chose, **et** la posture bloque (`closed`/`refused`) |
 | `REJECTED by the application (M2) — no-token` | la requête ne portait aucun jeton |
-| `TOKEN ISSUED by the cell, not presented …` | l'agent a reçu un jeton et ne l'a pas utilisé (ou le fichier de M2 manque) |
-| `INCOMPLETE — no end seen …` | le fichier d'une machine manque : ajoutez son `--from` |
+| `TOKEN ISSUED by the cell, not presented …` | l'agent a reçu un jeton et ne l'a pas utilisé (ou la machine qui le montrerait ne rapporte pas) |
+| `INCOMPLETE — no end seen …` | une machine a pris part et ne rapporte pas à cette console |
 
-Chaque code de raison (`opa-deny`, `plan-binding-required`, `replay`…) est expliqué à la fin d'une requête rejetée ; le
-catalogue complet est [`scripts/devtest/reasons.tsv`](../../scripts/devtest/reasons.tsv) (en anglais, comme la sortie).
-
-**La section « without a trace id ».** Un client qui n'est pas nos scripts — `curl`, un scanner, un red team — n'envoie
-pas d'identifiant. Ces requêtes sont quand même vues par la cellule (ligne `brokerd`, avec le certificat et l'adresse) et
-par l'application, et sont listées à part, une ligne par événement, du plus ancien au plus récent. C'est là qu'il faut
-regarder pour voir **votre propre attaque**.
-
-## S'en servir
-
-| Pour | Faites |
-|---|---|
-| voir une seule requête | `m1 trace … --id t-1791718709-30e71f` |
-| suivre pendant que vous testez | `watch -n 5 scripts/devtest/site.sh m1 watch` (ou `m1 watch --every 5`) ; pour `trace`, réexportez et relancez — il travaille sur des instantanés |
-| signer le plan d'une action | `m1 sign agent-i read doc-1` : il montre le plan, recalcule son hash, vous demande de taper `sign`. Toute autre réponse ne signe rien. `grant` est `sign --yes` (sans questions, le hash est quand même recalculé) |
-| fermer ou rouvrir `pepd` | `m1 mode-proof closed\|monitor` sur M1, puis `m2 mode … --proof <fichier>` sur M2 : un contrôleur pour fermer, deux pour rouvrir |
-| vérifier la piste d'audit contre le log signé | `tbp-audit verify -records … -key … -log … -vkey-file …` (voir [audit.fr.md](../audit.fr.md)) |
-
-C'est tout : **vous ne pouvez rien approuver, révoquer ni changer depuis `watch` ou `trace`.** Les seuls endroits où une
-personne agit sont `m1 sign` et `m1 mode-proof`, et tous deux disent ce qu'ils vont faire.
+Une poignée de main TLS refusée ne devient jamais une requête côté cellule : le journal de `brokerd` est le seul à la
+connaître, et l'expéditeur de M1 le lit. Elle est rattachée à la requête qu'un agent a faite sans certificat quand elles
+sont à moins de 3 secondes l'une de l'autre, et la ligne le dit.
 
 ## Recettes
 
-**« Ma requête a été refusée et je ne sais pas pourquoi. »** Lancez `m3 act …`, notez le `[trace t-…]`, exportez M2 et
-M3, puis `m1 trace --from … --id t-…`. Lisez la dernière ligne.
+**« Ma requête a été refusée et je ne sais pas pourquoi. »** Lancez `m3 act …` et regardez la console : la requête est la
+ligne du haut, l'étape rouge est le composant qui l'a arrêtée, la dernière ligne dit pourquoi.
 
-**« J'attaque la cellule avec `curl` et je veux voir ce qu'elle a vu. »** Faites votre attaque, puis `m1 trace` : vos
-requêtes sont sous *without a trace id*, avec le certificat présenté et votre adresse. Une connexion refusée à la poignée
-de main TLS s'affiche `transport … TLS handshake failed`.
+**« J'attaque la cellule avec `curl`. »** Faites votre attaque ; ouvrez l'onglet *Without a trace id*. Une connexion refusée
+à la poignée de main TLS s'affiche `transport … TLS handshake failed`.
 
-**« J'ai fermé `pepd` : qu'est-ce qui change ? »** Faites la même requête avant et après. Avant : `EXECUTED — although
-pepd's verdict was replay`. Après : `REJECTED by pepd (M2) — replay`.
+**« Je ferme `pepd` : qu'est-ce qui change ? »** Faites la même requête avant et après, et comparez les deux lignes :
+l'étape ambre *pepd verdict* devient rouge, la conclusion passe de *EXECUTED — although …* à *REJECTED by pepd*.
 
-**« Rien ne s'affiche. »** `m1 trace` écrit `no request recorded yet` tant qu'aucune requête n'a été faite *depuis que
-la cellule tourne avec la trace* (une cellule démarrée par un ancien `m1 init` ne trace pas : refaites `m1 init` sur un
-répertoire propre).
+**« Où passe le temps ? »** Faites 20 requêtes, puis lisez le tableau des percentiles. L'étape au plus grand p95 est celle
+à regarder.
 
-## Ce qu'il ne montre pas
+**« Une carte dit UNKNOWN. »** Cette machine ne rapporte plus : son expéditeur est arrêté, elle ne joint pas la console (le
+pare-feu), ou la machine est arrêtée. `site.sh m2 status` dessus. UNKNOWN n'est jamais bon signe.
 
-- **Les horloges.** Les horloges des trois machines diffèrent : les décalages *entre* machines sont indicatifs ; l'ordre
-  *dans* une machine est exact. Une poignée de main TLS refusée est rattachée **par le temps** à la requête qui
-  l'explique (le journal de la cellule note des secondes entières, à 3 s près), et la ligne le dit.
-- **La vue propre de `pepd`.** Les lignes `pepd` sont le verdict qu'il a rendu à l'application. `pepd` lui-même n'est pas
-  modifié et M2 n'a aucun interrupteur de développement.
-- **Le contenu d'un plan.** `watch` montre les plans par hash ; leur contenu s'affiche quand vous signez.
-- **Les secrets.** Aucun jeton, clé ni graine n'est jamais consigné. Les fichiers contiennent des noms d'agents, des
-  ressources, des noms de certificats et des adresses : **relisez une archive avant de la coller dans une issue
-  publique.**
+## Sans navigateur
+
+La même information, dans un terminal sur M1 — utile sur une mauvaise liaison, ou pour garder une trace. Elles lisent des
+fichiers et des sockets ; aucune ne change le test.
+
+| Commande | Montre |
+|---|---|
+| `scripts/devtest/site.sh m1 watch` (`--every 5` la répète) | la page d'état de la cellule : processus, règles, décisions, fautes, plans en attente (par hash), journal d'audit. Une source qui ne répond pas est `UNKNOWN`, et le code de sortie est non nul |
+| `scripts/devtest/site.sh m2 trace-export` et `m3 trace-export` | emballent ce que cette machine a consigné, à copier sur M1 |
+| `scripts/devtest/site.sh m1 trace --from trace-m2.tgz --from trace-m3.tgz [--id t-…]` | une chronologie par requête, avec les mêmes conclusions que la page (un test vérifie qu'elles concordent). Les requêtes sans identifiant sont listées à part, sous *without a trace id* ; une requête dont le fichier d'une machine manque se termine par *INCOMPLETE* |
+| `scripts/devtest/site.sh m1 sign <agent> <action> <ressource>` | **le seul endroit où une personne approuve quelque chose** : il montre le plan en clair, recalcule son hash, vous demande de taper `sign` |
+
+Chaque `m3 act` affiche un identifiant de trace (`[trace t-…]`) : le même identifiant voyage jusqu'à la cellule et
+l'application dans l'en-tête `X-TBP-Trace-Id`, c'est ainsi que les enregistrements de trois machines sont joints.
+
+## Ce qu'elle ne fait pas
+
+- **Elle n'agit pas.** Aucun bouton n'approuve, ne révoque, ne ferme `pepd` ni ne signe. La signature reste dans
+  `m1 sign`, la fermeture et la réouverture dans `m1 mode-proof` et `m2 mode`. Ce que devrait être une vraie console
+  d'opérateur — ce qu'elle doit faire et montrer — est la question ouverte de
+  [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) : dites-nous ce qui vous a manqué.
+- **Elle ne garde pas d'historique.** Elle tient les 2000 dernières requêtes **en mémoire**. Redémarrer la console la
+  vide ; `m1 down` puis `m1 up` la redémarrent et rejouent les événements consignés par M1, `m2 down` puis `m2 up`
+  rejouent ceux de M2 (les fichiers sont conservés) ; ceux de M3 ne sont pas rejoués.
+- **Elle n'est pas authentifiée comme un service de production.** HTTP simple, deux clés secrètes : utilisez un réseau
+  privé et un pare-feu. Tout ce qu'une requête porte — sujet, ressource, intention, adresses — est affiché **comme du
+  texte**, jamais comme du contenu de page : un red team peut y mettre n'importe quoi, la page ne l'exécute pas (un test
+  ouvre la page dans un vrai navigateur pour le vérifier). Ne collez pas une capture de la page dans une issue publique
+  sans la relire.
+- **Les horloges.** Les décalages entre machines ne sont pas montrés, car ils tromperaient. Les durées le sont, car chacune
+  est mesurée par une seule machine.
+- **La vue propre de `pepd`.** Les lignes `pepd` sont le verdict qu'il a rendu à l'application, et ses compteurs. `pepd`
+  lui-même n'est pas modifié, et M2 n'a aucun interrupteur de développement pour la console. La cellule, M1, en a un : sa
+  trace de décision est le second interrupteur de développement (`TBP_DECISION_TRACE_DEV`, derrière le même sentinel que
+  la graine d'émission).

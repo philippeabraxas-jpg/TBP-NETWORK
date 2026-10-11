@@ -1,0 +1,57 @@
+# reason	where it stops a request	what it means   (read by site.sh m1 trace; every reason here must exist in the code: test_site.sh checks)
+request-invalid	the cell: request format	the request is not exactly the JSON the cell expects (duplicate key, unknown field, trailing content)
+agent-unknown	the cell: agent registry	the subject is not an enrolled agent
+agent-quota-forbidden	the cell: agent registry	a quota was asked for by an agent that has no quota policy
+agent-quota-exceeded	the cell: agent registry	the quota asked for is above the agent's ceiling
+agent-transport-unbound	the cell: identity (mutual TLS)	the certificate presented is not the one registered for this agent
+agent-network-only	the cell: identity (mutual TLS)	this agent is bound to a certificate and may only come over the network
+skill-unknown	the cell: skill registry	no skill matches this action
+skill-scope-violation	the cell: skill registry	the action is known but the resource is outside its declared scope
+translation-failed	the cell: intent translation	the cell could not understand the intent
+epoch-unavailable	the cell: epoch	the cell has no valid epoch to sign under
+plan-binding-required	the cell: plan contract	an action of class I or W needs a plan approved by operators, and none was given
+plan-binding-invalid	the cell: plan contract	the plan binding does not verify
+plan-unknown	the cell: plan contract	no such plan is submitted
+plan-pending	the cell: plan contract	the plan is submitted but not yet approved by enough operators
+plan-expired	the cell: plan contract	the plan's approval has expired
+plan-revoked	the cell: plan contract	the plan was revoked
+plan-deviation	the cell: plan contract	the request is not a step of the approved plan
+plan-subject-mismatch	the cell: plan contract	the plan was sealed for another agent
+plan-store-fault	the cell: plan contract	the plan store failed (a system fault, alarmed)
+quorum-required	the cell: quorum	an action of class W needs the controllers' proof, and none was given
+quorum-insufficient	the cell: quorum	the controllers' proof does not reach the quorum
+envelope-deny	the cell: envelope	the action is outside the agent's envelope
+envelope-unverified	the cell: envelope	an envelope check was needed and cannot be made
+opa-deny	the cell: policy (OPA)	the signed rules do not allow this action
+opa-undefined	the cell: policy (OPA)	the signed rules gave no answer: refused
+opa-timeout	the cell: policy (OPA)	the policy engine took too long: refused
+opa-unreachable	the cell: policy (OPA)	the policy engine could not be reached: refused
+opa-overloaded	the cell: policy (OPA)	the policy engine shed this request under load
+opa-stalled	the cell: policy (OPA)	the policy engine is stalled: refused
+issuance-failed	the cell: token issuance	the decision was allow but the token could not be signed
+ok	-	allowed
+replay	pepd: token check	this token was already used once
+scope-mismatch	pepd: token check	the token was issued for another action or resource
+bad-signature	pepd: token check	the token's signature does not verify (altered or forged)
+malformed-token	pepd: token check	the token is not a well-formed token
+schema-violation	pepd: token check	the token's content does not follow the schema
+unknown-kid	pepd: token check	the token is signed by a key this server does not know
+stale-token	pepd: token check	the token is too old
+not-yet-valid	pepd: token check	the token is not valid yet (clocks apart?)
+ttl-out-of-range	pepd: token check	the token's lifetime is outside the allowed range
+policy-mismatch	pepd: token check	the token was issued under other rules than the ones in force
+epoch-mismatch	pepd: token check	the token belongs to another epoch
+seal-mismatch	pepd: token check	the object seal does not match
+token-too-large	pepd: token check	the token is too large
+bad-headers	pepd: token check	the token's headers are not acceptable
+bad-alg	pepd: token check	the token's algorithm is not acceptable
+unsupported-version	pepd: token check	the token's version is not supported
+quota-exhausted	pepd: quota	the token's quota is used up
+quota-exceeded	pepd: quota	the quota was exceeded
+no-token	the application	the request carried no token
+not-forwarded	pepd: posture	pepd did not let the request through (closed, or refused after a restart)
+pepd-no-verdict	the application	pepd could not be reached: no verdict, no action
+tls-handshake-refused	M1: transport (mutual TLS)	the TLS handshake itself was refused (no or wrong client certificate)
+tls-handshake-error	M1: transport (mutual TLS)	a connection failed during the TLS handshake
+no-answer	the network	nothing answered
+answered-without-certificate	the cell: identity (mutual TLS)	the cell answered a request that carried no client certificate

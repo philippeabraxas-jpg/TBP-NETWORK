@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>TBP dev-test console</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>TBP dev-test console</h1>
+  <span id="label" class="muted"></span>
+  <span class="grow"></span>
+  <label class="muted">show
+    <select id="filter">
+      <option value="all">everything</option>
+      <option value="executed">executed</option>
+      <option value="warn">executed, but pepd said no (monitor)</option>
+      <option value="rejected">rejected</option>
+      <option value="open">in progress / incomplete</option>
+    </select>
+  </label>
+  <button id="pause" type="button">Pause</button>
+  <span id="live" class="pill unknown">connecting…</span>
+</header>
+<p class="notice">Not for production. Read-only: this page cannot act on the test. It shows names, resources and addresses of the test machines — do not share a screenshot publicly without looking at it.</p>
+
+<section aria-labelledby="h-machines">
+  <h2 id="h-machines">Components</h2>
+  <div id="machines" class="cards"></div>
+</section>
+
+<section aria-labelledby="h-requests">
+  <div class="tabs">
+    <button id="tab-req" type="button" class="tab active">Requests <span id="count-req" class="muted"></span></button>
+    <button id="tab-loose" type="button" class="tab">Without a trace id <span id="count-loose" class="muted"></span></button>
+  </div>
+  <div class="split">
+    <div id="list" class="list" role="list"></div>
+    <div id="detail" class="detail"><p class="muted">Make a request (<code>site.sh m3 act …</code>): it appears here as it happens. Click it to see its path and where the time went.</p></div>
+  </div>
+  <div id="loose" class="list hidden"></div>
+</section>
+<section aria-labelledby="h-latency">
+  <h2 id="h-latency">Latency <span id="window" class="muted"></span></h2>
+  <div class="latency">
+    <table id="stats"><thead><tr><th>step</th><th>measured by</th><th>n</th><th>p50</th><th>p95</th><th>p99</th><th>max</th><th class="barcol"></th></tr></thead><tbody></tbody></table>
+    <div class="spark"><div class="muted">end to end, last requests (ms)</div><svg id="spark" viewBox="0 0 300 60" role="img" aria-label="end to end latency of the last requests"></svg></div>
+  </div>
+</section>
+
+<script src="/app.js"></script>
+</body>
+</html>

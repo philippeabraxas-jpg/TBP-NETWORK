@@ -53,6 +53,7 @@ Put the three machines on one private network (a cloud VPC, or a host-only netwo
 |---|---|---|---|
 | M3 → M1 | 8443/tcp | decisions, mutual TLS | M3's address only |
 | M3 → M2 | 9000/tcp | the application | M3's address only |
+| you, M2, M3 → the console (on M1 by default) | 9100/tcp | the live console: the page, and what M2 and M3 send it ([console.md](console.md)) | your address and the machines' addresses |
 | you → each | 22/tcp | ssh and `scp` | your address only |
 
 Nothing else, and **nothing from the Internet**. Use your provider's firewall or security groups for it. `pepd`
@@ -160,7 +161,7 @@ The proofs live a few minutes (about four): do steps 6–7, 9 and 10, and 14 wit
 
 ## Follow a request: from its emission to its execution or its rejection
 
-> Where the monitor is, how to read each line and how to use it: **[console.md](console.md)**.
+> Everything below is also shown live, in a browser: **[console.md](console.md)** (where it is, how to read it, how the latency is measured).
 
 Seeing *that* a request was refused is not enough in a test: you want to know **which component stopped it, and why**.
 The three machines each record what they see, and M1 lays it out as one timeline per request.
@@ -280,13 +281,12 @@ What makes a report useful: what you tried (the exact command), what you expecte
   agents').
 - **M2's measured boot uses two stand-ins** — the `pepd` binary where a broker binary would be, a placeholder file
   where an AI container would be — and records its reference at the first start. A real server measures the real ones.
-- **There is no console.** Everything is done on a command line: `m1 sign` shows you a plan and asks you to type
-  `sign`; `m1 mode-proof` signs the controllers' proofs; `m1 status` and `report` show counters; `m1 watch` is a read-only text view of the cell (processes, rules in
-  force, decisions, faults, plans waiting by hash, audit journal; a source that does not answer reads `UNKNOWN`, never
-  green; `--every 5` repeats it); the audit trail is read with `tbp-audit verify`. There is no dashboard and no screen: [console.md](console.md) says where the monitor is and how to read it. `supervisord` (read-only JSON over a Unix socket,
-  [superviseur.md](../superviseur.md)) exists in this repository but is not part of this test, and nothing in the
-  repository lets an operator *sign* from anything but the command line. What a console should show and let people
-  do, and in what form, is an open question ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): tell us what you missed.
+- **The console is a test tool, not an operator console.** It shows what happens ([console.md](console.md)): the path
+  of each request, the state of the components, the latencies. It cannot act. Approving stays in `m1 sign` (it shows
+  you a plan and asks you to type `sign`), the controllers' proofs in `m1 mode-proof`, the audit trail in
+  `tbp-audit verify`. `supervisord` (read-only JSON over a Unix socket, [superviseur.md](../superviseur.md)) exists in
+  this repository but is not part of this test. What an operator console should show and let people do, and in what
+  form, is an open question ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)): tell us what you missed.
 - **One of each.** One cell, one server, one agent host. No supervisor, no multi-cell, no 802.1X NAC, and the
   network isolation of [network-isolation.md](../network-isolation.md) is not set up: you bring the firewall.
 - **The application is a stand-in** (`scripts/devtest/site-app.py`, Python standard library), not a real service.
@@ -295,12 +295,14 @@ What makes a report useful: what you tried (the exact command), what you expecte
 
 | `site.sh` | Does |
 |---|---|
-| `m1 init --address <M1> [--listen addr:port] [--env label]` | builds the binaries, makes the keys, the signed rules, the two CAs and the agents' certificates, the environment and the two packs |
+| `m1 init --address <M1> [--listen addr:port] [--env label] [--console-url http://<C>:9100 --console-key <hex>]` | builds the binaries, makes the keys, the signed rules, the two CAs and the agents' certificates, the environment and the two packs |
 | `m1 up` / `down` / `status` | starts OPA and `brokerd` / stops them / shows them and the counters |
 | `m1 sign <agent> <action> <resource> [--yes]` | the operators' (and for class W the controllers') side of one action: submits the plan, shows it in clear, recomputes its hash, asks you to type `sign`; prints the `m3 act` line to run |
 | `m1 grant <agent> <action> <resource>` | the same as `sign --yes` (no questions; the hash is still recomputed) |
 | `m1 watch [--every SECONDS]` | a read-only view of the cell: processes, rules, decisions, faults, plans waiting (by hash), audit journal; `UNKNOWN` when a source does not answer, exit status non-zero |
 | `m1 mode-proof closed\|monitor [--controllers N]` | the controllers' proof for M2's `pepd`: one controller to close, two to reopen |
+| `m1 console-url` | the address of the live console, with its key |
+| `console up --listen <addr:port> --ingest-key <hex>` (`down`, `url`, `status`, `reset`) | the live console on a machine of its own |
 | `m1 trace [--from <archive or directory> ...] [--id <trace id>]` | the requests recorded by M1 and by the machines whose archives you give, one timeline each: who asked, what each component decided, why, how it ended |
 | `<role> trace-export` | packs what this machine recorded about the requests it saw, to carry to M1 |
 | `m1 pack` | rewrites the two packs |
