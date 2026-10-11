@@ -2,7 +2,7 @@
 # scripts/devtest/site.sh — a three-machine DEV-TEST site: M1 the cell, M2 an application server, M3 an agent.
 #
 #   scripts/devtest/site.sh m1 init --address <M1 address> [--listen <addr:port>] [--env <label>]
-#   scripts/devtest/site.sh m1 up | down | status | sign | grant | mode-proof | pack | report | reset
+#   scripts/devtest/site.sh m1 up | down | status | watch | sign | grant | mode-proof | pack | report | reset
 #   scripts/devtest/site.sh m2 init --pack m2.pack.tgz --listen <addr:port> [--env <label>]
 #   scripts/devtest/site.sh m2 up | down | status | mode | report | reset
 #   scripts/devtest/site.sh m3 init --pack m3.pack.tgz --app http://<M2 address:port> [--env <label>]
@@ -439,6 +439,76 @@ m1_status() {
   printf 'opa      : '; if [ -n "$(pid_of opa)" ] && curl -fsS --unix-socket "${OPA_SOCK}" http://localhost/health >/dev/null 2>&1; then echo up; else echo DOWN; rc=1; fi
   printf 'brokerd  : '; if [ -n "$(pid_of brokerd)" ] && curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/stats >/dev/null 2>&1; then echo up; else echo DOWN; rc=1; fi
   [ "${rc}" -ne 0 ] || echo "counters : $(curl -fsS --unix-socket "${ADMIN_SOCK}" http://localhost/v1/supervision/stats)"
+  return "${rc}"
+}
+
+# m1_watch [--every SECONDS]: a read-only view of the cell, to answer "what would a console show?" with something
+# testers can criticise (deploy/dev-test/site.md, issue #329). It only reads the admin socket's GET routes and the audit
+# journal; it signs nothing and writes nothing. The rule it follows: a source that does not answer is shown as UNKNOWN,
+# never as green, and the exit status is non-zero then. The pending plans are shown by hash: the cell keeps no plan in
+# clear (only its hash), so what a plan says is read where the operator signs it (`m1 sign`), not here.
+m1_watch() {
+  require_init
+  local every=0 rc=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --every) every=${2:-}; [[ "${every}" =~ ^[1-9][0-9]*$ ]] || die "watch: --every needs a number of seconds"; shift 2 ;;
+    *) die "usage: $0 m1 watch [--every SECONDS]" ;; esac; done
+  while :; do
+    rc=0
+    m1_watch_once || rc=1
+    [ "${every}" -gt 0 ] || return "${rc}"
+    sleep "${every}"
+    echo
+  done
+}
+
+m1_watch_once() {
+  local rc=0 get stats opa arb epoch n now line recs
+  get() { curl -fsS --max-time 3 --unix-socket "${ADMIN_SOCK}" "http://localhost/v1/supervision/$1" 2>/dev/null; }
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  echo "cell ${CELL_ID} · ${now} · read-only view (a line says UNKNOWN when its source does not answer)"
+
+  printf 'processes  : '
+  if [ -n "$(pid_of opa)" ]; then printf 'opa up'; else printf 'opa DOWN'; rc=1; fi
+  if [ -n "$(pid_of brokerd)" ]; then echo ' · brokerd up'; else echo ' · brokerd DOWN'; rc=1; fi
+
+  printf 'rules      : '
+  if arb=$(get arbitration) && opa=$(get opa); then
+    printf '%s… (signed bundle) · OPA %s' "$(jq -r '.policy_id[0:16]' <<<"${arb}")" "$(jq -r .state <<<"${opa}")"
+    [ "$(jq -r .stalled <<<"${opa}")" = "false" ] || { printf ' · STALLED'; rc=1; }
+    printf ' · unanswered %s · shed %s\n' "$(jq -r .unanswered <<<"${opa}")" "$(jq -r '.admission | .shed_queue_full + .shed_subject_share + .shed_expired' <<<"${opa}")"
+  else echo "UNKNOWN (the cell does not answer)"; rc=1; fi
+
+  printf 'decisions  : '
+  if stats=$(get stats); then
+    jq -r '"\(.requests) requests · \(.allows) allowed · \(.denies) denied (quorum \(.quorum_denies), plan \(.plan_denies), envelope \(.envelope_denies))"' <<<"${stats}"
+    printf 'faults     : '
+    if [ "$(jq -r '.issuance_failures + .leaf_failures + .translation_failures' <<<"${stats}")" = "0" ]; then echo "none (issuance, ledger leaves, translation)"
+    else jq -r '"! issuance \(.issuance_failures) · ledger leaves \(.leaf_failures) · translation \(.translation_failures)"' <<<"${stats}"; rc=1; fi
+  else echo "UNKNOWN"; printf 'faults     : UNKNOWN\n'; rc=1; fi
+
+  printf 'epoch      : '
+  if epoch=$(get epoch); then
+    if [ "$(jq -r '.mode // ""' <<<"${epoch}")" = "mono-cellule" ]; then echo "single cell, no fencing (epoch $(jq -r .epoch <<<"${epoch}"))"
+    else jq -r '"epoch \(.epoch) · authority \(.authority) · lease until \(.expires_at) · quarantined: \(.quarantined | length)"' <<<"${epoch}"; fi
+  else echo "UNKNOWN"; rc=1; fi
+
+  printf 'pending    : '
+  if [ -n "${arb:-}" ]; then
+    n=$(jq -r '.pending | length' <<<"${arb}")
+    if [ "${n}" = "0" ]; then echo "no plan waiting for approval"
+    else
+      echo "${n} plan(s) waiting (hash only — the cell keeps no plan in clear)"
+      while IFS=$'\t' read -r line; do echo "             ${line}"; done < <(jq -r '.pending[] | "\(.hash[0:16])…  \(.steps) step(s)  submitted \(.submitted_at | .[0:19])Z  expires \(.expires_at | .[0:19])Z"' <<<"${arb}")
+    fi
+  else echo "UNKNOWN"; rc=1; fi
+
+  printf 'audit      : '
+  if [ -s "${HOME_DIR}/audit/brokerd-records.jsonl" ]; then
+    if recs=$("${BIN_DIR}/tbp-audit" verify -records "${HOME_DIR}/audit/brokerd-records.jsonl" -key "${HOME_DIR}/brokerd-audit.key" 2>&1); then
+      echo "$(tail -1 <<<"${recs}" | sed -E 's/^([0-9]+) .*, ([0-9]+) échec.*/\1 record(s) checked, \2 failure(s)/') (hash match only; inclusion in the signed log: tbp-audit verify -log …)"
+    else echo "! the journal does not verify ($(tail -1 <<<"${recs}"))"; rc=1; fi
+  else echo "no record yet"; fi
   return "${rc}"
 }
 
@@ -925,6 +995,7 @@ case "${ROLE}:${CMD}" in
   m1:up) m1_up ;;
   m1:down) m1_down ;;
   m1:status) m1_status ;;
+  m1:watch) m1_watch "$@" ;;
   m1:grant) m1_sign --yes "$@" ;;
   m1:sign) m1_sign "$@" ;;
   m1:mode-proof) m1_mode_proof "$@" ;;

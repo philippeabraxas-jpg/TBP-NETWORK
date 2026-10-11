@@ -167,6 +167,35 @@ if cmp -s "${SITE}" "${WORK}/site-forged.sh"; then bad "the forged copy of site.
   else bad "a plan the broker sealed differently was signed (rc=${rc}): $(printf '%s' "${out}" | tail -3 | tr '\n' ' ')"; fi
 fi
 
+echo "== the cell as a read-only view: m1 watch"
+out=$(M1 watch 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -eq 0 ]; then ok "watch of a healthy cell exits 0"; else bad "watch of a healthy cell exited ${rc}"; fi
+says "watch: the processes" "opa up · brokerd up" "${out}"
+says "watch: the rules in force" "(signed bundle) · OPA healthy" "${out}"
+says "watch: the decisions so far" "requests" "${out}"
+says "watch: no fault" "none (issuance, ledger leaves, translation)" "${out}"
+# the signs above that were not confirmed left their plans submitted and unapproved: watch must list exactly those
+before=$(printf '%s' "${out}" | sed -n 's/^pending    : \([0-9]*\) plan(s) waiting.*/\1/p')
+if [ "${before:-0}" -ge 1 ]; then ok "watch: the plans nobody approved are listed (${before})"; else bad "watch: plans left unapproved by 'no' were not listed"; fi
+says "watch: the audit journal" "0 failure(s)" "${out}"
+# a plan submitted and not approved: seen by its hash and nothing else (the cell keeps no plan in clear)
+w="${WORK}/pending"
+mkdir -p "${w}"
+echo '{"subject":"agent-i","steps":[{"action":"read","resource":"doc-watch","params_hex":""}]}' >"${w}/plan.json"
+"${H1}/bin/quorumproof" plansubmit -cell cell-site -plan "${w}/plan.json" -key "${H1}/keys/operator-4.key" -out "${w}/sub.json" >/dev/null 2>&1
+curl -fsS --unix-socket "${H1}/run/broker-admin.sock" -X POST -d @"${w}/sub.json" http://localhost/v1/supervision/plan/submit >/dev/null 2>&1
+out=$(M1 watch 2>&1)
+after=$(printf '%s' "${out}" | sed -n 's/^pending    : \([0-9]*\) plan(s) waiting.*/\1/p')
+if [ "${after:-0}" -eq $((${before:-0} + 1)) ]; then ok "watch: a submitted plan is seen waiting, by hash"; else bad "watch: a submitted plan was not counted (${before:-?} -> ${after:-?})"; fi
+if printf '%s' "${out}" | grep -q "doc-watch"; then bad "watch shows what the plan says: the cell keeps only its hash"; else ok "…and what the plan says is not shown (the operator reads it where they sign)"; fi
+# the journal altered: the view says so and exits non-zero
+cp -- "${H1}/audit/brokerd-records.jsonl" "${WORK}/records.bak"
+sed -i '1s/"leaf"/"lebf"/' "${H1}/audit/brokerd-records.jsonl"
+out=$(M1 watch 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "the journal does not verify"; then ok "an altered audit journal is shown, and the exit status says so"; else bad "an altered journal was not caught by watch (rc=${rc})"; fi
+cp -- "${WORK}/records.bak" "${H1}/audit/brokerd-records.jsonl"
+refuses "watch: --every needs a number" "needs a number" M1 watch --every soon
+
 echo "== closing and reopening pepd: governed by the controllers"
 p=$(M1 mode-proof closed 2>&1 | proof_of)
 says "one controller closes (restricting is not widening)" '"mode":"closed"' "$(M2 mode closed --proof "${p}" 2>&1)"
@@ -223,6 +252,8 @@ says "and the application serves again" '"executed": "read doc-1"' "${out}"
 
 echo "== M1 files changed by hand"
 M1 down >/dev/null 2>&1
+out=$(M1 watch 2>&1) && rc=0 || rc=$?
+if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -q "brokerd DOWN" && printf '%s' "${out}" | grep -q '^rules      : UNKNOWN' && printf '%s' "${out}" | grep -q '^decisions  : UNKNOWN' && printf '%s' "${out}" | grep -q '^epoch      : UNKNOWN' && printf '%s' "${out}" | grep -q '^pending    : UNKNOWN'; then ok "watch of a stopped cell: DOWN and UNKNOWN, never green, exit non-zero"; else bad "watch of a stopped cell was not alarming (rc=${rc})"; fi
 cp -- "${H1}/m1.env" "${WORK}/m1.env.bak"
 sed -i 's/^TBP_QUORUM_MIN=2$/TBP_QUORUM_MIN=1/' "${H1}/m1.env"
 refuses "M1: the quorum lowered in the environment" "exited at start" M1 up
@@ -253,7 +284,7 @@ done
 if [ "${leak}" -eq 0 ]; then ok "no report holds a key, seed, path, address or host name"; else bad "a report leaks something"; fi
 
 echo "== the page (both languages) still names what it announces"
-for kw in "site.sh m1 sign" "m1 grant" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
+for kw in "site.sh m1 sign" "m1 grant" "m1 watch" "site.sh m3 act" "mode-proof" "forwarded" "agent-transport-unbound" "provisioning-divergence" "manifest-boot-divergence" "quorum-settings" "HTTPS server" "report" "SECURITY.md" "M1" "M2" "M3"; do
   for lang in site.md site.fr.md; do
     if grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${lang}"; then :; else bad "deploy/dev-test/${lang} no longer mentions '${kw}'"; fi
   done

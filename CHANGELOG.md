@@ -19,6 +19,10 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   - **`site.sh m1 sign`**: the operators' side as a person does it — the plan is shown in clear, its hash is
     recomputed by `quorumproof planhash` (a plan the broker sealed differently signs nothing), and the operator types
     `sign`. `grant` is `sign --yes`. There is no monitoring or signing console in this release; the pages say so, and [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) asks what one should do and show.
+  - **`site.sh m1 watch`**: a read-only text view of the cell, a first answer to
+    [#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329) that testers can criticise. A source that
+    does not answer reads `UNKNOWN` (never green) and the exit status says so; plans waiting are shown by hash,
+    because the cell keeps no plan in clear.
   - **One machine** (`scripts/devtest/devtest.sh`): the cell alone, for a quick look.
   - Each machine has a `report` (system, versions, timings, counters, latencies, the environment label the tester
     gave; no key, seed, path, address or host name) for testers to send us, and there is a **Dev-test feedback**

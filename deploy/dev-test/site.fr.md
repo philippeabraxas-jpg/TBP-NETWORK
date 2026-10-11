@@ -242,8 +242,10 @@ passé, et les rapports.
   fichier vide à la place d'un conteneur d'IA — et enregistre sa référence au premier démarrage. Un vrai serveur
   mesure les vrais.
 - **Il n'y a pas de console.** Tout se fait en ligne de commande : `m1 sign` vous montre un plan et vous demande de
-  taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ;
-  la piste d'audit se lit avec `tbp-audit verify`. Il n'y a ni tableau de bord ni écran. `supervisord` (JSON en lecture seule sur un socket Unix,
+  taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ; `m1 watch` est une vue texte en lecture seule de la cellule
+  (processus, règles en vigueur, décisions, fautes, plans en attente par hash, journal d'audit ; une source qui ne
+  répond pas s'affiche `UNKNOWN`, jamais en vert ; `--every 5` la répète) ; la piste d'audit se lit avec
+  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran. `supervisord` (JSON en lecture seule sur un socket Unix,
   [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test, et rien dans le
   dépôt ne permet à un opérateur de *signer* autrement qu'en ligne de commande. Ce qu'une console doit montrer et
   permettre de faire, et sous quelle forme, est une question ouverte ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.
@@ -261,6 +263,7 @@ passé, et les rapports.
 | `m1 up` / `down` / `status` | démarre OPA et `brokerd` / les arrête / les montre avec les compteurs |
 | `m1 sign <agent> <action> <ressource> [--yes]` | le côté opérateurs (et, pour la classe W, contrôleurs) d'une action : soumet le plan, le montre en clair, recalcule son hash, vous demande de taper `sign` ; affiche la ligne `m3 act` à exécuter |
 | `m1 grant <agent> <action> <ressource>` | identique à `sign --yes` (sans questions ; le hash est quand même recalculé) |
+| `m1 watch [--every SECONDES]` | une vue en lecture seule de la cellule : processus, règles, décisions, fautes, plans en attente (par hash), journal d'audit ; `UNKNOWN` quand une source ne répond pas, code de sortie non nul |
 | `m1 mode-proof closed\|monitor [--controllers N]` | la preuve des contrôleurs pour le `pepd` de M2 : un contrôleur pour fermer, deux pour rouvrir |
 | `m1 pack` | réécrit les deux paquets |
 | `m2 init --pack <m2.pack.tgz> --listen <M2>:9000 [--env étiquette]` | décompresse, écrit l'environnement de `pepd` (un vrai démarrage mesuré, aucune échappatoire de développement) |
