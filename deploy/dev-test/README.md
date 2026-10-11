@@ -21,6 +21,8 @@ whether the code is sound; this asks whether the whole thing **works**, and whet
 | What it does not | key custody, separation between real people, a genesis ceremony | tokens at a server, enrolment, the network |
 | For | the functional test and the red team: **this is the DEV-TEST release** | a quick look at the cell |
 
+**Watching what happens:** there is no screen — [console.md](console.md) says where the monitor is (three commands on M1), how to read it and how to use it, so you do not have to look for it.
+
 If you try one thing, try the site: it is the one that matches how TBP is deployed.
 
 ## What is simplified, and what is not
@@ -28,7 +30,8 @@ If you try one thing, try the site: it is the one that matches how TBP is deploy
 | | In both | Why |
 |---|---|---|
 | Keys, genesis | generated for you, no ceremony, no HSM | **simplified**: custody and the separation of real people are not tested here |
-| Issuer key | a seed file instead of an HSM — on the cell only | **simplified**, the one development switch in use: the cell declares `/etc/tbp/DEV_ENVIRONMENT` and raises a high-priority alarm at every start |
+| Decision trace | Site profile only: each machine records the requests it sees, `m1 trace` lays them out (who asked, what each component decided, why) | **added for testing**, a second development switch on the cell (the trace holds names and intents in clear); `pepd` is untouched |
+| Issuer key | a seed file instead of an HSM — on the cell only | **simplified**, a development switch in use: the cell declares `/etc/tbp/DEV_ENVIRONMENT` and raises a high-priority alarm at every start |
 | Quorum, roles | `k = 2` of 3 controllers, four operator keys with roles | **not simplified** |
 | Rules | the example bundle, restricted capabilities, signed; OPA refuses an altered one | **not simplified** |
 | Provisioning, measured boot | on: a changed trust file or scale stops the start | **not simplified** |

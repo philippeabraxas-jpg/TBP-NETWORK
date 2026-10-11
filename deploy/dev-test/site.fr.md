@@ -105,7 +105,7 @@ scp ~/tbp-site-m1/packs/m3.pack.tgz <utilisateur>@<M3>:      # les clés privée
 ```
 
 `init` demande `sudo` une fois, pour écrire `/etc/tbp/DEV_ENVIRONMENT` : M1 utilise une graine d'émetteur en
-fichier au lieu d'un HSM, la seule échappatoire de développement utilisée, et `brokerd` la refuse sans ce sentinel.
+fichier au lieu d'un HSM, l'un des deux interrupteurs de développement utilisés (l'autre est la trace de décision, [plus bas](#suivre-une-requête--de-son-émission-à-son-exécution-ou-à-son-rejet)), et `brokerd` les refuse sans ce sentinel.
 Il lève une alarme de haute priorité à chaque démarrage ; c'est attendu. M2 et M3 n'ont pas besoin de sentinel.
 
 **Sur M2** — le serveur applicatif :
@@ -155,6 +155,8 @@ Jouez ces étapes dans l'ordre. Chacune dit où elle se joue, et ce qu'elle prou
 | 13 | M2 | `site.sh m2 down`, `site.sh m2 up`, puis l'étape 3 | `pepd's posture: refused`, puis `[403]` avec `"forwarded": false` | un redémarrage ne rouvre jamais en silence |
 | 14 | M1, M2 | `m1 mode-proof monitor` → `m2 mode monitor --proof`, puis l'étape 3 | `[200]` de nouveau | deux contrôleurs reconfirment la posture |
 
+**À chaque étape, suivez la requête.** Chaque `m3 act` affiche un identifiant de trace ; `m1 trace` montre où cette requête est allée, quel composant l'a arrêtée, et pourquoi ([plus bas](#suivre-une-requête--de-son-émission-à-son-exécution-ou-à-son-rejet)). Les étapes 1, 5, 8, 12 et 13 sont celles où le *pourquoi* compte.
+
 **Lisez `forwarded`, pas `allow`.** L'application de M2 agit quand `pepd` dit `forwarded: true`, et c'est ce qu'elle
 doit faire : en *refused*, le verdict peut porter à la fois `"allow": true` et `"forwarded": false` (le jeton est
 valide, la posture bloque), et en *monitor* une requête refusée est transmise quand même. Une vraie application suit
@@ -162,6 +164,58 @@ valide, la posture bloque), et en *monitor* une requête refusée est transmise 
 
 Les preuves vivent quelques minutes (environ quatre) : faites les étapes 6–7, 9 et 10, et 14 sans longue pause
 entre les machines.
+
+## Suivre une requête : de son émission à son exécution ou à son rejet
+
+> Où est le moniteur, comment lire chaque ligne et s'en servir : **[console.fr.md](console.fr.md)**.
+
+Savoir *qu'*une requête est refusée ne suffit pas dans un test : il faut savoir **quel composant l'a arrêtée, et pourquoi**.
+Chacune des trois machines consigne ce qu'elle voit, et M1 en fait une chronologie par requête.
+
+```
+scripts/devtest/site.sh m3 act agent-i read doc-1      # affiche  [trace t-1760180000-3fa2c1]
+scripts/devtest/site.sh m2 trace-export                # sur M2 : emballe ce que M2 a vu    → ~/tbp-site-m2/trace-m2.tgz
+scripts/devtest/site.sh m3 trace-export                # sur M3 : emballe ce que M3 a vu    → ~/tbp-site-m3/trace-m3.tgz
+scp <M2>:tbp-site-m2/trace-m2.tgz <M3>:tbp-site-m3/trace-m3.tgz .          # vers M1 (ou tout endroit que M1 lit)
+scripts/devtest/site.sh m1 trace --from trace-m2.tgz --from trace-m3.tgz [--id t-1760180000-3fa2c1]
+```
+
+```
+t-1760180000-3fa2c1   agent-i asks: read doc-1
+  +0.000s  M3  agent     agent-i asks: read doc-1   [certificate: agent-i]
+  +0.772s  M1  brokerd   ALLOW ok   [agent-i · read doc-1 · certificate agent-i · mtls from 10.0.0.9 · 746.4 ms · jti a2332e25…]
+  +0.790s  M3  agent     got: allow ok
+  +0.821s  M2  app       request received: read doc-1 with a token   [from 10.0.0.9]
+  +1.077s  M2  pepd      verdict allow ok   [posture monitor · forwarded true · 251.5 ms]
+  +1.077s  M2  app       EXECUTED   [HTTP 200]
+  → EXECUTED
+```
+
+Chaque ligne dit **où** (M1/M2/M3 et le composant), **ce qui a été décidé** et **pourquoi** (le code de raison,
+expliqué à la fin d'une requête rejetée : *« REJECTED by the cell (M1) — plan-binding-required — the cell: plan
+contract: an action of class I or W needs a plan approved by operators, and none was given »*). Le catalogue des
+explications est [`scripts/devtest/reasons.tsv`](../../scripts/devtest/reasons.tsv) (en anglais, comme la sortie). Dans
+la posture monitor, une requête que `pepd` refuserait s'exécute quand même, et la conclusion le dit :
+*« EXECUTED — although pepd's verdict was replay »*.
+
+**Ce que cela demande, et ce que cela expose.** L'identifiant voyage de `m3 act` vers la cellule et vers l'application
+dans l'en-tête `X-TBP-Trace-Id`. Pour montrer le côté de la cellule — le certificat présenté, l'intention reçue, la
+raison — le `brokerd` de M1 tourne avec un interrupteur de développement de plus, `TBP_DECISION_TRACE_DEV` (il exige le
+même sentinel que la graine d'émission et figure avec elle dans l'alarme de démarrage et dans la liste des interrupteurs
+de développement actifs). **`pepd` n'est pas modifié et M2 n'a toujours aucun interrupteur de développement** : le côté
+M2 est le verdict que `pepd` a rendu à l'application, que l'application consigne.
+
+**Requêtes sans identifiant.** Qui attaque avec `curl` n'envoie pas d'identifiant. Ses requêtes sont quand même vues —
+la décision de la cellule avec le certificat et l'adresse d'où elle vient, le refus de l'application — et listées à
+part, sous *without a trace id*. Une poignée de main TLS refusée ne devient jamais une requête côté cellule : elle est
+lue dans le journal de `brokerd` (qui note des secondes entières) et rattachée à la requête de l'agent faite sans
+certificat quand elles sont à moins de trois secondes l'une de l'autre, et le dit.
+
+**Limites.** Les horloges des trois machines diffèrent : les écarts entre machines sont indicatifs (à la précision de
+votre NTP) ; l'ordre *dans* une machine est exact. Une requête n'est complète que si vous avez donné à `m1 trace` les
+fichiers de toutes les machines qui y ont pris part (sinon elle finit *INCOMPLETE*). La trace contient des noms
+d'agents, des ressources, des noms de certificats et des adresses — **jamais un jeton, une clé ou une graine** — et
+chaque fichier est en `0600` ; relisez une archive avant de la coller dans une issue publique.
 
 ## L'attaquer
 
@@ -235,7 +289,7 @@ passé, et les rapports.
 - **La garde des clés et la séparation entre personnes.** Toutes les clés de gouvernance — celles des contrôleurs,
   des opérateurs, des CA — sont dans un seul dossier sur M1, sous un seul utilisateur. La compromission de cet
   utilisateur est la compromission de la cellule. Un vrai site l'évite avec des personnes distinctes et des HSM.
-- **La clé d'émission est une graine en fichier**, c'est pourquoi M1 déclare le sentinel de développement.
+- **La clé d'émission est une graine en fichier**, et la cellule écrit une trace de décision avec noms et intentions en clair : c'est pourquoi M1 déclare le sentinel de développement.
 - **Les certificats vivent 30 jours**, émis par deux CA sur M1 (une pour le certificat de la cellule, une dédiée aux
   agents).
 - **Le démarrage mesuré de M2 utilise deux substituts** — le binaire `pepd` à la place d'un binaire de broker, un
@@ -245,7 +299,7 @@ passé, et les rapports.
   taper `sign` ; `m1 mode-proof` signe les preuves des contrôleurs ; `m1 status` et `report` donnent des compteurs ; `m1 watch` est une vue texte en lecture seule de la cellule
   (processus, règles en vigueur, décisions, fautes, plans en attente par hash, journal d'audit ; une source qui ne
   répond pas s'affiche `UNKNOWN`, jamais en vert ; `--every 5` la répète) ; la piste d'audit se lit avec
-  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran. `supervisord` (JSON en lecture seule sur un socket Unix,
+  `tbp-audit verify`. Il n'y a ni tableau de bord ni écran : [console.fr.md](console.fr.md) dit où est le moniteur et comment le lire. `supervisord` (JSON en lecture seule sur un socket Unix,
   [superviseur.fr.md](../superviseur.fr.md)) existe dans ce dépôt mais ne fait pas partie de ce test, et rien dans le
   dépôt ne permet à un opérateur de *signer* autrement qu'en ligne de commande. Ce qu'une console doit montrer et
   permettre de faire, et sous quelle forme, est une question ouverte ([#329](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/329)) : dites-nous ce qui vous a manqué.
@@ -265,6 +319,8 @@ passé, et les rapports.
 | `m1 grant <agent> <action> <ressource>` | identique à `sign --yes` (sans questions ; le hash est quand même recalculé) |
 | `m1 watch [--every SECONDES]` | une vue en lecture seule de la cellule : processus, règles, décisions, fautes, plans en attente (par hash), journal d'audit ; `UNKNOWN` quand une source ne répond pas, code de sortie non nul |
 | `m1 mode-proof closed\|monitor [--controllers N]` | la preuve des contrôleurs pour le `pepd` de M2 : un contrôleur pour fermer, deux pour rouvrir |
+| `m1 trace [--from <archive ou répertoire> ...] [--id <identifiant>]` | les requêtes consignées par M1 et par les machines dont vous donnez les archives, une chronologie chacune : qui a demandé, ce que chaque composant a décidé, pourquoi, comment cela s'est terminé |
+| `<rôle> trace-export` | emballe ce que cette machine a consigné des requêtes qu'elle a vues, à porter vers M1 |
 | `m1 pack` | réécrit les deux paquets |
 | `m2 init --pack <m2.pack.tgz> --listen <M2>:9000 [--env étiquette]` | décompresse, écrit l'environnement de `pepd` (un vrai démarrage mesuré, aucune échappatoire de développement) |
 | `m2 up` / `down` / `status` | démarre OPA, `pepd` et l'application / les arrête / les montre |

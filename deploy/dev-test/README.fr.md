@@ -23,6 +23,8 @@ demande si l'ensemble **fonctionne**, et si vous pouvez passer à travers.
 | Ce que cela ne teste pas | la garde des clés, la séparation entre de vraies personnes, une cérémonie de genèse | les jetons chez un serveur, l'inscription, le réseau |
 | Pour | le test fonctionnel et le red team : **c'est la release DEV-TEST** | un coup d'œil rapide à la cellule |
 
+**Voir ce qui se passe :** il n'y a pas d'écran — [console.fr.md](console.fr.md) dit où est le moniteur (trois commandes sur M1), comment le lire et s'en servir, pour que vous n'ayez rien à chercher.
+
 Si vous n'essayez qu'une chose, essayez le site : c'est celui qui correspond à la façon dont TBP se déploie.
 
 ## Ce qui est simplifié, et ce qui ne l'est pas
@@ -30,7 +32,8 @@ Si vous n'essayez qu'une chose, essayez le site : c'est celui qui correspond à 
 | | Dans les deux | Pourquoi |
 |---|---|---|
 | Clés, genèse | générées pour vous, sans cérémonie ni HSM | **simplifié** : la garde des clés et la séparation de vraies personnes ne sont pas testées ici |
-| Clé d'émission | un fichier de graine au lieu d'un HSM — sur la cellule seulement | **simplifié**, la seule échappatoire de développement utilisée : la cellule déclare `/etc/tbp/DEV_ENVIRONMENT` et lève une alarme de haute priorité à chaque démarrage |
+| Trace de décision | profil Site seulement : chaque machine consigne les requêtes qu'elle voit, `m1 trace` les présente (qui a demandé, ce que chaque composant a décidé, pourquoi) | **ajouté pour le test**, un second interrupteur de développement sur la cellule (la trace contient noms et intentions en clair) ; `pepd` n'est pas modifié |
+| Clé d'émission | un fichier de graine au lieu d'un HSM — sur la cellule seulement | **simplifié**, un interrupteur de développement utilisé : la cellule déclare `/etc/tbp/DEV_ENVIRONMENT` et lève une alarme de haute priorité à chaque démarrage |
 | Quorum, rôles | `k = 2` sur 3 contrôleurs, quatre clés d'opérateur avec rôles | **non simplifié** |
 | Règles | le bundle d'exemple, capabilities restreintes, signé ; OPA refuse un bundle altéré | **non simplifié** |
 | Provisionnement, démarrage mesuré | actifs : un fichier de confiance ou une échelle modifiés arrêtent le démarrage | **non simplifié** |

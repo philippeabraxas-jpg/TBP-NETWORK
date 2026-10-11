@@ -84,6 +84,13 @@
 //	                        drapeau dev dédié — désormais soumise au même
 //	                        sentinel devmode.DefaultSentinelPath que
 //	                        TBP_OPA_INSECURE_TCP_DEV ci-dessus
+//	TBP_DECISION_TRACE_DEV  chemin d'un fichier de trace de décision (une ligne JSON par
+//	                        décision : sujet, intention, identité du certificat, verdict, raison,
+//	                        jti, identifiant de corrélation X-TBP-Trace-Id). BANC D'ESSAI
+//	                        UNIQUEMENT (issue #329) : échappatoire dev, soumise au sentinel
+//	                        devmode.DefaultSentinelPath (#113) comme la graine d'émetteur, avec
+//	                        alarme au démarrage et feuille des échappatoires actives (#208). La
+//	                        trace s'écrit après le verdict et ne peut pas le changer.
 //	TBP_ISSUER_PKCS11_MODULE       chemin du module PKCS#11 (.so) — HSM
 //	                        réel ou SoftHSM2 ; la clé privée ne quitte
 //	                        jamais le module (broker.PKCS11Signer)
@@ -216,6 +223,7 @@ import (
 	broker "github.com/philippeabraxas-jpg/TBP-NETWORK/src/broker"
 	cluster "github.com/philippeabraxas-jpg/TBP-NETWORK/src/cluster"
 	devmode "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devmode"
+	devtrace "github.com/philippeabraxas-jpg/TBP-NETWORK/src/devtrace"
 	pep "github.com/philippeabraxas-jpg/TBP-NETWORK/src/pep"
 	registry "github.com/philippeabraxas-jpg/TBP-NETWORK/src/registry"
 	strictjson "github.com/philippeabraxas-jpg/TBP-NETWORK/src/strictjson"
@@ -270,6 +278,7 @@ type config struct {
 	cellID      string
 	salt        []byte
 	devFlags    []string // échappatoires dev actives — consignées en feuille (#208)
+	traceFile   string   // TBP_DECISION_TRACE_DEV : trace de décision d'un banc d'essai (#329), échappatoire dev
 	policyID    [32]byte
 	registryDir string
 	// journal d'enregistrements d'audit (#275) : clair chiffré des feuilles
@@ -434,7 +443,8 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		return nil, errors.New("TBP_ISSUER_PKCS11_MODULE, _TOKEN_LABEL, _KEY_LABEL et _PIN_FILE sont tous requis ensemble")
 	}
 	provDisabled := getenv("TBP_PROVISIONING_DISABLED_DEV_UNSAFE") == "1"
-	devFlags := devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile, provDisabled)
+	traceFile := getenv("TBP_DECISION_TRACE_DEV")
+	devFlags := devEscapeHatchFlags(opaInsecureTCPDev, issuerSeedFile, provDisabled, traceFile)
 	if err := devmode.RequireDeclared(devmode.DefaultSentinelPath, stat, devFlags); err != nil {
 		return nil, err
 	}
@@ -539,6 +549,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 		cellID:               cellID,
 		salt:                 salt,
 		devFlags:             devFlags,
+		traceFile:            traceFile,
 		policyID:             policy,
 		registryDir:          registryDir,
 		auditRecords:         auditRecords,
@@ -587,7 +598,7 @@ func loadConfig(getenv func(string) string, stat func(string) (os.FileInfo, erro
 // échappatoires OPA (#92), la seed de dev était jusqu'ici acceptée SANS
 // AUCUN drapeau dédié, seule sa présence suffisait à choisir la custody
 // dev plutôt que HSM.
-func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string, provisioningDisabled bool) []string {
+func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string, provisioningDisabled bool, decisionTraceFile string) []string {
 	var active []string
 	if opaInsecureTCPDev {
 		active = append(active, "TBP_OPA_INSECURE_TCP_DEV")
@@ -598,7 +609,22 @@ func devEscapeHatchFlags(opaInsecureTCPDev bool, issuerSeedFile string, provisio
 	if provisioningDisabled {
 		active = append(active, "TBP_PROVISIONING_DISABLED_DEV_UNSAFE")
 	}
+	if decisionTraceFile != "" {
+		active = append(active, "TBP_DECISION_TRACE_DEV")
+	}
 	return active
+}
+
+// openDecisionTrace ouvre la trace de décision du banc d'essai, ou rend un Sink nul si l'échappatoire n'est pas active.
+func openDecisionTrace(path string) (*devtrace.Sink, error) {
+	if path == "" {
+		return nil, nil
+	}
+	sink, err := devtrace.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("TBP_DECISION_TRACE_DEV : %w", err)
+	}
+	return sink, nil
 }
 
 // run assemble la pile et sert jusqu'à l'annulation du contexte.
@@ -952,7 +978,14 @@ func run(ctx context.Context, getenv func(string) string, stat func(string) (os.
 	if err != nil {
 		return fmt.Errorf("broker: %w", err)
 	}
-	srv, err := broker.NewServer(broker.ServerOptions{Broker: brk})
+	// Trace de décision d'un banc d'essai (#329) : seulement derrière l'échappatoire dev déclarée au chargement de la
+	// configuration (sentinel #113, alarme, feuille #208). Le sujet et l'intention y figurent en clair : jamais en production.
+	traceSink, err := openDecisionTrace(cfg.traceFile)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = traceSink.Close() }()
+	srv, err := broker.NewServer(broker.ServerOptions{Broker: brk, Trace: traceSink})
 	if err != nil {
 		return err
 	}
