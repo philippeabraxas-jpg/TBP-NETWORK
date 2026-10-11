@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/devtest/devtest.sh — a DEV-TEST deployment of TBP scale 2, in one command.
+# scripts/devtest/devtest.sh — the decision plane of a TBP scale-2 cell (brokerd + OPA), as a DEV-TEST, in one command.
 #
 #   scripts/devtest/devtest.sh init      # keys, rules, bundle, environment — once
 #   scripts/devtest/devtest.sh up        # OPA + brokerd, in the background

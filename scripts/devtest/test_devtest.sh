@@ -170,7 +170,14 @@ for kw in "duplicate-key" "unknown-field" "body-unreadable" "quorum-required" "D
     if grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/${lang}"; then :; else bad "deploy/dev-test/${lang} no longer mentions '${kw}'"; fi
   done
 done
-ok "deploy/dev-test/README.md and README.fr.md name every documented answer"
+# the page must keep saying what it does not test yet, in each language
+for kw in "nothing checks them yet" "stage 2" "stage 3"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/README.md" || bad "deploy/dev-test/README.md no longer says '${kw}'"
+done
+for kw in "personne ne les vérifie encore" "étape 2" "étape 3"; do
+  grep -qF -- "${kw}" "${SCRIPT_DIR}/../../deploy/dev-test/README.fr.md" || bad "deploy/dev-test/README.fr.md ne dit plus '${kw}'"
+done
+ok "deploy/dev-test/README.md and README.fr.md name every documented answer, and what is not tested yet"
 
 echo "== reset"
 "${DEVTEST}" down >/dev/null 2>&1

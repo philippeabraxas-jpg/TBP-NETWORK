@@ -1,4 +1,4 @@
-# deploy/dev-test — lancer une cellule d'échelle 2, l'attaquer, et nous dire ce qui s'est passé
+# deploy/dev-test — le plan de décision d'une cellule d'échelle 2 : le lancer, l'attaquer, nous dire ce qui s'est passé
 
 _English version: [README.md](README.md)._
 
@@ -6,11 +6,44 @@ _English version: [README.md](README.md)._
 > sur la garde des clés, sur la séparation entre de vraies personnes, ni sur une cérémonie de genèse. Utilisez-le
 > sur une machine virtuelle que vous pouvez perdre, sans donnée réelle et sans agent réel derrière.
 
-Une commande met en place une cellule d'échelle 2 — `brokerd` et son OPA, la même chaîne que
-[scale-2.fr.md](../scale-2.fr.md) construit à la main — pour que vous puissiez la lancer, chercher à la casser et
-signaler ce que vous trouvez, sans y passer un après-midi de cérémonies de clés. L'objectif est de tester **la
+Une commande met en place le **plan de décision** d'une cellule d'échelle 2 — `brokerd` et son OPA, la même chaîne
+que [scale-2.fr.md](../scale-2.fr.md) construit à la main — pour que vous puissiez le lancer, chercher à le casser
+et signaler ce que vous trouvez, sans y passer un après-midi de cérémonies de clés. L'objectif est de tester **la
 vraie chose** : les mêmes binaires, les mêmes chemins de code, les mêmes refus. Plus il y a de gens qui cherchent à
 la casser maintenant, moins une release de production portera de failles.
+
+## Ce que cela teste, et ce que cela ne teste pas encore
+
+Un site d'échelle 2, c'est **plusieurs machines** derrière un `brokerd` : des serveurs applicatifs qui font tourner
+chacun un `pepd`, des agents sur leurs propres machines, inscrits dans la cellule. Cette première étape ne fait
+tourner que le plan de décision de la cellule, sur une machine. Lisez le tableau avant de choisir quoi attaquer.
+
+| Partie d'une cellule d'échelle 2 | Testé ici |
+|---|---|
+| Admission par la cellule : registre des agents, classe résolue par la cellule, requêtes strictes | **oui** |
+| Règles : un bundle signé sur OPA, capabilities restreintes | **oui** |
+| Plans : soumission signée, séparation des rôles, `k` approbations, soumetteur ≠ approbateur | **oui** |
+| Quorum de classe W : `k = 2` sur 3 contrôleurs, preuves à usage unique | **oui** |
+| Jetons : émis et signés par `brokerd` | **oui — mais personne ne les vérifie encore** |
+| Jetons au point d'application : validation, expiration, rejeu, sceau d'objet, quota (`pepd`) | **non** — étape 2 |
+| Témoin de provisionnement et démarrage fail-closed | **oui** |
+| Machines inscrites et liées à un certificat, listener mTLS, un agent sur une autre machine | **non** — étape 3 |
+| Isolation réseau entre les agents et l'extérieur | **non** — étape 3 |
+| Superviseur, multi-cellule | **non** |
+
+Les étapes, chacune un déploiement que vous pouvez lancer et attaquer :
+
+1. **Celle-ci.** Le plan de décision sur une machine.
+2. **Ensuite : `pepd` sur la même machine, comme serveur applicatif.** Un jeton émis par `brokerd` est présenté à
+   `pepd`, qui le vérifie : falsifié, expiré, rejoué, mauvais objet, hors quota. Cela teste le chemin du jeton de
+   bout en bout. Pas encore de seconde machine.
+3. **Après : trois machines** sur un réseau privé — la cellule, un serveur qui fait tourner `pepd`, un agent — avec
+   l'agent inscrit dans le registre et lié à son certificat, le listener mTLS avec une CA d'agents, et le contrôle
+   d'isolation réseau (étape 7 de [scale-2.fr.md](../scale-2.fr.md)). C'est le vrai test d'échelle 2.
+
+Tant que l'étape 2 n'existe pas, un jeton émis par `brokerd` n'est présenté à personne : un défaut dans la façon
+dont il est vérifié ne peut pas être trouvé avec cette installation. Nous le disons, plutôt que de laisser une
+`demo` verte suggérer le contraire.
 
 ## En dix minutes
 
@@ -52,7 +85,7 @@ Si `demo` ne se termine pas par `demo passed`, c'est déjà une trouvaille : lan
 
 ## De quelle machine avez-vous besoin
 
-**Une seule.** Dans cette installation, la cellule, l'agent, les opérateurs, les contrôleurs et l'attaquant sont
+**Une seule, à cette étape** (les étapes 2 et 3 ci-dessus ajoutent `pepd` puis d'autres machines). Ici, la cellule, l'agent, les opérateurs, les contrôleurs et l'attaquant sont
 des rôles que vous jouez sur la même machine virtuelle, par des sockets Unix dans un dossier que seul votre
 utilisateur peut ouvrir. Rien n'écoute en TCP : pas de port à ouvrir, pas de seconde machine d'où attaquer, pas de
 service cloud dont dépendre.

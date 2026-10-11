@@ -14,21 +14,24 @@ everything around it — NAC, PEPs, cell registries — that extends TBP's
 governance from a single machine to a network of entities that have to
 trust each other without simply trusting each other.
 
-## Try it: a DEV-TEST deployment in about ten minutes
+## Try it: the decision plane of a scale-2 cell, in about ten minutes
 
 > **Not for production.** Throw-away keys, one machine, no real data. It exists so that you can try to break
 > it before a production release does.
 
-TBP-NETWORK ships a one-machine deployment of scale 2 — `brokerd` and its OPA, `k = 2` of 3 controllers, four
-operator keys with roles — made with one command. It runs the real binaries with the real enforcement; only the
-key ceremony is simplified.
+TBP-NETWORK ships a one-machine test of the **decision plane** of a scale-2 cell — `brokerd` and its OPA,
+`k = 2` of 3 controllers, four operator keys with roles — made with one command. It decides, checks plans and
+quorums, and signs tokens, with the real binaries and the real enforcement; only the key ceremony is simplified.
+It does **not yet** include the enforcement point (`pepd`) that checks those tokens on a server, nor machines that
+enrol and connect over the network: a scale-2 site is several machines, and those are the next stages, listed in
+the page below.
 
 ```bash
 scripts/devtest/devtest.sh init && scripts/devtest/devtest.sh up && scripts/devtest/devtest.sh demo
 ```
 
 Everything else is in **[deploy/dev-test/](deploy/dev-test/README.md)**: the exact steps from a fresh Debian 12
-machine, which machine you need (one), what it does and does not prove, three positions to attack it from, and how
+machine, what it tests and what it does not yet, which machine you need, what it does and does not prove, three positions to attack it from, and how
 to send us your numbers and comments — we want them. Anything exploitable goes through
 [SECURITY.md](SECURITY.md), not a public issue.
 

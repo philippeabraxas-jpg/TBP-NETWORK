@@ -8,9 +8,10 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Added
-- **A DEV-TEST deployment, in one command** (`scripts/devtest/devtest.sh`, [deploy/dev-test/](deploy/dev-test/README.md)):
-  keys, signed rules and environment for a scale-2 cell (`k = 2` of 3, four operator keys with roles), then
-  `brokerd` and its OPA, to run the real binaries and attack them on a throw-away machine. **Not for production**:
+- **A DEV-TEST of the decision plane of a scale-2 cell, in one command** (`scripts/devtest/devtest.sh`, [deploy/dev-test/](deploy/dev-test/README.md)):
+  keys, signed rules and environment (`k = 2` of 3, four operator keys with roles), then `brokerd` and its OPA, to
+  run the real binaries and attack them on a throw-away machine. It does not yet include `pepd` (so nothing checks
+  the tokens `brokerd` issues) nor machines enrolled over the network; the stages that add them are in the page. **Not for production**:
   the keys are thrown away and sit on one machine, and the issuer key is a seed file, so it declares the
   development sentinel. `devtest.sh demo` runs 12 checks, `devtest.sh report` prints numbers with no secret for testers to send us, and
   `test_devtest.sh` runs in CI, including every attempt the documentation tells testers to make.

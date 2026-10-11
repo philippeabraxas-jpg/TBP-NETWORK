@@ -1,4 +1,4 @@
-# deploy/dev-test — run a scale-2 cell, attack it, and tell us what happened
+# deploy/dev-test — the decision plane of a scale-2 cell: run it, attack it, tell us what happened
 
 _Version française : [README.fr.md](README.fr.md)._
 
@@ -6,10 +6,42 @@ _Version française : [README.fr.md](README.fr.md)._
 > about key custody, about separation between real people, or about a genesis ceremony. Use it on a virtual
 > machine you can lose, with no real data and no real agent behind it.
 
-One command sets up a scale-2 cell — `brokerd` and its OPA, the same chain [scale-2.md](../scale-2.md) builds by
-hand — so that you can run it, try to break it, and report what you find, without spending an afternoon on key
-ceremonies first. The point is to test **the real thing**: the same binaries, the same code paths, the same
+One command sets up the **decision plane** of a scale-2 cell — `brokerd` and its OPA, the same chain
+[scale-2.md](../scale-2.md) builds by hand — so that you can run it, try to break it, and report what you find,
+without spending an afternoon on key ceremonies first. The point is to test **the real thing**: the same binaries, the same code paths, the same
 refusals. The more people try to break it now, the fewer gaps a production release will carry.
+
+## What this tests, and what it does not yet
+
+A scale-2 site is **several machines** behind one `brokerd`: application servers each running a `pepd`, agents on
+their own machines, enrolled in the cell. This first stage runs only the cell's decision plane, on one machine.
+Read the table before you decide what to attack.
+
+| Part of a scale-2 cell | Tested here |
+|---|---|
+| Admission by the cell: agent registry, class resolved by the cell, strict requests | **yes** |
+| Rules: a signed bundle on OPA, restricted capabilities | **yes** |
+| Plans: signed submission, role split, `k` approvals, submitter ≠ approver | **yes** |
+| Quorum for class W: `k = 2` of 3 controllers, single-use proofs | **yes** |
+| Tokens: issued and signed by `brokerd` | **yes — but nothing checks them yet** |
+| Tokens at the enforcement point: validation, expiry, replay, object seal, quota (`pepd`) | **no** — stage 2 |
+| Provisioning witness and the fail-closed start | **yes** |
+| Machines enrolled and bound to a certificate, the mTLS listener, an agent on another machine | **no** — stage 3 |
+| Network isolation between agents and the outside | **no** — stage 3 |
+| Supervisor, multi-cell | **no** |
+
+The stages, each a deployment you can run and attack:
+
+1. **This one.** The decision plane on one machine.
+2. **Next: `pepd` on the same machine, as an application server.** A token issued by `brokerd` is presented to
+   `pepd`, which checks it: forged, expired, replayed, wrong object, over quota. This tests the token path end to
+   end. No second machine yet.
+3. **After: three machines** on one private network — the cell, a server running `pepd`, an agent — with the agent
+   enrolled in the registry and bound to its certificate, the mTLS listener with an agent CA, and the
+   network-isolation check (step 7 of [scale-2.md](../scale-2.md)). This is the real scale-2 test.
+
+Until stage 2 exists, a token that `brokerd` issues is never presented to anyone: a flaw in how it is checked cannot
+be found with this setup. We say so rather than let a green `demo` suggest otherwise.
 
 ## In ten minutes
 
@@ -49,7 +81,7 @@ and tell us ([below](#telling-us-what-you-found)).
 
 ## What machine do you need
 
-**One.** In this setup the cell, the agent, the operators, the controllers and the attacker are all roles you
+**One, at this stage** (stages 2 and 3 above add `pepd` and then more machines). Here the cell, the agent, the operators, the controllers and the attacker are all roles you
 play on the same virtual machine, talking over Unix sockets in a directory only your user can open. Nothing
 listens on TCP, so there is no port to open, no second machine to attack from, and no cloud service to depend on.
 
