@@ -3,14 +3,14 @@ module github.com/philippeabraxas-jpg/TBP-NETWORK
 go 1.26.0
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.4
+	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/miekg/pkcs11 v1.1.2
 	github.com/transparency-dev/formats v0.1.1
 	github.com/transparency-dev/merkle v0.0.2
 	github.com/transparency-dev/tessera v1.0.4
 	github.com/veraison/go-cose v1.3.0
-	golang.org/x/mod v0.41.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/mod v0.42.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
