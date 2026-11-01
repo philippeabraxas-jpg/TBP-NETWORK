@@ -56,7 +56,7 @@ Put the three machines on one private network (a cloud VPC, or a host-only netwo
 | you, M2, M3 → the console (on M1 by default) | 9100/tcp | the live console: the page, and what M2 and M3 send it ([console.md](console.md)) | your address and the machines' addresses |
 | you → each | 22/tcp | ssh and `scp` | your address only |
 
-Nothing else, and **nothing from the Internet**. Use your provider's firewall or security groups for it. `pepd`
+Nothing else, and **nothing from the Internet**. Use your provider's firewall or security groups for it (on Azure or AWS, [cloud/](cloud/README.md) creates the machines and this firewall for you). `pepd`
 listens on `127.0.0.1:8443` on M2, so it is not reachable from M3; the cell's administration is a Unix socket on M1,
 not a network port. After deploying, check what each machine really listens on: `scripts/devtest/site.sh m1
 listeners` (and `m2`, `m3`).

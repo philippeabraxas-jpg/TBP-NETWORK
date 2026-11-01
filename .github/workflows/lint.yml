@@ -105,6 +105,10 @@ jobs:
         run: |
           cd tests/p1_friction
           python3 -m unittest -v test_leading_indicators
+      - name: modèles cloud DEV-TEST (ce qui est ouvert, et à qui)
+        run: |
+          cd deploy/dev-test/cloud
+          python3 -m unittest -v test_templates
 
   # Catalogue de conformité #157 (OWASP SCVS), famille « Analyse de
   # composants » : aucun scanner de vulnérabilités des dépendances n'était

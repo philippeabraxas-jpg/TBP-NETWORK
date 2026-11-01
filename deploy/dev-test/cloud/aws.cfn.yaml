@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  TBP DEV-TEST site on AWS: the three machines of deploy/dev-test/site.md on one private network.
+  M1 the cell (10.20.0.10), M2 an application server (10.20.0.11), M3 an agent (10.20.0.12).
+  NOT FOR PRODUCTION.
+
+# What it creates: one VPC with one public subnet, one firewall (security group), three Debian 12 machines with a fixed
+# public address each (Elastic IP), and nothing else. No password login, no instance role, no extra disk.
+# The firewall lets in ssh (22) from ONE address that you give and, between the three machines only, the three ports of
+# the test (8443 the cell, 9000 the application, 9100 the live console). Everything else is refused, from the Internet
+# and between the machines. The console page is reached through an ssh tunnel (aws.md).
+#
+# Step by step: aws.md. Delete everything afterwards by deleting the stack.
+
+Parameters:
+  AdminIp:
+    Type: String
+    Description: YOUR public IPv4 address, one address (for example 203.0.113.7). The only address allowed to open ssh.
+    AllowedPattern: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'
+    ConstraintDescription: one IPv4 address such as 203.0.113.7 (no /, no range)
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: The name of an ssh key pair that exists in this region (EC2, Key pairs). You import your public key there.
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    Description: Machine size. 2 CPUs and 4 GB is a starting point; nobody has measured the smallest size that works.
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/debian/release/12/latest/amd64
+    Description: The official Debian 12 image of this region (Debian publishes its identifier in this public parameter).
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: tbp-devtest }
+        - { Key: purpose, Value: tbp-devtest }
+
+  Gateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: tbp-devtest }
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref Gateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name, Value: tbp-devtest-site }
+
+  Routes:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: tbp-devtest }
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref Routes
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Gateway
+
+  RoutesToSubnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref Routes
+
+  Firewall:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TBP DEV-TEST - ssh from one address; the test ports between the three machines only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: ssh from the administrator's address only
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Sub '${AdminIp}/32'
+      Tags:
+        - { Key: Name, Value: tbp-devtest }
+
+  # A group cannot name itself in its own definition, hence these three separate rules.
+  CellBetweenMachines:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref Firewall
+      Description: the cell, mutual TLS
+      IpProtocol: tcp
+      FromPort: 8443
+      ToPort: 8443
+      SourceSecurityGroupId: !Ref Firewall
+
+  ApplicationBetweenMachines:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref Firewall
+      Description: the application
+      IpProtocol: tcp
+      FromPort: 9000
+      ToPort: 9000
+      SourceSecurityGroupId: !Ref Firewall
+
+  ConsoleBetweenMachines:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref Firewall
+      Description: the live console
+      IpProtocol: tcp
+      FromPort: 9100
+      ToPort: 9100
+      SourceSecurityGroupId: !Ref Firewall
+
+  M1:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachment
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref Subnet
+      PrivateIpAddress: 10.20.0.10
+      SecurityGroupIds: [!Ref Firewall]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags:
+        - { Key: Name, Value: tbp-m1 }
+        - { Key: role, Value: the cell }
+        - { Key: purpose, Value: tbp-devtest }
+
+  M2:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachment
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref Subnet
+      PrivateIpAddress: 10.20.0.11
+      SecurityGroupIds: [!Ref Firewall]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags:
+        - { Key: Name, Value: tbp-m2 }
+        - { Key: role, Value: the application server }
+        - { Key: purpose, Value: tbp-devtest }
+
+  M3:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachment
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref Subnet
+      PrivateIpAddress: 10.20.0.12
+      SecurityGroupIds: [!Ref Firewall]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags:
+        - { Key: Name, Value: tbp-m3 }
+        - { Key: role, Value: the agent }
+        - { Key: purpose, Value: tbp-devtest }
+
+  # A fixed public address per machine: it survives stopping and starting the machines.
+  M1Address:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref M1
+      Tags:
+        - { Key: Name, Value: tbp-m1 }
+
+  M2Address:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref M2
+      Tags:
+        - { Key: Name, Value: tbp-m2 }
+
+  M3Address:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref M3
+      Tags:
+        - { Key: Name, Value: tbp-m3 }
+
+Outputs:
+  M1PublicIp:
+    Description: M1, the cell - ssh here (login admin); its private address, the one the test uses, is 10.20.0.10
+    Value: !Ref M1Address
+  M2PublicIp:
+    Description: M2, the application server - ssh here (login admin); private address 10.20.0.11
+    Value: !Ref M2Address
+  M3PublicIp:
+    Description: M3, the agent - ssh here (login admin); private address 10.20.0.12
+    Value: !Ref M3Address
