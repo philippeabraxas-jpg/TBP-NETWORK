@@ -54,9 +54,9 @@ sudo install -m 0755 opa_linux_amd64_static /usr/local/bin/opa
 
 # 3. Go, at least the version in go.mod (Debian 12's own package is 1.19, too old). Compare the checksum
 #    of the tarball with the one listed on https://go.dev/dl/ before you unpack it.
-curl -fsSLO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
-sha256sum go1.27.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
+sha256sum go1.27.3.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.3.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 
 # 4. The repository, and the cell

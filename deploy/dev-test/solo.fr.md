@@ -57,9 +57,9 @@ sudo install -m 0755 opa_linux_amd64_static /usr/local/bin/opa
 
 # 3. Go, au moins la version de go.mod (le paquet Debian 12 est en 1.19, trop ancien). Comparez la somme de
 #    contrôle de l'archive à celle de https://go.dev/dl/ avant de la décompresser.
-curl -fsSLO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
-sha256sum go1.27.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
+sha256sum go1.27.3.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.3.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 
 # 4. Le dépôt, et la cellule

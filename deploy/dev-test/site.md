@@ -89,9 +89,9 @@ sha256sum -c opa_linux_amd64_static.sha256          # must say: opa_linux_amd64_
 sudo install -m 0755 opa_linux_amd64_static /usr/local/bin/opa
 # Go, at least the version in go.mod (Debian 12's own package is 1.19, too old). Compare the checksum of the
 # tarball with the one listed on https://go.dev/dl/ before you unpack it.
-curl -fsSLO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
-sha256sum go1.27.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
+sha256sum go1.27.3.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.3.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 
 git clone https://github.com/philippeabraxas-jpg/TBP-NETWORK.git && cd TBP-NETWORK

@@ -17,6 +17,9 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   not been run against a real account by us**; each guide begins with a validation that creates nothing.
 
 ### Changed
+- **Go 1.27.3 in the CI and in the guides** (was 1.27.2): `govulncheck` reports GO-2026-6809 (`crypto/x509`, standard
+  library, fixed in 1.27.3) as reached through the cell's TLS server (`broker.Server.Serve`). The release binaries are
+  built with the version the CI pins, so they carry the fix.
 - **Documentation brought back in line with the code** (external review of 2026-10-11):
   the root README no longer says the inter-entity handshake is what this repository is (it is not built,
   [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)) nor that scale 3 is "already fully built"
