@@ -59,7 +59,7 @@ nécessaires :
 | vous, M2, M3 → la console (sur M1 par défaut) | 9100/tcp | la console temps réel : la page, et ce que M2 et M3 lui envoient ([console.fr.md](console.fr.md)) | votre adresse et celles des machines |
 | vous → chacune | 22/tcp | ssh et `scp` | votre adresse seulement |
 
-Rien d'autre, et **rien depuis Internet**. Utilisez le pare-feu ou les groupes de sécurité de votre fournisseur.
+Rien d'autre, et **rien depuis Internet**. Utilisez le pare-feu ou les groupes de sécurité de votre fournisseur (sur Azure ou AWS, [cloud/](cloud/README.fr.md) crée les machines et ce pare-feu pour vous).
 `pepd` écoute sur `127.0.0.1:8443` sur M2 : M3 ne peut donc pas l'atteindre ; l'administration de la cellule est un
 socket Unix sur M1, pas un port réseau. Après le déploiement, vérifiez ce que chaque machine écoute vraiment :
 `scripts/devtest/site.sh m1 listeners` (et `m2`, `m3`).
@@ -93,9 +93,9 @@ sha256sum -c opa_linux_amd64_static.sha256          # doit répondre : opa_linux
 sudo install -m 0755 opa_linux_amd64_static /usr/local/bin/opa
 # Go, au moins la version de go.mod (le paquet Debian 12 est en 1.19, trop ancien). Comparez la somme de contrôle
 # de l'archive à celle de https://go.dev/dl/ avant de la décompresser.
-curl -fsSLO https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
-sha256sum go1.27.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.27.2.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
+sha256sum go1.27.3.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.3.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 
 git clone https://github.com/philippeabraxas-jpg/TBP-NETWORK.git && cd TBP-NETWORK

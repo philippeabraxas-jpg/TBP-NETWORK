@@ -69,7 +69,7 @@ d'époque — exactement le défaut que le fencing existe pour empêcher.
 **Commande** :
 
 ```bash
-go version    # ≥ 1.26 (go.mod ; la CI épingle 1.27.2)
+go version    # ≥ 1.26 (go.mod ; la CI épingle 1.27.3)
 opa version   # ≥ 1.0
 python3 --version
 ```

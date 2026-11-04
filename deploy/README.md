@@ -69,7 +69,7 @@ governance — exactly the defect fencing exists to prevent.
 **Command**:
 
 ```bash
-go version    # ≥ 1.26 (go.mod; CI pins 1.27.2)
+go version    # ≥ 1.26 (go.mod; CI pins 1.27.3)
 opa version   # ≥ 1.0
 python3 --version
 ```

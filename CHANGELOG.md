@@ -7,7 +7,19 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 
 ## [Unreleased]
 
+### Added
+- **The three machines of the DEV-TEST site in Azure or AWS, step by step** (`deploy/dev-test/cloud/`, English and
+  French): a Bicep template and a CloudFormation template create the network, the firewall and three Debian 12
+  machines; the guides take a tester who does not know the cloud from the account (credits, budget alert, ssh key) to
+  the machines, then to `site.md`. The only thing open to the Internet is ssh, from the one address given as a
+  parameter; the test's own ports (8443, 9000, 9100) are open between the three machines only, and the live console is
+  reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). **The templates have
+  not been run against a real account by us**; each guide begins with a validation that creates nothing.
+
 ### Changed
+- **Go 1.27.3 in the CI and in the guides** (was 1.27.2): `govulncheck` reports GO-2026-6809 (`crypto/x509`, standard
+  library, fixed in 1.27.3) as reached through the cell's TLS server (`broker.Server.Serve`). The release binaries are
+  built with the version the CI pins, so they carry the fix.
 - **Documentation brought back in line with the code** (external review of 2026-10-11):
   the root README no longer says the inter-entity handshake is what this repository is (it is not built,
   [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33)) nor that scale 3 is "already fully built"

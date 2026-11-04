@@ -27,6 +27,8 @@ demande si l'ensemble **fonctionne**, et si vous pouvez passer à travers.
 
 Si vous n'essayez qu'une chose, essayez le site : c'est celui qui correspond à la façon dont TBP se déploie.
 
+**Pas de machines sous la main ?** [cloud/](cloud/README.fr.md) crée les trois machines du site dans Azure ou AWS à partir d'un modèle et vous guide pas à pas, sans connaître l'un ou l'autre de ces clouds.
+
 ## Ce qui est simplifié, et ce qui ne l'est pas
 
 | | Dans les deux | Pourquoi |

@@ -25,6 +25,8 @@ whether the code is sound; this asks whether the whole thing **works**, and whet
 
 If you try one thing, try the site: it is the one that matches how TBP is deployed.
 
+**No machines at hand?** [cloud/](cloud/README.md) creates the three machines of the site in Azure or AWS from one template and walks you through it step by step, with no prior knowledge of either cloud.
+
 ## What is simplified, and what is not
 
 | | In both | Why |
