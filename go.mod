@@ -3,7 +3,7 @@ module github.com/philippeabraxas-jpg/TBP-NETWORK
 go 1.26.0
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.6
+	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/miekg/pkcs11 v1.1.2
 	github.com/transparency-dev/formats v0.1.1
 	github.com/transparency-dev/merkle v0.0.2
