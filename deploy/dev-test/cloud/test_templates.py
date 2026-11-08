@@ -159,6 +159,14 @@ class Guides(unittest.TestCase):
             self.assertIn('[ "$b" != brokerd ] || need gcc "brokerd links C code: sudo apt-get install -y gcc libc6-dev"',
                           text, f"{name} must fail early, with the cure, when there is no C compiler")
 
+    def test_site_says_tokens_are_short_lived_and_approvals_single_use(self):
+        """First run: "the same token again" gave stale-token after three minutes, a second act gave plan-deviation."""
+        dev = HERE.parent
+        for name in ("site.md", "site.fr.md"):
+            text = (dev / name).read_text(encoding="utf-8")
+            for token in ("stale-token", "plan-deviation", "30", "&& scripts/devtest/site.sh m3 call"):
+                self.assertIn(token, text, f"{name} must mention {token}")
+
     def test_deallocate_not_stop(self):
         for name in ("azure.md", "azure.fr.md"):
             self.assertIn("az vm deallocate", read(name))

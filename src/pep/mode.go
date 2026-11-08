@@ -242,7 +242,7 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 		return nil
 	}
 	if c.verifier == nil {
-		return fmt.Errorf("%w (bascule → %s)", ErrQuorumVerifierMissing, m)
+		return fmt.Errorf("%w (switch → %s)", ErrQuorumVerifierMissing, m)
 	}
 	condition := "mode-" + m.String()
 	reduced := false
@@ -251,18 +251,18 @@ func (c *ModeController) SetMode(m PEPMode, proof QuorumProof) error {
 		if c.mode == ModeMonitor && m == ModeClosed && c.restrict != nil && c.restrict(condition, proof) {
 			reduced = true
 		} else {
-			return fmt.Errorf("%w (bascule → %s)", ErrQuorumRejected, m)
+			return fmt.Errorf("%w (switch → %s)", ErrQuorumRejected, m)
 		}
 	}
 	if c.state == nil {
-		return fmt.Errorf("%w (bascule → %s)", ErrQuorumStateMissing, m)
+		return fmt.Errorf("%w (switch → %s)", ErrQuorumStateMissing, m)
 	}
 	ok, err := c.state.Consume(condition, proof.Expiry.Unix())
 	if err != nil {
-		return fmt.Errorf("pep: état de quorum (bascule → %s): %w", m, err)
+		return fmt.Errorf("pep: quorum state (switch → %s): %w", m, err)
 	}
 	if !ok {
-		return fmt.Errorf("%w (bascule → %s)", ErrQuorumReplayed, m)
+		return fmt.Errorf("%w (switch → %s)", ErrQuorumReplayed, m)
 	}
 	c.mode = m
 	c.writeLeafLocked(m)
