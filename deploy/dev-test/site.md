@@ -160,7 +160,9 @@ the posture blocks), and in *monitor* a denied request is forwarded anyway. A re
 **Tokens and approvals are short-lived and single-use.** A token lives 30 to 60 seconds. Presented later it is refused
 as `stale-token` — and that check comes *before* the replay and scope checks, so a late `m3 call` never shows `replay` or
 `scope-mismatch`. An approval from `m1 sign` is used once: running the same `act … --binding <hash>` a second time gives
-`plan-deviation` and no token (`call` then presents the previous, now stale, one). So for steps 4 and 5, sign again each
+`plan-deviation` and no token (`call` then presents the previous, now stale, one). A *refused* attempt does not use the
+approval up: a class W `act` without the controllers' proof answers `quorum-required`, and the same approval then works
+with the proof. So for steps 4 and 5, sign again each
 time and chain the two commands on one line, so that the token does not age between them:
 
 ```

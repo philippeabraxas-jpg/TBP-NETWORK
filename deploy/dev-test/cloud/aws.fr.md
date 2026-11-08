@@ -72,7 +72,7 @@ AWS retire ce qu'il avait commencé à créer, et laisse la pile vide. Les cause
 | `VcpuLimitExceeded`, `You have requested more vCPU capacity than your current vCPU limit` | un compte neuf a un petit quota : Service Quotas → *Amazon EC2* → *Running On-Demand Standard instances* → demandez 8, ou prenez une autre région. Les trois machines demandent 6 vCPU |
 | `OptInRequired`, `Marketplace` | acceptez une fois les conditions (gratuites) de l'image Debian 12 : ouvrez-la sur AWS Marketplace (cherchez « Debian 12 ») → **Continue to Subscribe** → **Accept Terms**, puis recréez |
 | `The key pair 'tbp-devtest' does not exist` | la paire de clés est dans une autre région, ou porte un autre nom : étape 2 |
-| `Unsupported … in the Availability Zone` pour `t3.medium` | ajoutez `InstanceType=t3a.medium` aux paramètres, ou prenez une autre région |
+| `Unsupported … in the Availability Zone` pour `m6i.large` | ajoutez `InstanceType=m5.large` aux paramètres (mêmes 2 CPU et 8 Go, génération plus ancienne), ou prenez une autre région |
 
 Après un échec, la pile vide (`ROLLBACK_COMPLETE`) doit être supprimée avant de pouvoir la recréer :
 `aws cloudformation delete-stack --stack-name tbp-devtest`, puis recommencez l'étape 4.
@@ -87,7 +87,7 @@ ssh -i "$HOME/.ssh/tbp-devtest" admin@<ADRESSE PUBLIQUE DE M1>
 
 La première fois, `ssh` demande s'il faut faire confiance à la machine : répondez `yes`. Si ça marche, `exit` et
 continuez dans **[README.fr.md — quand les trois machines existent](README.fr.md#ensuite-quand-les-trois-machines-existent)**,
-avec `<login>` = `admin` et `--env "aws, t3.medium, eu-west-3"` (la région que vous avez choisie).
+avec `<login>` = `admin` et `--env "aws, m6i.large, eu-west-3"` (la région que vous avez choisie).
 
 ## 6. Votre adresse a changé
 
@@ -120,7 +120,7 @@ Cela laisse la paire de clés `tbp-devtest` (gratuite) et le budget (gratuit) ; 
 ## Ce que fait le modèle, et ce qu'il ne fait pas
 
 Il crée : un réseau `10.20.0.0/24` avec une passerelle Internet, un pare-feu (groupe de sécurité), trois machines Debian 12
-(`t3.medium`, disque chiffré de 30 Go) avec des adresses privées fixes et chacune une adresse publique fixe (Elastic IP).
+(`m6i.large` : 2 CPU, 8 Go ; disque chiffré de 30 Go) avec des adresses privées fixes et chacune une adresse publique fixe (Elastic IP).
 Il n'y installe **rien** : les paquets, OPA et Go sont installés par les commandes de
 [site.fr.md](../site.fr.md#déployer), pour que ce que vous testez soit ce que `site.fr.md` documente. Le pare-feu autorise
 ssh depuis votre adresse et, entre les trois machines, 8443, 9000 et 9100 ; tout le reste est refusé. Les machines

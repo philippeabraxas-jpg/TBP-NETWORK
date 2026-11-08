@@ -60,7 +60,7 @@ address can reach them.
 |---|---|---|
 | Guide | **[azure.md](azure.md)** | [aws.md](aws.md) |
 | Template | [`azure.bicep`](azure.bicep) | [`aws.cfn.yaml`](aws.cfn.yaml) |
-| Machines | 3 × `Standard_B2s` (2 CPUs, 4 GB), Debian 12 | 3 × `t3.medium` (2 CPUs, 4 GB), Debian 12 |
+| Machines | 3 × `Standard_B2s` (2 CPUs, 4 GB), Debian 12 | 3 × `m6i.large` (2 CPUs, 8 GB), Debian 12 |
 | Login on the machines | `tbp` | `admin` |
 | Delete everything | `az group delete` | `aws cloudformation delete-stack` |
 
@@ -107,8 +107,8 @@ Give it a passphrase. The second command prints **one line** starting with `ssh-
 one the cloud needs. The file without `.pub` is private: it never leaves your computer. If `.ssh` does not exist,
 create it first (`mkdir "$HOME/.ssh"`).
 
-**3. A cost alert.** Credits end, and machines cost while they run. About 3 to 4 euros or dollars a day for the three
-(check the price in your portal: it varies by region). Create a budget with an e-mail alert before the first machine
+**3. A cost alert.** Credits end, and machines cost while they run. About 3 to 4 euros or dollars a day for the three Azure `Standard_B2s`,
+about 8 for the three AWS `m6i.large` (check the price in your portal: it varies by region). Create a budget with an e-mail alert before the first machine
 ([azure.md](azure.md#1-before-the-machines), [aws.md](aws.md#1-before-the-machines)) and **stop or delete the machines when you do not test**.
 
 ## Then, once the three machines exist
@@ -173,7 +173,7 @@ says it was this cloud.
 
 The test itself (`site.sh`) is run, in CI, on one host simulating the three machines. **The Azure template has been
 deployed once for real** (Sweden Central, `Standard_D2s_v5`, November 2026), through to the three machines up, `m3 check`
-passing and the live console open, then steps 1 to 10 of `site.md` — see the [draft report of 2026-11-08](../reports/2026-11-08-azure.md). That first
+passing and the live console open, then steps 1 to 14 of `site.md` — see the [draft report of 2026-11-08](../reports/2026-11-08-azure.md). That first
 run found two things now written here: the machine that builds the cell needs a C compiler, and a new subscription may
 be refused some regions and sizes ([azure.md](azure.md#4-create-the-machines)). **The AWS template has not been run
 against a real account**: its guide begins with a *validate* command that checks the template without creating anything.

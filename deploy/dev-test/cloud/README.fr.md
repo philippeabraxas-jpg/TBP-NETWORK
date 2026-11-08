@@ -61,7 +61,7 @@ c'est pourquoi seule votre adresse peut les atteindre.
 |---|---|---|
 | Guide | **[azure.fr.md](azure.fr.md)** | [aws.fr.md](aws.fr.md) |
 | Modèle | [`azure.bicep`](azure.bicep) | [`aws.cfn.yaml`](aws.cfn.yaml) |
-| Machines | 3 × `Standard_B2s` (2 CPU, 4 Go), Debian 12 | 3 × `t3.medium` (2 CPU, 4 Go), Debian 12 |
+| Machines | 3 × `Standard_B2s` (2 CPU, 4 Go), Debian 12 | 3 × `m6i.large` (2 CPU, 8 Go), Debian 12 |
 | Identifiant sur les machines | `tbp` | `admin` |
 | Tout supprimer | `az group delete` | `aws cloudformation delete-stack` |
 
@@ -110,7 +110,7 @@ Mettez-y une phrase secrète. La seconde commande affiche **une ligne** qui comm
 `.ssh` n'existe pas, créez-le d'abord (`mkdir "$HOME/.ssh"`).
 
 **3. Une alerte de coût.** Les crédits s'épuisent, et les machines coûtent tant qu'elles tournent. Environ 3 à 4 euros
-ou dollars par jour pour les trois (vérifiez le prix dans votre portail : il varie selon la région). Créez un budget avec
+ou dollars par jour pour les trois Azure `Standard_B2s`, environ 8 pour les trois AWS `m6i.large` (vérifiez le prix dans votre portail : il varie selon la région). Créez un budget avec
 une alerte par e-mail avant la première machine ([azure.fr.md](azure.fr.md#1-avant-les-machines),
 [aws.fr.md](aws.fr.md#1-avant-les-machines)) et **arrêtez ou supprimez les machines quand vous ne testez pas**.
 
@@ -177,7 +177,7 @@ chaque machine ([Nous dire ce que vous avez trouvé](../site.fr.md#nous-dire-ce-
 
 Le test lui-même (`site.sh`) tourne, en CI, sur un seul hôte qui simule les trois machines. **Le modèle Azure a été
 déployé une fois pour de vrai** (Suède Centre, `Standard_D2s_v5`, novembre 2026), jusqu'aux trois machines up, `m3 check`
-qui passe et la console temps réel ouverte, puis les étapes 1 à 10 de `site.fr.md` — voir le
+qui passe et la console temps réel ouverte, puis les étapes 1 à 14 de `site.fr.md` — voir le
 [brouillon de rapport du 2026-11-08](../reports/2026-11-08-azure.fr.md). Ce premier passage a trouvé deux choses désormais écrites ici : la machine qui compile la cellule a besoin d'un
 compilateur C, et un abonnement récent peut se voir refuser certaines régions et tailles
 ([azure.fr.md](azure.fr.md#4-créer-les-machines)). **Le modèle AWS n'a pas été exécuté sur un vrai compte** : son guide
