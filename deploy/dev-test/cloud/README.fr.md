@@ -39,12 +39,8 @@ cloud (Azure ou AWS), de faire le test, puis de tout supprimer**, pour quelques 
 
 **Ce que vous obtenez.**
 
-![la console quand les trois machines sont up et que `m3 check` a tourné : M1 et M2 up, M3 pas encore entendue, les requêtes du contrôle listées à part](console-azure.png)
-
-*La console d'un vrai déploiement (Azure, `Standard_D2s_v5`, Suède Centre), prise après `m3 check` : M1 (la cellule) et
-M2 (le serveur) rapportent, avec leurs composants et leurs compteurs ; M3 (l'agent) n'a pas encore fait de requête, sa
-carte dit donc qu'on ne l'a pas entendue ; les cinq requêtes du contrôle, qui n'ont pas d'identifiant de trace, sont
-listées sous le second onglet.*
+La console temps réel est décrite, avec une image, dans [console.fr.md](../console.fr.md). Un rapport d'un vrai passage —
+mesures et capture de la console — sera ajouté quand le test aura été fait sur Azure **et** sur AWS.
 
 - **M1, la cellule** : décide qui peut faire quoi, et signe un jeton pour cela. **M2, un serveur** : son point de contrôle
   (`pepd`) vérifie le jeton et le serveur n'agit que s'il le dit. **M3, un agent** : demande, puis présente ce qu'il a reçu.

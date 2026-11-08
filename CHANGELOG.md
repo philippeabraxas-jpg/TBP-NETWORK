@@ -8,6 +8,10 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Fixed
+- **The real-browser test of the live console no longer fails on a slow runner.** `browser-dump.js` read the page after a
+  fixed 3.5 s, so a slow machine read it before it was drawn (`selftest` was red on `main` on and off since 2026-10-27,
+  with no change of code behind it). It now waits, up to 20 s, until the page shows its latency table, then reads it. A
+  slow page that fills after 6 s is missed by the old script and read by the new one.
 - **M1 and the solo machine need a C compiler to build the cell** (found by the first DEV-TEST deployment on Azure):
   `brokerd` links C code (the HSM interface), and on a Debian 12 image without `gcc` Go switches cgo off and the build
   fails with `undefined: pkcs11.Attribute`. `site.sh m1 init` and `devtest.sh init` now say so before building, and the
@@ -21,8 +25,7 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   the machines, then to `site.md`. The only thing open to the Internet is ssh, from the one address given as a
   parameter; the test's own ports (8443, 9000, 9100) are open between the three machines only, and the live console is
   reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). The README opens with a
-  plain-words chapter for a newcomer (goal, how it works, what you end up with, with a screenshot of the console of a real
-  deployment). **The Azure template has been deployed once for real** (Sweden Central, `Standard_D2s_v5`) through to the
+  plain-words chapter for a newcomer (goal, how it works, what you end up with). **The Azure template has been deployed once for real** (Sweden Central, `Standard_D2s_v5`) through to the
   open console; that first run found the C-compiler prerequisite (below) and that a new subscription can be refused some
   regions and sizes, now in the Azure guide with a free test of the region. **The AWS template has not been run against a
   real account**; each guide begins with a validation that creates nothing.

@@ -38,11 +38,8 @@ a cloud (Azure or AWS), run the test, and delete everything**, for a few euros o
 
 **What you get.**
 
-![the console after the three machines are up and `m3 check` has run: M1 and M2 up, M3 not yet heard from, the requests of the check listed apart](console-azure.png)
-
-*The console of a real deployment (Azure, `Standard_D2s_v5`, Sweden Central), taken after `m3 check`: M1 (the cell) and M2
-(the server) report, with their components and counters; M3 (the agent) has not made a request yet, so its card says it
-has not been heard from; the five requests of the check, which carry no trace id, are listed under the second tab.*
+The live console is described, with a picture, in [console.md](../console.md). A report of a real run — timings and a
+screenshot of the console — will be added once the test has been run on Azure **and** AWS.
 
 - **M1, the cell**: decides who may do what, and signs a token for it. **M2, a server**: its enforcement point (`pepd`)
   checks the token and the server acts only if it says so. **M3, an agent**: asks, then presents what it got.
