@@ -7,7 +7,22 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 
 ## [Unreleased]
 
+### Added
+- **A draft report of the first real run of the site test** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and
+  French): Azure, three `Standard_D2s_v5`, steps 1 to 10 of `site.md`, the measures, and what the run found. Partial by
+  design: the complete report comes once the test has been run on AWS as well.
+
 ### Fixed
+- **`site.md` now says that tokens and approvals are short-lived and single-use** (found by the first run): a token lives
+  30 to 60 s and a late `m3 call` shows `stale-token`, never `replay` or `scope-mismatch`; an approval of `m1 sign` gave
+  `plan-deviation` the second time. Steps 4 and 5 chain `act` and `call` on one line.
+- **The quorum messages of the mode path are in English** (`pep: quorum proof rejected (§5.3) (switch → monitor)`): one
+  refusal of `m2 mode` was in French in the middle of English output. The other messages of the code base are unchanged.
+- **The live console now draws what arrives after the page is open.** The server sends each update wrapped
+  (`{"kind":"request","request":{…}}`) and the page read it as the request itself: the first update failed silently, the
+  list stayed empty (`Requests (0)`) and only a reload showed the requests, while the latency table, fed by another route,
+  was already filled. Found by the first DEV-TEST deployment on Azure; the browser test only opened the page after the
+  requests existed, and now also posts a request once the page is open.
 - **The real-browser test of the live console no longer fails on a slow runner.** `browser-dump.js` read the page after a
   fixed 3.5 s, so a slow machine read it before it was drawn (`selftest` was red on `main` on and off since 2026-10-27,
   with no change of code behind it). It now waits, up to 20 s, until the page shows its latency table, then reads it. A
