@@ -42,8 +42,27 @@ az vm list-skus --location francecentral --size Standard_B2s --query "[].{taille
 ```
 
 Une ligne dont la colonne *restreint* est vide, c'est bon. `NotAvailableForSubscription` veut dire que cette taille n'est
-pas offerte à votre abonnement dans cette région : prenez une autre région (`westeurope`), ou une autre taille (ajoutez
-`vmSize=Standard_B2ms` aux paramètres ci-dessous).
+pas offerte à votre abonnement dans cette région, et une taille absente de la réponse ne vous est pas offerte du tout.
+Autres tailles à essayer, en ajoutant `vmSize=<taille>` aux paramètres de l'étape suivante : `Standard_B2ms`,
+`Standard_D2s_v5`, `Standard_D2s_v7` (2 CPU et 8 Go ; les tailles `D` n'ont pas de crédits de CPU, ce qui rend les
+mesures de latence plus stables).
+
+**Vérifiez aussi que la région vous accepte.** Un abonnement récent se voit parfois refuser toute une région (*« not
+accepting new customers »*) alors que la liste des tailles a l'air bonne, et la commande *valider* ne le remarque pas. Un
+test gratuit crée un pare-feu vide dans quelques régions, puis le supprime :
+
+```bash
+az group create --name tbp-probe --location westeurope -o none      # un groupe jetable
+for r in francecentral swedencentral germanywestcentral northeurope westeurope; do
+  if az network nsg create --resource-group tbp-probe --name probe-$r --location $r -o none 2>/dev/null; then
+    echo "$r : acceptée"; az network nsg delete --resource-group tbp-probe --name probe-$r
+  else echo "$r : refusée"; fi
+done
+az group delete --name tbp-probe --yes --no-wait
+```
+
+Prenez une région qui dit `acceptée` **et** où l'étape 3 montre une taille libre, et utilisez-la à l'étape suivante. (Le
+premier déploiement de ce modèle a été refusé en France Centre, puis a marché en Suède Centre avec `Standard_D2s_v5`.)
 
 ## 4. Créer les machines
 
@@ -70,7 +89,8 @@ Si *valider* ou *créer* échoue, le message nomme la cause. Les plus fréquente
 
 | Message | Cause |
 |---|---|
-| `SkuNotAvailable`, `NotAvailableForSubscription` | taille ou région non offerte : étape 3 |
+| `SkuNotAvailable`, `NotAvailableForSubscription`, `Capacity Restrictions` | taille ou région non offerte, ou plus de capacité pour cette taille en ce moment : étape 3, une autre taille ou une autre région |
+| `RequestDisallowedByAzure … not accepting new customers` | votre abonnement se voit refuser cette région : le test de l'étape 3, puis recréez le groupe dans une région qui accepte (`az group delete`, `az group create`) |
 | `QuotaExceeded`, `Operation could not be completed as it results in exceeding approved … cores quota` | les abonnements neufs démarrent avec peu de cœurs : demandez-en plus dans *Quotas*, ou prenez une autre région |
 | `RequestDisallowedByPolicy` | votre abonnement interdit cette région ou cette taille : prenez-en une autre |
 | `InvalidParameter … publicKeys` | la clé est coupée ou contient un retour à la ligne : collez la ligne unique, entre apostrophes |

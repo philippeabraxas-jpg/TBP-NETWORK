@@ -6,9 +6,58 @@ _Version française : [README.fr.md](README.fr.md). Part of [deploy/dev-test](..
 > group (Azure) or one stack (AWS). The templates open **one** thing to the Internet — ssh, from the **one** address you
 > give — and nothing else.
 
-[site.md](../site.md) says what the three machines are for and what to test. This folder gets you the three machines in a
-cloud **without knowing the cloud**: a template creates the network, the firewall and the machines; you then follow
-`site.md`.
+## In plain words
+
+**The goal.** TBP is made to be run, and attacked, before it is trusted ([deploy/dev-test](../README.md)). The test that
+matters is the *site* test: **three machines** that talk to each other — an agent (M3) asks the cell (M1) whether it may
+act, then shows what it got to an application server (M2) — because it is the only way to see whether the whole thing
+works over a real network. Most people have no three spare machines. This folder lets you **rent them for a few hours in
+a cloud (Azure or AWS), run the test, and delete everything**, for a few euros or dollars.
+
+**What is in it.**
+
+| What | What it is |
+|---|---|
+| [`azure.bicep`](azure.bicep), [`aws.cfn.yaml`](aws.cfn.yaml) | A *template*: a text file that describes the machines you want — how many, which system, which network, which doors are open. You hand it to Azure or AWS, which builds exactly that. A recipe: the same recipe gives the same result |
+| this page, [azure.md](azure.md), [aws.md](aws.md) | The steps for someone who has never used a cloud: the account, a safe ssh key, creating the machines, connecting, deleting |
+| [`test_templates.py`](test_templates.py) | An automatic check, run by the project's CI, that the templates keep their promises: what is open, and to whom |
+
+**How it works, in four ideas.**
+
+1. **The cloud gives you empty computers.** The template asks for three Linux machines (Debian 12) on one private
+   network, behind a firewall. Nothing of TBP is on them yet: you install it in the next step, with the commands of
+   [site.md](../site.md), so that what you test is exactly what that page documents.
+2. **You drive them from your own computer, by ssh.** `ssh` is a text terminal over the network. Your computer is the
+   keyboard and the screen of the three machines — like the web console of a hypervisor, in text — and you open **three
+   terminals, one per machine**. TBP has no remote administration, on purpose: signing a plan or closing the enforcement
+   point is done *on* the machine, so ssh is how you sit in front of it.
+3. **The firewall opens one door**: ssh, from the one address you give. The three machines talk to each other on the
+   three ports of the test (8443 the cell, 9000 the application, 9100 the console); nobody else can reach them.
+4. **You watch in a browser.** A live console shows the path of each request across the three machines, the state of each
+   component and the latency of every step. It is read-only, and reached through an ssh tunnel, not through the Internet.
+
+**What you get.**
+
+![the console after the three machines are up and `m3 check` has run: M1 and M2 up, M3 not yet heard from, the requests of the check listed apart](console-azure.png)
+
+*The console of a real deployment (Azure, `Standard_D2s_v5`, Sweden Central), taken after `m3 check`: M1 (the cell) and M2
+(the server) report, with their components and counters; M3 (the agent) has not made a request yet, so its card says it
+has not been heard from; the five requests of the check, which carry no trace id, are listed under the second tab.*
+
+- **M1, the cell**: decides who may do what, and signs a token for it. **M2, a server**: its enforcement point (`pepd`)
+  checks the token and the server acts only if it says so. **M3, an agent**: asks, then presents what it got.
+- A test to follow, step by step ([site.md](../site.md#what-to-test-does-it-work)): ask without approval and be refused;
+  approve as an operator, on M1; ask again and be executed; replay a token, forge one, close and reopen the enforcement
+  point. In the console each request shows **which component stopped it, and why**, and how long each step took.
+- Then you can try to break it ("Attack it" in `site.md`), and send us what you found with `report` — your numbers, which
+  are the point of the exercise.
+- When you have finished, **one command deletes everything**. About 3 to 4 euros or dollars a day while the three
+  machines run (the price varies by region): stop or delete them when you do not test.
+
+**What it is not.** Not production: throw-away keys, a development switch on the cell, no real data. Not a managed
+service: the machines are yours for as long as you keep them. Not hardened for the open Internet: that is why only your
+address can reach them.
+
 
 | | Azure | AWS |
 |---|---|---|
@@ -125,7 +174,10 @@ says it was this cloud.
 
 ## What was and was not checked
 
-The test itself (`site.sh`) is run, in CI, on one host simulating the three machines. **These two templates have not been
-run against a real Azure or AWS account by us** at the time of writing: each guide begins with a *validate* command that
-checks the template without creating anything. If a step here does not match your portal (names move), tell us in a
-[dev-test issue](../README.md#telling-us-what-you-found).
+The test itself (`site.sh`) is run, in CI, on one host simulating the three machines. **The Azure template has been
+deployed once for real** (Sweden Central, `Standard_D2s_v5`, November 2026), through to the three machines up, `m3 check`
+passing and the live console open; the 14 test steps of `site.md` were still to be run when this was written. That first
+run found two things now written here: the machine that builds the cell needs a C compiler, and a new subscription may
+be refused some regions and sizes ([azure.md](azure.md#4-create-the-machines)). **The AWS template has not been run
+against a real account**: its guide begins with a *validate* command that checks the template without creating anything.
+If a step here does not match your portal (names move), tell us in a [dev-test issue](../README.md#telling-us-what-you-found).

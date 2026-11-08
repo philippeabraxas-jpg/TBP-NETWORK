@@ -6,9 +6,60 @@ _English version: [README.md](README.md). Fait partie de [deploy/dev-test](../RE
 > groupe (Azure) ou une seule pile (AWS). Les modèles ouvrent **une** seule chose à Internet — ssh, depuis la **seule**
 > adresse que vous donnez — et rien d'autre.
 
-[site.fr.md](../site.fr.md) dit à quoi servent les trois machines et quoi tester. Ce dossier vous donne les trois machines
-dans un cloud **sans connaître le cloud** : un modèle crée le réseau, le pare-feu et les machines ; vous suivez ensuite
-`site.fr.md`.
+## En clair
+
+**Le but.** TBP est fait pour être lancé, et attaqué, avant d'être cru ([deploy/dev-test](../README.fr.md)). Le test qui
+compte est le test *site* : **trois machines** qui se parlent — un agent (M3) demande à la cellule (M1) s'il peut agir,
+puis montre ce qu'il a reçu à un serveur applicatif (M2) — parce que c'est la seule façon de voir si l'ensemble marche sur
+un vrai réseau. Peu de gens ont trois machines de rechange. Ce dossier vous permet de **les louer quelques heures dans un
+cloud (Azure ou AWS), de faire le test, puis de tout supprimer**, pour quelques euros ou dollars.
+
+**Ce qu'il contient.**
+
+| Quoi | Ce que c'est |
+|---|---|
+| [`azure.bicep`](azure.bicep), [`aws.cfn.yaml`](aws.cfn.yaml) | Un *modèle* : un fichier texte qui décrit les machines voulues — combien, quel système, quel réseau, quelles portes ouvertes. Vous le remettez à Azure ou AWS, qui construit exactement cela. Une recette : la même recette donne le même résultat |
+| cette page, [azure.fr.md](azure.fr.md), [aws.fr.md](aws.fr.md) | Les étapes pour quelqu'un qui n'a jamais utilisé un cloud : le compte, une clé ssh sûre, la création des machines, la connexion, la suppression |
+| [`test_templates.py`](test_templates.py) | Un contrôle automatique, lancé par la CI du projet, que les modèles tiennent leurs promesses : ce qui est ouvert, et à qui |
+
+**Comment ça marche, en quatre idées.**
+
+1. **Le cloud vous donne des ordinateurs vides.** Le modèle demande trois machines Linux (Debian 12) sur un même réseau
+   privé, derrière un pare-feu. Rien de TBP n'y est encore : vous l'installez à l'étape suivante, avec les commandes de
+   [site.fr.md](../site.fr.md), pour que ce que vous testez soit exactement ce que cette page documente.
+2. **Vous les pilotez depuis votre propre ordinateur, par ssh.** `ssh` est un terminal texte à travers le réseau. Votre
+   ordinateur est le clavier et l'écran des trois machines — comme la console web d'un hyperviseur, en texte — et vous
+   ouvrez **trois terminaux, un par machine**. TBP n'a pas d'administration à distance, exprès : signer un plan ou fermer
+   le point de contrôle se fait *sur* la machine, et ssh est le moyen de s'y asseoir.
+3. **Le pare-feu n'ouvre qu'une porte** : ssh, depuis la seule adresse que vous donnez. Les trois machines se parlent sur
+   les trois ports du test (8443 la cellule, 9000 l'application, 9100 la console) ; personne d'autre ne les atteint.
+4. **Vous regardez dans un navigateur.** Une console temps réel montre le trajet de chaque requête à travers les trois
+   machines, l'état de chaque composant et la latence de chaque étape. Elle est en lecture seule, et on l'atteint par un
+   tunnel ssh, pas par Internet.
+
+**Ce que vous obtenez.**
+
+![la console quand les trois machines sont up et que `m3 check` a tourné : M1 et M2 up, M3 pas encore entendue, les requêtes du contrôle listées à part](console-azure.png)
+
+*La console d'un vrai déploiement (Azure, `Standard_D2s_v5`, Suède Centre), prise après `m3 check` : M1 (la cellule) et
+M2 (le serveur) rapportent, avec leurs composants et leurs compteurs ; M3 (l'agent) n'a pas encore fait de requête, sa
+carte dit donc qu'on ne l'a pas entendue ; les cinq requêtes du contrôle, qui n'ont pas d'identifiant de trace, sont
+listées sous le second onglet.*
+
+- **M1, la cellule** : décide qui peut faire quoi, et signe un jeton pour cela. **M2, un serveur** : son point de contrôle
+  (`pepd`) vérifie le jeton et le serveur n'agit que s'il le dit. **M3, un agent** : demande, puis présente ce qu'il a reçu.
+- Un test à suivre pas à pas ([site.fr.md](../site.fr.md)) : demander sans approbation et être refusé ; approuver comme
+  opérateur, sur M1 ; redemander et être exécuté ; rejouer un jeton, en forger un, fermer puis rouvrir le point de
+  contrôle. Dans la console, chaque requête montre **quel composant l'a arrêtée, et pourquoi**, et le temps de chaque étape.
+- Ensuite vous pouvez essayer de le casser (« L'attaquer » dans `site.fr.md`), et nous envoyer ce que vous avez trouvé avec
+  `report` — vos chiffres, qui sont le but de l'exercice.
+- Quand vous avez fini, **une seule commande supprime tout**. Environ 3 à 4 euros ou dollars par jour pendant que les trois
+  machines tournent (le prix varie selon la région) : arrêtez-les ou supprimez-les quand vous ne testez pas.
+
+**Ce que ce n'est pas.** Pas de la production : clés jetables, un interrupteur de développement sur la cellule, aucune
+donnée réelle. Pas un service géré : les machines sont à vous tant que vous les gardez. Pas durci pour l'Internet ouvert :
+c'est pourquoi seule votre adresse peut les atteindre.
+
 
 | | Azure | AWS |
 |---|---|---|
@@ -128,7 +179,11 @@ chaque machine ([Nous dire ce que vous avez trouvé](../site.fr.md#nous-dire-ce-
 
 ## Ce qui a été vérifié, et ce qui ne l'a pas été
 
-Le test lui-même (`site.sh`) tourne, en CI, sur un seul hôte qui simule les trois machines. **Ces deux modèles n'ont pas
-été exécutés par nous sur un vrai compte Azure ou AWS** au moment où nous écrivons : chaque guide commence par une
-commande de *validation* qui vérifie le modèle sans rien créer. Si une étape d'ici ne correspond pas à votre portail
-(les noms bougent), dites-le nous dans une [issue dev-test](../README.fr.md#nous-dire-ce-que-vous-avez-trouvé).
+Le test lui-même (`site.sh`) tourne, en CI, sur un seul hôte qui simule les trois machines. **Le modèle Azure a été
+déployé une fois pour de vrai** (Suède Centre, `Standard_D2s_v5`, novembre 2026), jusqu'aux trois machines up, `m3 check`
+qui passe et la console temps réel ouverte ; les 14 étapes de test de `site.fr.md` restaient à faire au moment où nous
+écrivons. Ce premier passage a trouvé deux choses désormais écrites ici : la machine qui compile la cellule a besoin d'un
+compilateur C, et un abonnement récent peut se voir refuser certaines régions et tailles
+([azure.fr.md](azure.fr.md#4-créer-les-machines)). **Le modèle AWS n'a pas été exécuté sur un vrai compte** : son guide
+commence par une commande de *validation* qui vérifie le modèle sans rien créer. Si une étape d'ici ne correspond pas à
+votre portail (les noms bougent), dites-le nous dans une [issue dev-test](../README.fr.md#nous-dire-ce-que-vous-avez-trouvé).

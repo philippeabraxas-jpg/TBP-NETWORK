@@ -141,9 +141,11 @@ class Guides(unittest.TestCase):
         for name in ("aws.md", "aws.fr.md"):
             self.assertIn("aws cloudformation validate-template", read(name))
 
-    def test_guides_say_the_templates_were_not_run_by_us(self):
-        self.assertIn("have not been\nrun against a real Azure or AWS account", read("README.md"))
-        self.assertIn("n'ont pas\nété exécutés par nous", read("README.fr.md"))
+    def test_guides_say_which_template_was_run_for_real(self):
+        """Honesty about what was tested: Azure once, by the maintainer; AWS never, until someone does."""
+        self.assertIn("**The AWS template has not been run\nagainst a real account**", read("README.md"))
+        self.assertIn("**Le modèle AWS n'a pas été exécuté sur un vrai compte**", read("README.fr.md"))
+        self.assertIn("**The Azure template has been\ndeployed once for real**", read("README.md"))
 
     def test_the_cell_machine_is_told_to_install_a_c_compiler(self):
         """brokerd links C code: without gcc the build fails far from the cause (first Azure deployment)."""

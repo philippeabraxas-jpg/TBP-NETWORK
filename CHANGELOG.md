@@ -20,8 +20,12 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   machines; the guides take a tester who does not know the cloud from the account (credits, budget alert, ssh key) to
   the machines, then to `site.md`. The only thing open to the Internet is ssh, from the one address given as a
   parameter; the test's own ports (8443, 9000, 9100) are open between the three machines only, and the live console is
-  reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). **The templates have
-  not been run against a real account by us**; each guide begins with a validation that creates nothing.
+  reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). The README opens with a
+  plain-words chapter for a newcomer (goal, how it works, what you end up with, with a screenshot of the console of a real
+  deployment). **The Azure template has been deployed once for real** (Sweden Central, `Standard_D2s_v5`) through to the
+  open console; that first run found the C-compiler prerequisite (below) and that a new subscription can be refused some
+  regions and sizes, now in the Azure guide with a free test of the region. **The AWS template has not been run against a
+  real account**; each guide begins with a validation that creates nothing.
 
 ### Changed
 - **Go 1.27.3 in the CI and in the guides** (was 1.27.2): `govulncheck` reports GO-2026-6809 (`crypto/x509`, standard
