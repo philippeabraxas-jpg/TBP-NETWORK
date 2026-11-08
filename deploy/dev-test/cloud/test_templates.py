@@ -145,6 +145,18 @@ class Guides(unittest.TestCase):
         self.assertIn("have not been\nrun against a real Azure or AWS account", read("README.md"))
         self.assertIn("n'ont pas\nété exécutés par nous", read("README.fr.md"))
 
+    def test_the_cell_machine_is_told_to_install_a_c_compiler(self):
+        """brokerd links C code: without gcc the build fails far from the cause (first Azure deployment)."""
+        dev = HERE.parent
+        for name in ("site.md", "site.fr.md", "solo.md", "solo.fr.md"):
+            text = (dev / name).read_text(encoding="utf-8")
+            line = next(l for l in text.splitlines() if "apt-get install -y git curl jq openssl" in l)
+            self.assertIn("gcc libc6-dev", line, f"{name}: the packages of the machine that builds the cell")
+        for name in ("site.sh", "devtest.sh"):
+            text = (dev.parent.parent / "scripts" / "devtest" / name).read_text(encoding="utf-8")
+            self.assertIn('[ "$b" != brokerd ] || need gcc "brokerd links C code: sudo apt-get install -y gcc libc6-dev"',
+                          text, f"{name} must fail early, with the cure, when there is no C compiler")
+
     def test_deallocate_not_stop(self):
         for name in ("azure.md", "azure.fr.md"):
             self.assertIn("az vm deallocate", read(name))

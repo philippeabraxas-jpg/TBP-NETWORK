@@ -120,6 +120,7 @@ says it was this cloud.
 | `ssh` hangs, then `timed out` | your address is not the one you gave (it changed), or the machine is stopped. Check the address, and the machine's state in the portal |
 | `m3 check` cannot reach the cell or the application | the firewall did not come with the template (you created the machines by hand?), or M1/M2 are not `up`. `site.sh m1 listeners` shows what listens |
 | the console page does not open | the tunnel is not running (it needs its terminal open), or you used the private address instead of `localhost` |
+| `m1 init` fails with `undefined: pkcs11.Attribute` | M1 has no C compiler (Go then switches C support off by itself). `sudo apt-get install -y gcc libc6-dev`, then run `init` again (it left nothing behind) |
 | after you stopped and started the machines, nothing answers | the test's processes do not restart by themselves: run `up` again on M1 and M2 (a restart of `pepd` comes back in *refused* by design, see [site.md](../site.md)). Stopping and starting cloud machines is **not** something we have tested: if `up` fails, delete and redeploy |
 
 ## What was and was not checked

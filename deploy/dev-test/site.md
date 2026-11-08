@@ -65,7 +65,7 @@ listeners` (and `m2`, `m3`).
 
 | Machine | Needs |
 |---|---|
-| M1 | Debian 12, a user with `sudo`, `git curl jq openssl`, **OPA**, **Go** (the version in `go.mod`) — or the release binaries |
+| M1 | Debian 12, a user with `sudo`, `git curl jq openssl gcc libc6-dev` (a C compiler: the cell links C code), **OPA**, **Go** (the version in `go.mod`) — or the release binaries, which need no compiler |
 | M2 | Debian 12, `git curl jq openssl python3` — nothing else: its binaries come from M1's pack |
 | M3 | Debian 12, `git curl jq perl` |
 
@@ -81,7 +81,7 @@ Replace `<M1>`, `<M2>` by the machines' **private** addresses on your network. `
 **On M1** — the cell:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 # OPA, the version CI uses, checked against its published checksum
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static.sha256

@@ -7,6 +7,13 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 
 ## [Unreleased]
 
+### Fixed
+- **M1 and the solo machine need a C compiler to build the cell** (found by the first DEV-TEST deployment on Azure):
+  `brokerd` links C code (the HSM interface), and on a Debian 12 image without `gcc` Go switches cgo off and the build
+  fails with `undefined: pkcs11.Attribute`. `site.sh m1 init` and `devtest.sh init` now say so before building, and the
+  guides (`site`, `solo`, `cloud`; English and French) list `gcc libc6-dev` among the packages. The release binaries need
+  no compiler.
+
 ### Added
 - **The three machines of the DEV-TEST site in Azure or AWS, step by step** (`deploy/dev-test/cloud/`, English and
   French): a Bicep template and a CloudFormation template create the network, the firewall and three Debian 12

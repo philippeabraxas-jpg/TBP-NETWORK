@@ -123,6 +123,7 @@ chaque machine ([Nous dire ce que vous avez trouvé](../site.fr.md#nous-dire-ce-
 | `ssh` reste figé, puis `timed out` | votre adresse n'est plus celle que vous avez donnée (elle a changé), ou la machine est arrêtée. Vérifiez l'adresse et l'état de la machine dans le portail |
 | `m3 check` n'atteint ni la cellule ni l'application | le pare-feu n'est pas venu avec le modèle (machines créées à la main ?), ou M1/M2 ne sont pas `up`. `site.sh m1 listeners` montre ce qui écoute |
 | la page de la console ne s'ouvre pas | le tunnel ne tourne pas (il lui faut son terminal ouvert), ou vous avez pris l'adresse privée au lieu de `localhost` |
+| `m1 init` échoue avec `undefined: pkcs11.Attribute` | M1 n'a pas de compilateur C (Go désactive alors seul le code C). `sudo apt-get install -y gcc libc6-dev`, puis relancez `init` (il n'a rien laissé derrière lui) |
 | après arrêt puis démarrage des machines, rien ne répond | les processus du test ne redémarrent pas seuls : relancez `up` sur M1 et M2 (un redémarrage de `pepd` revient en *refused* par construction, voir [site.fr.md](../site.fr.md)). Arrêter puis démarrer des machines cloud, **nous ne l'avons pas testé** : si `up` échoue, supprimez et redéployez |
 
 ## Ce qui a été vérifié, et ce qui ne l'a pas été
