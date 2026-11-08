@@ -167,6 +167,27 @@ class Guides(unittest.TestCase):
             for token in ("stale-token", "plan-deviation", "30", "&& scripts/devtest/site.sh m3 call"):
                 self.assertIn(token, text, f"{name} must mention {token}")
 
+    def test_aws_size_is_the_one_the_azure_run_can_be_compared_with(self):
+        """The AWS default is a non-burstable 2 CPU / 8 GB size, and the guides and the label say the same."""
+        size = re.search(r"InstanceType:\n    Type: String\n    Default: (\S+)", read("aws.cfn.yaml")).group(1)
+        self.assertEqual(size, "m6i.large", "a burstable size would make the AWS timings hard to compare with Azure's")
+        for name in ("aws.md", "aws.fr.md", "README.md", "README.fr.md"):
+            self.assertIn(size, read(name), name)
+        for name in ("aws.md", "aws.fr.md"):
+            self.assertIn(f'"aws, {size}, ', read(name), name)
+
+    def test_aws_test_plan_is_a_plan_and_says_so(self):
+        """The plan has not been run: it must say it, in both languages, and list the parts it promises."""
+        reports = HERE.parent / "reports"
+        en = (reports / "aws-test-plan.md").read_text(encoding="utf-8")
+        fr = (reports / "aws-test-plan.fr.md").read_text(encoding="utf-8")
+        self.assertIn("**A plan, not a result.**", en)
+        self.assertIn("**Un plan, pas un résultat.**", fr)
+        for text in (en, fr):
+            for token in ("tests/opa_latency", "TBP_OPA_MAX_INFLIGHT=4", "kill -9", "tbp-audit verify", "ALARME",
+                          "delete-stack", "m6i.large", "grep -c MAX_INFLIGHT"):
+                self.assertIn(token, text)
+
     def test_deallocate_not_stop(self):
         for name in ("azure.md", "azure.fr.md"):
             self.assertIn("az vm deallocate", read(name))

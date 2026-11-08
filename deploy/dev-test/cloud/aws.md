@@ -69,7 +69,7 @@ AWS removes what it had started to create, and leaves the empty stack. The usual
 | `VcpuLimitExceeded`, `You have requested more vCPU capacity than your current vCPU limit` | a new account has a small quota: Service Quotas → *Amazon EC2* → *Running On-Demand Standard instances* → request 8, or take another region. The three machines need 6 vCPUs |
 | `OptInRequired`, `Marketplace` | accept the (free) terms of the Debian 12 image once: open it on AWS Marketplace (search "Debian 12") → **Continue to Subscribe** → **Accept Terms**, then create again |
 | `The key pair 'tbp-devtest' does not exist` | the key pair is in another region, or has another name: step 2 |
-| `Unsupported … in the Availability Zone` for `t3.medium` | add `InstanceType=t3a.medium` to the parameters, or take another region |
+| `Unsupported … in the Availability Zone` for `m6i.large` | add `InstanceType=m5.large` to the parameters (same 2 CPUs and 8 GB, older generation), or take another region |
 
 After a failure the empty stack (`ROLLBACK_COMPLETE`) must be deleted before you can create it again:
 `aws cloudformation delete-stack --stack-name tbp-devtest`, then retry step 4.
@@ -84,7 +84,7 @@ ssh -i "$HOME/.ssh/tbp-devtest" admin@<M1 PUBLIC ADDRESS>
 
 The first time, `ssh` asks whether to trust the machine: answer `yes`. If it works, `exit` and continue in
 **[README.md — once the three machines exist](README.md#then-once-the-three-machines-exist)**, with `<login>` = `admin`
-and `--env "aws, t3.medium, eu-west-3"` (the region you chose).
+and `--env "aws, m6i.large, eu-west-3"` (the region you chose).
 
 ## 6. Your address changed
 
@@ -115,7 +115,7 @@ It leaves the key pair `tbp-devtest` (free) and the budget (free); delete your c
 ## What the template does and does not do
 
 It creates: a network `10.20.0.0/24` with an Internet gateway, a firewall (security group), three Debian 12 machines
-(`t3.medium`, 30 GB encrypted disk) with fixed private addresses and a fixed public address each (Elastic IP). It
+(`m6i.large`: 2 CPUs, 8 GB; 30 GB encrypted disk) with fixed private addresses and a fixed public address each (Elastic IP). It
 installs **nothing** on them: the packages, OPA and Go are installed by the commands of [site.md](../site.md#deploy), so
 that what you test is what `site.md` documents. The firewall allows ssh from your address and, between the three
 machines, 8443, 9000 and 9100; everything else is refused. The machines can reach the Internet (to install packages and
