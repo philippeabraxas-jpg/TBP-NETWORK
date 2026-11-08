@@ -8,6 +8,11 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Fixed
+- **The live console now draws what arrives after the page is open.** The server sends each update wrapped
+  (`{"kind":"request","request":{…}}`) and the page read it as the request itself: the first update failed silently, the
+  list stayed empty (`Requests (0)`) and only a reload showed the requests, while the latency table, fed by another route,
+  was already filled. Found by the first DEV-TEST deployment on Azure; the browser test only opened the page after the
+  requests existed, and now also posts a request once the page is open.
 - **The real-browser test of the live console no longer fails on a slow runner.** `browser-dump.js` read the page after a
   fixed 3.5 s, so a slow machine read it before it was drawn (`selftest` was red on `main` on and off since 2026-10-27,
   with no change of code behind it). It now waits, up to 20 s, until the page shows its latency table, then reads it. A

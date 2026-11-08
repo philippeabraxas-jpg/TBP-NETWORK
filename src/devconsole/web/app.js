@@ -323,7 +323,8 @@
     var es = new EventSource('/api/stream');
     es.onopen = function () { setLive(true, 'live'); };
     ['request', 'loose', 'state'].forEach(function (k) {
-      es.addEventListener(k, function (ev) { try { handle(k, JSON.parse(ev.data)); } catch (e) { /* ignore a malformed update */ } });
+      // the server sends {"kind":"request","request":{…}}: what the page draws is the content under the kind's own name
+      es.addEventListener(k, function (ev) { try { var u = JSON.parse(ev.data); handle(k, u && u[k] !== undefined ? u[k] : u); } catch (e) { /* ignore a malformed update */ } });
     });
     es.onerror = function () {
       setLive(false, 'reconnecting…');
