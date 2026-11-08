@@ -173,7 +173,7 @@ says it was this cloud.
 
 The test itself (`site.sh`) is run, in CI, on one host simulating the three machines. **The Azure template has been
 deployed once for real** (Sweden Central, `Standard_D2s_v5`, November 2026), through to the three machines up, `m3 check`
-passing and the live console open, then steps 1 to 10 of `site.md` — see the [draft report of 2026-11-08](../reports/2026-11-08-azure.md). That first
+passing and the live console open, then steps 1 to 14 of `site.md` — see the [draft report of 2026-11-08](../reports/2026-11-08-azure.md). That first
 run found two things now written here: the machine that builds the cell needs a C compiler, and a new subscription may
 be refused some regions and sizes ([azure.md](azure.md#4-create-the-machines)). **The AWS template has not been run
 against a real account**: its guide begins with a *validate* command that checks the template without creating anything.

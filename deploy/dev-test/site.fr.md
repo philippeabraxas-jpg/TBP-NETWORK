@@ -166,8 +166,9 @@ valide, la posture bloque), et en *monitor* une requête refusée est transmise 
 **Les jetons et les approbations sont éphémères et à usage unique.** Un jeton vit 30 à 60 secondes. Présenté plus tard,
 il est refusé comme `stale-token` — et ce contrôle passe *avant* ceux du rejeu et de la portée : un `m3 call` tardif ne
 montre donc jamais `replay` ni `scope-mismatch`. Une approbation de `m1 sign` ne sert qu'une fois : relancer le même
-`act … --binding <hash>` donne `plan-deviation` et aucun jeton (`call` présente alors le précédent, devenu périmé). Pour
-les étapes 4 et 5, signez donc de nouveau à chaque essai et enchaînez les deux commandes sur une ligne, pour que le jeton
+`act … --binding <hash>` donne `plan-deviation` et aucun jeton (`call` présente alors le précédent, devenu périmé). Un essai
+*refusé* ne consomme pas l'approbation : un `act` de classe W sans la preuve des contrôleurs répond `quorum-required`, et la
+même approbation sert ensuite avec la preuve. Pour les étapes 4 et 5, signez donc de nouveau à chaque essai et enchaînez les deux commandes sur une ligne, pour que le jeton
 ne vieillisse pas entre elles :
 
 ```

@@ -177,7 +177,7 @@ chaque machine ([Nous dire ce que vous avez trouvé](../site.fr.md#nous-dire-ce-
 
 Le test lui-même (`site.sh`) tourne, en CI, sur un seul hôte qui simule les trois machines. **Le modèle Azure a été
 déployé une fois pour de vrai** (Suède Centre, `Standard_D2s_v5`, novembre 2026), jusqu'aux trois machines up, `m3 check`
-qui passe et la console temps réel ouverte, puis les étapes 1 à 10 de `site.fr.md` — voir le
+qui passe et la console temps réel ouverte, puis les étapes 1 à 14 de `site.fr.md` — voir le
 [brouillon de rapport du 2026-11-08](../reports/2026-11-08-azure.fr.md). Ce premier passage a trouvé deux choses désormais écrites ici : la machine qui compile la cellule a besoin d'un
 compilateur C, et un abonnement récent peut se voir refuser certaines régions et tailles
 ([azure.fr.md](azure.fr.md#4-créer-les-machines)). **Le modèle AWS n'a pas été exécuté sur un vrai compte** : son guide
