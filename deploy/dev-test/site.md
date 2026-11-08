@@ -65,7 +65,7 @@ listeners` (and `m2`, `m3`).
 
 | Machine | Needs |
 |---|---|
-| M1 | Debian 12, a user with `sudo`, `git curl jq openssl`, **OPA**, **Go** (the version in `go.mod`) — or the release binaries |
+| M1 | Debian 12, a user with `sudo`, `git curl jq openssl gcc libc6-dev` (a C compiler: the cell links C code), **OPA**, **Go** (the version in `go.mod`) — or the release binaries, which need no compiler |
 | M2 | Debian 12, `git curl jq openssl python3` — nothing else: its binaries come from M1's pack |
 | M3 | Debian 12, `git curl jq perl` |
 
@@ -81,7 +81,7 @@ Replace `<M1>`, `<M2>` by the machines' **private** addresses on your network. `
 **On M1** — the cell:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 # OPA, the version CI uses, checked against its published checksum
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static.sha256
@@ -139,7 +139,7 @@ Run these in order. Each step says where it runs, and what it proves when it giv
 | 1 | M3 | `site.sh m3 act agent-i read doc-1` | `plan-binding-required`, no token | the cell admits nothing that no operator approved |
 | 2 | M1 | `site.sh m1 sign agent-i read doc-1`, then type `sign` | the plan in clear, its hash recomputed by the tool itself, then a plan approved and the exact `m3 act …` line to run | the operators' side as a person does it: you see what you sign, and the hash you sign is the one you computed (`--yes` skips the questions, never the recomputation) |
 | 3 | M3 | paste that line | `{"allow":true,"reason":"ok"}`, then on M2 `{"executed": "read doc-1", "verdict": { … "mode": "monitor", "forwarded": true }}` `[200]` | **the whole path**: enrolment by certificate, the decision, the signed token, `pepd` on another machine checking it, the application acting |
-| 4 | M3 | `site.sh m3 call` (the same token again) | `[200]` but `"reason": "replay"` | in monitor, `pepd` records the would-be refusal and blocks nothing |
+| 4 | M3 | `site.sh m3 call` (the same token again, **within a minute**: see below) | `[200]` but `"reason": "replay"` | in monitor, `pepd` records the would-be refusal and blocks nothing |
 | 5 | M1, M3 | get a fresh token (2–3), then `site.sh m3 call read doc-9`; get another, then `site.sh m3 call --forge` | `scope-mismatch`, then `bad-signature`, both still `[200]` in monitor | scope and signature are checked by `pepd` |
 | 6 | M1 | `site.sh m1 mode-proof closed` | a proof file, signed by **one** controller | closing restricts, so one controller may |
 | 7 | M2 | copy that file over, `site.sh m2 mode closed --proof <file>` | `{"mode":"closed"}` | the posture is governed by the controllers, from M1, not by M2 |
@@ -156,6 +156,18 @@ Run these in order. Each step says where it runs, and what it proves when it giv
 **Read `forwarded`, not `allow`.** The application on M2 acts when `pepd` says `forwarded: true`, and that is what it
 must do: in *refused* the verdict can carry `"allow": true` and `"forwarded": false` at once (the token is valid,
 the posture blocks), and in *monitor* a denied request is forwarded anyway. A real application follows `forwarded`.
+
+**Tokens and approvals are short-lived and single-use.** A token lives 30 to 60 seconds. Presented later it is refused
+as `stale-token` — and that check comes *before* the replay and scope checks, so a late `m3 call` never shows `replay` or
+`scope-mismatch`. An approval from `m1 sign` is used once: running the same `act … --binding <hash>` a second time gives
+`plan-deviation` and no token (`call` then presents the previous, now stale, one). A *refused* attempt does not use the
+approval up: a class W `act` without the controllers' proof answers `quorum-required`, and the same approval then works
+with the proof. So for steps 4 and 5, sign again each
+time and chain the two commands on one line, so that the token does not age between them:
+
+```
+scripts/devtest/site.sh m3 act agent-i read doc-1 --binding <hash> && scripts/devtest/site.sh m3 call read doc-9
+```
 
 The proofs live a few minutes (about four): do steps 6–7, 9 and 10, and 14 without a long pause between the machines.
 

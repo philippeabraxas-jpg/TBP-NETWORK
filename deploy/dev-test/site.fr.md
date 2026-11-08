@@ -68,7 +68,7 @@ socket Unix sur M1, pas un port réseau. Après le déploiement, vérifiez ce qu
 
 | Machine | Il faut |
 |---|---|
-| M1 | Debian 12, un utilisateur avec `sudo`, `git curl jq openssl`, **OPA**, **Go** (la version de `go.mod`) — ou les binaires de la release |
+| M1 | Debian 12, un utilisateur avec `sudo`, `git curl jq openssl gcc libc6-dev` (un compilateur C : la cellule lie du code C), **OPA**, **Go** (la version de `go.mod`) — ou les binaires de la release, qui n'en demandent pas |
 | M2 | Debian 12, `git curl jq openssl python3` — rien d'autre : ses binaires viennent du paquet de M1 |
 | M3 | Debian 12, `git curl jq perl` |
 
@@ -85,7 +85,7 @@ environnements.
 **Sur M1** — la cellule :
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 # OPA, la version que la CI utilise, vérifié avec sa somme de contrôle publiée
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static.sha256
@@ -144,7 +144,7 @@ Jouez ces étapes dans l'ordre. Chacune dit où elle se joue, et ce qu'elle prou
 | 1 | M3 | `site.sh m3 act agent-i read doc-1` | `plan-binding-required`, pas de jeton | la cellule n'admet rien qu'aucun opérateur n'ait approuvé |
 | 2 | M1 | `site.sh m1 sign agent-i read doc-1`, puis tapez `sign` | le plan en clair, son hash recalculé par l'outil lui-même, puis un plan approuvé et la ligne `m3 act …` exacte à exécuter | le côté opérateurs comme le fait une personne : vous voyez ce que vous signez, et le hash signé est celui que vous avez calculé (`--yes` saute les questions, jamais le recalcul) |
 | 3 | M3 | collez cette ligne | `{"allow":true,"reason":"ok"}`, puis sur M2 `{"executed": "read doc-1", "verdict": { … "mode": "monitor", "forwarded": true }}` `[200]` | **tout le chemin** : l'inscription par certificat, la décision, le jeton signé, `pepd` sur une autre machine qui le vérifie, l'application qui agit |
-| 4 | M3 | `site.sh m3 call` (le même jeton de nouveau) | `[200]` mais `"reason": "replay"` | en monitor, `pepd` enregistre le refus qui aurait eu lieu et ne bloque rien |
+| 4 | M3 | `site.sh m3 call` (le même jeton de nouveau, **dans la minute** : voir plus bas) | `[200]` mais `"reason": "replay"` | en monitor, `pepd` enregistre le refus qui aurait eu lieu et ne bloque rien |
 | 5 | M1, M3 | obtenez un jeton neuf (2–3), puis `site.sh m3 call read doc-9` ; un autre, puis `site.sh m3 call --forge` | `scope-mismatch`, puis `bad-signature`, tous deux encore `[200]` en monitor | `pepd` vérifie la portée et la signature |
 | 6 | M1 | `site.sh m1 mode-proof closed` | un fichier de preuve, signé par **un** contrôleur | fermer restreint : un contrôleur suffit |
 | 7 | M2 | copiez ce fichier, `site.sh m2 mode closed --proof <fichier>` | `{"mode":"closed"}` | la posture est gouvernée par les contrôleurs, depuis M1, pas par M2 |
@@ -162,6 +162,18 @@ Jouez ces étapes dans l'ordre. Chacune dit où elle se joue, et ce qu'elle prou
 doit faire : en *refused*, le verdict peut porter à la fois `"allow": true` et `"forwarded": false` (le jeton est
 valide, la posture bloque), et en *monitor* une requête refusée est transmise quand même. Une vraie application suit
 `forwarded`.
+
+**Les jetons et les approbations sont éphémères et à usage unique.** Un jeton vit 30 à 60 secondes. Présenté plus tard,
+il est refusé comme `stale-token` — et ce contrôle passe *avant* ceux du rejeu et de la portée : un `m3 call` tardif ne
+montre donc jamais `replay` ni `scope-mismatch`. Une approbation de `m1 sign` ne sert qu'une fois : relancer le même
+`act … --binding <hash>` donne `plan-deviation` et aucun jeton (`call` présente alors le précédent, devenu périmé). Un essai
+*refusé* ne consomme pas l'approbation : un `act` de classe W sans la preuve des contrôleurs répond `quorum-required`, et la
+même approbation sert ensuite avec la preuve. Pour les étapes 4 et 5, signez donc de nouveau à chaque essai et enchaînez les deux commandes sur une ligne, pour que le jeton
+ne vieillisse pas entre elles :
+
+```
+scripts/devtest/site.sh m3 act agent-i read doc-1 --binding <hash> && scripts/devtest/site.sh m3 call read doc-9
+```
 
 Les preuves vivent quelques minutes (environ quatre) : faites les étapes 6–7, 9 et 10, et 14 sans longue pause
 entre les machines.

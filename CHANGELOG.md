@@ -8,13 +8,50 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
 ## [Unreleased]
 
 ### Added
+- **A draft report of the first real run of the site test** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and
+  French): Azure, three `Standard_D2s_v5`, steps 1 to 14 of `site.md` and two network attacks, the measures (including the
+  concurrency of one agent and `tests/opa_latency` on the VM), and what the run found. Partial by
+  design: the complete report comes once the test has been run on AWS as well.
+- **A plan for the AWS run** (`deploy/dev-test/reports/aws-test-plan.md`, English and French): the same test as on Azure, then
+  what Azure left open (cold timings, the concurrency series, OPA alone, a hard stop of `pepd` followed by `tbp-audit verify`,
+  a flood of invalid requests, the file attacks), with a table to fill in. A plan, not a result: nothing in it has been run on AWS.
+
+### Changed
+- **The AWS template defaults to `m6i.large`** (2 CPUs, 8 GB, not burstable) instead of `t3.medium`, so that the timings can be
+  compared with the Azure run (`Standard_D2s_v5`); the guides and the label example follow.
+
+### Fixed
+- **`site.md` now says that tokens and approvals are short-lived and single-use** (found by the first run): a token lives
+  30 to 60 s and a late `m3 call` shows `stale-token`, never `replay` or `scope-mismatch`; an approval of `m1 sign` gave
+  `plan-deviation` the second time, while a refused attempt (`quorum-required`) does not use it up. Steps 4 and 5 chain `act` and `call` on one line.
+- **The quorum messages of the mode path are in English** (`pep: quorum proof rejected (§5.3) (switch → monitor)`): one
+  refusal of `m2 mode` was in French in the middle of English output. The other messages of the code base are unchanged.
+- **The live console now draws what arrives after the page is open.** The server sends each update wrapped
+  (`{"kind":"request","request":{…}}`) and the page read it as the request itself: the first update failed silently, the
+  list stayed empty (`Requests (0)`) and only a reload showed the requests, while the latency table, fed by another route,
+  was already filled. Found by the first DEV-TEST deployment on Azure; the browser test only opened the page after the
+  requests existed, and now also posts a request once the page is open.
+- **The real-browser test of the live console no longer fails on a slow runner.** `browser-dump.js` read the page after a
+  fixed 3.5 s, so a slow machine read it before it was drawn (`selftest` was red on `main` on and off since 2026-10-27,
+  with no change of code behind it). It now waits, up to 20 s, until the page shows its latency table, then reads it. A
+  slow page that fills after 6 s is missed by the old script and read by the new one.
+- **M1 and the solo machine need a C compiler to build the cell** (found by the first DEV-TEST deployment on Azure):
+  `brokerd` links C code (the HSM interface), and on a Debian 12 image without `gcc` Go switches cgo off and the build
+  fails with `undefined: pkcs11.Attribute`. `site.sh m1 init` and `devtest.sh init` now say so before building, and the
+  guides (`site`, `solo`, `cloud`; English and French) list `gcc libc6-dev` among the packages. The release binaries need
+  no compiler.
+
+### Added
 - **The three machines of the DEV-TEST site in Azure or AWS, step by step** (`deploy/dev-test/cloud/`, English and
   French): a Bicep template and a CloudFormation template create the network, the firewall and three Debian 12
   machines; the guides take a tester who does not know the cloud from the account (credits, budget alert, ssh key) to
   the machines, then to `site.md`. The only thing open to the Internet is ssh, from the one address given as a
   parameter; the test's own ports (8443, 9000, 9100) are open between the three machines only, and the live console is
-  reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). **The templates have
-  not been run against a real account by us**; each guide begins with a validation that creates nothing.
+  reached through an ssh tunnel. A test pins what is open and to whom (`test_templates.py`, in CI). The README opens with a
+  plain-words chapter for a newcomer (goal, how it works, what you end up with). **The Azure template has been deployed once for real** (Sweden Central, `Standard_D2s_v5`) through to the
+  open console; that first run found the C-compiler prerequisite (below) and that a new subscription can be refused some
+  regions and sizes, now in the Azure guide with a free test of the region. **The AWS template has not been run against a
+  real account**; each guide begins with a validation that creates nothing.
 
 ### Changed
 - **Go 1.27.3 in the CI and in the guides** (was 1.27.2): `govulncheck` reports GO-2026-6809 (`crypto/x509`, standard

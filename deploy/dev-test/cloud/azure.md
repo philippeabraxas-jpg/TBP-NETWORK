@@ -38,8 +38,26 @@ az vm list-skus --location francecentral --size Standard_B2s --query "[].{size:n
 ```
 
 A line with an empty *restricted* column is good. `NotAvailableForSubscription` means this size is not offered to your
-subscription in this region: take another region (`westeurope`), or another size (add `vmSize=Standard_B2ms` to the
-parameters below).
+subscription in this region, and a size that is absent from the answer is not offered to you at all. Other sizes to
+try, with `vmSize=<size>` added to the parameters of the next step: `Standard_B2ms`, `Standard_D2s_v5`, `Standard_D2s_v7`
+(2 CPUs and 8 GB; the `D` sizes have no CPU credits, which makes latency measurements steadier).
+
+**Check also that the region accepts you.** A new subscription is sometimes refused a whole region (*"not accepting new
+customers"*) while the list of sizes looks fine, and the *validate* command does not notice. A free test creates an empty
+firewall in a few regions and deletes it:
+
+```bash
+az group create --name tbp-probe --location westeurope -o none      # a throw-away group
+for r in francecentral swedencentral germanywestcentral northeurope westeurope; do
+  if az network nsg create --resource-group tbp-probe --name probe-$r --location $r -o none 2>/dev/null; then
+    echo "$r: accepted"; az network nsg delete --resource-group tbp-probe --name probe-$r
+  else echo "$r: refused"; fi
+done
+az group delete --name tbp-probe --yes --no-wait
+```
+
+Take a region that says `accepted` **and** where step 3 shows a free size, and use it in the next step. (The first
+deployment of this template was refused in France Central, then worked in Sweden Central with `Standard_D2s_v5`.)
 
 ## 4. Create the machines
 
@@ -66,7 +84,8 @@ If *validate* or *create* fails, the message names the cause. The usual ones:
 
 | Message | Cause |
 |---|---|
-| `SkuNotAvailable`, `NotAvailableForSubscription` | size or region not offered to you: step 3 |
+| `SkuNotAvailable`, `NotAvailableForSubscription`, `Capacity Restrictions` | size or region not offered to you, or no capacity left for that size at the moment: step 3, another size or another region |
+| `RequestDisallowedByAzure … not accepting new customers` | your subscription is refused this region: the test of step 3, then recreate the group in a region that accepts (`az group delete`, `az group create`) |
 | `QuotaExceeded`, `Operation could not be completed as it results in exceeding approved … cores quota` | new subscriptions start with few cores: ask for more under *Quotas*, or take another region |
 | `RequestDisallowedByPolicy` | your subscription forbids this region or size: take another |
 | `InvalidParameter … publicKeys` | the key was cut or contains a line break: paste the one line, between single quotes |

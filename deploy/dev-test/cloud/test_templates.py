@@ -141,9 +141,52 @@ class Guides(unittest.TestCase):
         for name in ("aws.md", "aws.fr.md"):
             self.assertIn("aws cloudformation validate-template", read(name))
 
-    def test_guides_say_the_templates_were_not_run_by_us(self):
-        self.assertIn("have not been\nrun against a real Azure or AWS account", read("README.md"))
-        self.assertIn("n'ont pas\nété exécutés par nous", read("README.fr.md"))
+    def test_guides_say_which_template_was_run_for_real(self):
+        """Honesty about what was tested: Azure once, by the maintainer; AWS never, until someone does."""
+        self.assertIn("**The AWS template has not been run\nagainst a real account**", read("README.md"))
+        self.assertIn("**Le modèle AWS n'a pas été exécuté sur un vrai compte**", read("README.fr.md"))
+        self.assertIn("**The Azure template has been\ndeployed once for real**", read("README.md"))
+
+    def test_the_cell_machine_is_told_to_install_a_c_compiler(self):
+        """brokerd links C code: without gcc the build fails far from the cause (first Azure deployment)."""
+        dev = HERE.parent
+        for name in ("site.md", "site.fr.md", "solo.md", "solo.fr.md"):
+            text = (dev / name).read_text(encoding="utf-8")
+            line = next(l for l in text.splitlines() if "apt-get install -y git curl jq openssl" in l)
+            self.assertIn("gcc libc6-dev", line, f"{name}: the packages of the machine that builds the cell")
+        for name in ("site.sh", "devtest.sh"):
+            text = (dev.parent.parent / "scripts" / "devtest" / name).read_text(encoding="utf-8")
+            self.assertIn('[ "$b" != brokerd ] || need gcc "brokerd links C code: sudo apt-get install -y gcc libc6-dev"',
+                          text, f"{name} must fail early, with the cure, when there is no C compiler")
+
+    def test_site_says_tokens_are_short_lived_and_approvals_single_use(self):
+        """First run: "the same token again" gave stale-token after three minutes, a second act gave plan-deviation."""
+        dev = HERE.parent
+        for name in ("site.md", "site.fr.md"):
+            text = (dev / name).read_text(encoding="utf-8")
+            for token in ("stale-token", "plan-deviation", "30", "&& scripts/devtest/site.sh m3 call"):
+                self.assertIn(token, text, f"{name} must mention {token}")
+
+    def test_aws_size_is_the_one_the_azure_run_can_be_compared_with(self):
+        """The AWS default is a non-burstable 2 CPU / 8 GB size, and the guides and the label say the same."""
+        size = re.search(r"InstanceType:\n    Type: String\n    Default: (\S+)", read("aws.cfn.yaml")).group(1)
+        self.assertEqual(size, "m6i.large", "a burstable size would make the AWS timings hard to compare with Azure's")
+        for name in ("aws.md", "aws.fr.md", "README.md", "README.fr.md"):
+            self.assertIn(size, read(name), name)
+        for name in ("aws.md", "aws.fr.md"):
+            self.assertIn(f'"aws, {size}, ', read(name), name)
+
+    def test_aws_test_plan_is_a_plan_and_says_so(self):
+        """The plan has not been run: it must say it, in both languages, and list the parts it promises."""
+        reports = HERE.parent / "reports"
+        en = (reports / "aws-test-plan.md").read_text(encoding="utf-8")
+        fr = (reports / "aws-test-plan.fr.md").read_text(encoding="utf-8")
+        self.assertIn("**A plan, not a result.**", en)
+        self.assertIn("**Un plan, pas un résultat.**", fr)
+        for text in (en, fr):
+            for token in ("tests/opa_latency", "TBP_OPA_MAX_INFLIGHT=4", "kill -9", "tbp-audit verify", "ALARME",
+                          "delete-stack", "m6i.large", "grep -c MAX_INFLIGHT"):
+                self.assertIn(token, text)
 
     def test_deallocate_not_stop(self):
         for name in ("azure.md", "azure.fr.md"):

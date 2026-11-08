@@ -43,8 +43,8 @@ below are the whole procedure; the first run prints `demo passed` at the end. We
 a fresh Debian 12 — your timing is part of what we ask for.
 
 ```bash
-# 1. Tools: git, curl, jq, openssl
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+# 1. Tools: git, curl, jq, openssl, and a C compiler (the cell links C code)
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 
 # 2. OPA, the version CI uses, checked against its published checksum
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static

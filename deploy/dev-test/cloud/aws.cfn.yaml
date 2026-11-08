@@ -23,8 +23,8 @@ Parameters:
     Description: The name of an ssh key pair that exists in this region (EC2, Key pairs). You import your public key there.
   InstanceType:
     Type: String
-    Default: t3.medium
-    Description: Machine size. 2 CPUs and 4 GB is a starting point; nobody has measured the smallest size that works.
+    Default: m6i.large
+    Description: Machine size. m6i.large (2 CPUs, 8 GB, not burstable) is the size the Azure run used (Standard_D2s_v5), so the timings can be compared; nobody has measured the smallest size that works.
   ImageId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/debian/release/12/latest/amd64

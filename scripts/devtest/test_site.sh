@@ -343,7 +343,7 @@ curl -s -o /dev/null -H "Authorization: Bearer ${IK}" --data-binary '{"ts":"x","
 CHROME_BIN=${CHROME:-$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome 2>/dev/null | head -1)}
 [ -n "${CHROME_BIN}" ] || CHROME_BIN=$(command -v google-chrome chromium chromium-browser 2>/dev/null | head -1)
 if [ -n "${CHROME_BIN}" ] && command -v node >/dev/null 2>&1; then
-  if node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 3500 >"${WORK}/page.json" 2>/dev/null; then
+  if node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 20000 "cell decision" >"${WORK}/page.json" 2>/dev/null; then
     page=$(jq -r .html "${WORK}/page.json")
     says "in a real browser: the page shows a request that went through" "agent-i asks: read doc-t1" "${page}"
     says "in a real browser: the components are shown" "the cell" "${page}"
@@ -352,6 +352,15 @@ if [ -n "${CHROME_BIN}" ] && command -v node >/dev/null 2>&1; then
     if printf '%s' "${page}" | grep -q '<img\|<script>document\|<b>cn'; then bad "hostile markup became elements of the page"; else ok "in a real browser: hostile markup is shown as text, not as elements"; fi
     says "…and it is there, as text" "&lt;img src=x onerror" "${page}"
   else echo "  skip - the browser check could not run here (exit $?: 7 = Node older than 22, 3-6 = the browser did not answer; ${CHROME_BIN})"; fi
+  # the live stream: a request that arrives AFTER the page is open must appear without a reload (the page was once
+  # tested only on requests already there when it opened, and drew nothing that came later)
+  node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 30000 "doc-live-t9" >"${WORK}/live.json" 2>/dev/null &
+  live_pid=$!
+  sleep 8
+  curl -s -o /dev/null -H "Authorization: Bearer ${IK}" --data-binary "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\",\"trace_id\":\"t-live-t9\",\"component\":\"agent\",\"stage\":\"request\",\"outcome\":\"emitted\",\"detail\":\"agent-i asks: read doc-live-t9\"}" "${CONSOLE}/ingest"
+  if wait "${live_pid}"; then
+    says "in a real browser: a request that arrives after the page is open appears, with no reload (the live stream)" "agent-i asks: read doc-live-t9" "$(jq -r .html "${WORK}/live.json")"
+  else echo "  skip - the live-stream browser check could not run here (exit $?)"; fi
 else echo "  skip - no Chrome/Chromium and Node on this machine: the page was not opened in a browser"; fi
 
 echo "== the console on a machine of its own (not M1)"

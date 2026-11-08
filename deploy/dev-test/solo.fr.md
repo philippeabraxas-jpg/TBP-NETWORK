@@ -46,8 +46,8 @@ utilisateur avec `sudo`. Les commandes ci-dessous sont toute la procédure ; la 
 partie de ce que nous vous demandons.
 
 ```bash
-# 1. Outils : git, curl, jq, openssl
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+# 1. Outils : git, curl, jq, openssl, et un compilateur C (la cellule lie du code C)
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 
 # 2. OPA, la version que la CI utilise, vérifié avec sa somme de contrôle publiée
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static

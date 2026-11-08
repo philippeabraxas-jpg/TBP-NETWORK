@@ -266,6 +266,9 @@ m1_install_binaries() {
       cp -- "${SRC_BIN_DIR}/${b}" "${BIN_DIR}/${b}"
     else
       need go "or build the release binaries first: bash scripts/release/build.sh dist"
+      # brokerd links C code (the HSM interface, miekg/pkcs11): without a C compiler Go turns cgo off by itself and
+      # the build fails with "undefined: pkcs11.Attribute", far from the cause
+      [ "$b" != brokerd ] || need gcc "brokerd links C code: sudo apt-get install -y gcc libc6-dev"
       case "$b" in
         brokerd) pkg=./src/broker/cmd/brokerd ;;
         quorumproof) pkg=./src/pep/cmd/quorumproof ;;

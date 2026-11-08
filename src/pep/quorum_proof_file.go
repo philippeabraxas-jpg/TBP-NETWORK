@@ -72,7 +72,7 @@ func VerifyQuorumProofFile(path, condition, cellID string, keyring map[[16]byte]
 		return fmt.Errorf("quorum: %w", err)
 	}
 	if !verify(condition, QuorumProof{Expiry: time.Unix(pf.Expiry, 0), Signatures: sigs}) {
-		return errors.New("preuve de quorum rejetée (signatures insuffisantes, invalides, ou expirées)")
+		return errors.New("quorum proof rejected (not enough valid signatures, or expired)")
 	}
 	return nil
 }
