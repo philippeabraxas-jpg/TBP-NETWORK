@@ -3,7 +3,10 @@
 // actually became (its scripts have run). Used by test_site.sh to check that the live console shows what it must and
 // never runs anything a request put in it. No dependency: Node's own WebSocket and the DevTools protocol.
 //
-//   node browser-dump.js <chrome binary> <url> [wait milliseconds]
+//   node browser-dump.js <chrome binary> <url> [wait milliseconds [text the page must show]]
+//
+// With a text, the page is read as soon as it shows it (and a moment later, for what is drawn after it), or after the
+// wait if it never does: a slow machine then costs time, not a false failure. Without one, it reads after the wait.
 
 const { spawn } = require('child_process');
 const http = require('http');
@@ -11,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const [chrome, url, waitArg] = process.argv.slice(2);
+const [chrome, url, waitArg, ready] = process.argv.slice(2);
 const wait = parseInt(waitArg || '4000', 10);
 if (!chrome || !url) { console.error('usage: browser-dump.js <chrome> <url> [ms]'); process.exit(2); }
 
@@ -32,13 +35,13 @@ function finish(code, out) {
   if (out !== undefined) process.stdout.write(JSON.stringify(out));
   process.exit(code);
 }
-setTimeout(() => finish(3), wait + 20000).unref();
+setTimeout(() => finish(3), wait + 30000).unref();
 
 let buf = '';
 child.stderr.on('data', (d) => {
   buf += d.toString();
   const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
-  if (m) { buf = ''; setTimeout(() => inspect(parseInt(m[1], 10)), wait); }
+  if (m) { buf = ''; inspect(parseInt(m[1], 10)); }
 });
 child.on('exit', () => finish(3));
 
@@ -59,10 +62,24 @@ async function inspect(port) {
     const send = (method, params) => new Promise((resolve) => { const i = ++id; pending.set(i, resolve); ws.send(JSON.stringify({ id: i, method, params })); });
     ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
     ws.onerror = () => finish(5);
+    // just after Chrome starts the page may not answer yet: an unanswered read is an empty page, read again
+    const value = async (expression) => {
+      const r = await send('Runtime.evaluate', { expression, returnByValue: true });
+      const v = r && r.result && r.result.result && r.result.result.value;
+      return typeof v === 'string' ? v : '';
+    };
+    const html = () => value('document.documentElement.outerHTML');
     ws.onopen = async () => {
-      const t = await send('Runtime.evaluate', { expression: 'document.title', returnByValue: true });
-      const h = await send('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
-      finish(0, { title: t.result.result.value, html: h.result.result.value });
+      const started = Date.now();
+      let h = await html();
+      if (ready) {
+        // poll until the page shows what it must, then let what is drawn after it settle
+        while (!h.includes(ready) && Date.now() - started < wait) { await new Promise((r) => setTimeout(r, 200)); h = await html(); }
+        if (h.includes(ready)) { await new Promise((r) => setTimeout(r, 500)); h = await html(); }
+      } else {
+        await new Promise((r) => setTimeout(r, wait)); h = await html();
+      }
+      finish(0, { title: await value('document.title'), html: h });
     };
   } catch (e) { finish(6); }
 }

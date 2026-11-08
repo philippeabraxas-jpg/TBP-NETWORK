@@ -68,7 +68,7 @@ socket Unix sur M1, pas un port réseau. Après le déploiement, vérifiez ce qu
 
 | Machine | Il faut |
 |---|---|
-| M1 | Debian 12, un utilisateur avec `sudo`, `git curl jq openssl`, **OPA**, **Go** (la version de `go.mod`) — ou les binaires de la release |
+| M1 | Debian 12, un utilisateur avec `sudo`, `git curl jq openssl gcc libc6-dev` (un compilateur C : la cellule lie du code C), **OPA**, **Go** (la version de `go.mod`) — ou les binaires de la release, qui n'en demandent pas |
 | M2 | Debian 12, `git curl jq openssl python3` — rien d'autre : ses binaires viennent du paquet de M1 |
 | M3 | Debian 12, `git curl jq perl` |
 
@@ -85,7 +85,7 @@ environnements.
 **Sur M1** — la cellule :
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git curl jq openssl ca-certificates
+sudo apt-get update && sudo apt-get install -y git curl jq openssl gcc libc6-dev ca-certificates
 # OPA, la version que la CI utilise, vérifié avec sa somme de contrôle publiée
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static
 curl -fsSLO https://github.com/open-policy-agent/opa/releases/download/v1.20.2/opa_linux_amd64_static.sha256

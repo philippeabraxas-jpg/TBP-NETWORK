@@ -343,7 +343,7 @@ curl -s -o /dev/null -H "Authorization: Bearer ${IK}" --data-binary '{"ts":"x","
 CHROME_BIN=${CHROME:-$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome 2>/dev/null | head -1)}
 [ -n "${CHROME_BIN}" ] || CHROME_BIN=$(command -v google-chrome chromium chromium-browser 2>/dev/null | head -1)
 if [ -n "${CHROME_BIN}" ] && command -v node >/dev/null 2>&1; then
-  if node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 3500 >"${WORK}/page.json" 2>/dev/null; then
+  if node "${SCRIPT_DIR}/browser-dump.js" "${CHROME_BIN}" "${CONSOLE}/?key=${VK}" 20000 "cell decision" >"${WORK}/page.json" 2>/dev/null; then
     page=$(jq -r .html "${WORK}/page.json")
     says "in a real browser: the page shows a request that went through" "agent-i asks: read doc-t1" "${page}"
     says "in a real browser: the components are shown" "the cell" "${page}"
