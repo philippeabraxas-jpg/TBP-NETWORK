@@ -13,7 +13,7 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   concurrency of one agent and `tests/opa_latency` on the VM), and what the run found. Partial by
   design: the complete report comes once the test has been run on AWS as well.
 - **The Azure report completed with the second day** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and French): the file
-  attacks on M2 (all refused, each naming its cause), a hard stop of `pepd` that leaves an orphan record in the journal (found by
+  attacks on M2 and M1 (13 changes of measured files refused, each naming its cause), a hard stop of `pepd` that leaves an orphan record in the journal (found by
   `tbp-audit verify`, not closable by any tool yet), and floods of invalid requests (about 360 bytes of disk each, no alarm, no loss).
   By hand, one run: what is not established is listed in the report.
 - **A plan for the AWS run** (`deploy/dev-test/reports/aws-test-plan.md`, English and French): the same test as on Azure, then
