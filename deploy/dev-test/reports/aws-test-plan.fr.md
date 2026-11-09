@@ -158,9 +158,9 @@ des paquets, et les preuves sur votre ordinateur. Vérifiez dans la console (EC2
 | 5 | `opa-overloaded` | 0, 0, 1, 13, 42 | |
 | 5 | avec 4 places, à 4 et 16 | 0, 32 | |
 | 5 | `opa-timeout` dans `brokerd.log` | 1 dans les 67 premières | |
-| 6 | `tbp-audit verify` après `kill -9` | non fait | |
-| 7 | attaques de fichiers | non fait | |
-| 8 | déluge de 2 000 requêtes invalides : durée, nombre d'`ALARME`, requête valide ensuite | non fait | |
+| 6 | `tbp-audit verify` après `kill -9` | 3 orphelins sur 3 arrêts à délai nul (un par accident), aucun à 0,3 s (9 nov.) | |
+| 7 | attaques de fichiers | M2 : 5 sur 5 refusés ; M1 : 8 sur 8 refusés, 1 réglage non mesuré accepté (9 nov.) | |
+| 8 | déluge de requêtes invalides : durée, nombre d'`ALARME`, requête valide ensuite | 28 000 requêtes en trois déluges (9 nov.) : aucune alarme, aucune perte, requête valide servie | |
 
 Collez les trois `report` et ce tableau dans une issue **Dev-test feedback** (le titre commence par `[dev-test]`). Tout ce qui
 est exploitable va en privé, comme le dit [SECURITY.md](../../../SECURITY.md).
