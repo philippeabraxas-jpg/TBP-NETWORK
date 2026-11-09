@@ -56,6 +56,8 @@ que vous essayez**.
 - **Tout ce qui est exploitable** — un moyen de passer un refus, une acceptation silencieuse, un secret qui fuit —
   va **en privé**, comme le dit [SECURITY.md](../../SECURITY.md), pas dans une issue publique.
 
+Les notes de release de ce DEV-TEST sont dans **[RELEASE-NOTES.md](RELEASE-NOTES.md)** (en anglais seulement).
+
 Les limites connues sont écrites dans le [README](../../README.md) (« Honesty about where this stands »), dans
 [CHANGELOG.md](../../CHANGELOG.md) et dans [governed-acts.fr.md](../governed-acts.fr.md) : une trouvaille qui en fait
 partie est bienvenue comme issue ordinaire.

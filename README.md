@@ -34,6 +34,12 @@ procedure from fresh Debian 12 machines, the scenario to test, where to attack, 
 and how to send us your numbers and comments for **each environment you try**, which we want. Anything exploitable
 goes through [SECURITY.md](SECURITY.md), not a public issue.
 
+**The first release is this DEV-TEST: a pre-release, not a production release.** Its
+[release notes](deploy/dev-test/RELEASE-NOTES.md) say what it is, what the first real run (three Azure machines, 8 and 9 November
+2026) showed, the known limits — among them a cell that refuses an agent's parallel decisions beyond two at a time by default, a
+hard stop that can leave an orphan record in the journal, and no rate limit on invalid tokens — and what was not tested (AWS, among
+others). The [report](deploy/dev-test/reports/2026-11-08-azure.md) has the detail.
+
 ## What TBP is — and isn't
 
 **TBP does not close every hole; it audits every hole.** That's not a
@@ -276,7 +282,8 @@ carry the cell's trust — `pepd`, `brokerd` and `anod` refuse to start on an
 unexplained change, and a deliberate change takes a quorum proof; for
 `brokerd` that now includes the rules its own OPA serves
 ([#313](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/313)).
-No release has been tagged yet: the first one is a scale 2 release, see
+The first release is a DEV-TEST pre-release
+([release notes](deploy/dev-test/RELEASE-NOTES.md)); a scale 2 release comes after it, see
 the roadmap below. The inter-domain layer (spec §13) is deferred by the spec
 itself and tracked in
 [#33](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/33) so
@@ -427,7 +434,8 @@ increasing accordingly:
   exists.
 
 **Honesty about where this stands**: scales 1 and 2 are packaged — guides
-and selftest phases exist — but nothing is tagged or released yet. Scale 3
+and selftest phases exist — but no production release exists: the first release is a DEV-TEST
+pre-release, for testing only. Scale 3
 is delivered as the pilot-P1 deployment and still has open work. Scale full
 requires actual new code (§3's three proofs), not just new guides.
 
@@ -466,8 +474,12 @@ of effort. They run in parallel.
    `quorumproof` and `tbp-audit`; a `vX.Y.Z` tag publishes them with SLSA
    provenance and an SBOM); [`SECURITY.md`](SECURITY.md) and
    [`CHANGELOG.md`](CHANGELOG.md), which carries the list of known limits.
-   Remaining: choosing the version and cutting the first tag, and a run of
-   the guide on a clean Debian machine, beyond the selftest. Operator tooling is sized
+   Done since: a first real run of the three-machine site on Azure
+   ([report](deploy/dev-test/reports/2026-11-08-azure.md)), and the DEV-TEST pre-release that comes out of it. Remaining
+   for a scale 2 release: the same run on AWS, the limits that run found
+   ([#347](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/347),
+   [#348](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/348),
+   [#349](https://github.com/philippeabraxas-jpg/TBP-NETWORK/issues/349)), and choosing the version of that release. Operator tooling is sized
    to the scale that uses it — three tools are planned on top of what
    exists, the first being usable at scale 2:
    - a **supervision dashboard** on top of the existing read-only

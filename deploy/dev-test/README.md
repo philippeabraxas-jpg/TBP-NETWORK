@@ -52,6 +52,9 @@ We want your numbers and your comments — including "I got stuck here" — **fo
 - **Anything exploitable** — a way past a refusal, a silent acceptance, a leaked secret — goes **privately**, as
   [SECURITY.md](../../SECURITY.md) says, not into a public issue.
 
+The release notes of this DEV-TEST are in **[RELEASE-NOTES.md](RELEASE-NOTES.md)**: what it is, what the first run showed, the
+known limits, what was not tested.
+
 Known limits are written in the [README](../../README.md) ("Honesty about where this stands"), in
 [CHANGELOG.md](../../CHANGELOG.md) and in [governed-acts.md](../governed-acts.md): a finding that is one of them is
 welcome as an ordinary issue.

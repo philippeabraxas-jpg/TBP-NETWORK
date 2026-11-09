@@ -158,7 +158,7 @@ the packs, and the proofs on your computer. Check in the console (EC2, Elastic I
 | 5 | `opa-timeout` in `brokerd.log` | 1 in the first 67 | |
 | 6 | `tbp-audit verify` after `kill -9` | 3 orphans in 3 stops at delay 0 (one by accident), none at 0.3 s (9 Nov) | |
 | 7 | file attacks | M2: 5 of 5 refused; M1: 8 of 8 refused, 1 unmeasured setting accepted (9 Nov) | |
-| 8 | flood of invalid requests: time, `ALARME` count, later valid request | 28,000 requests in three floods (9 Nov): no alarm, no loss, valid request served | |
+| 8 | flood of invalid requests: time, `ALARME` count, later valid request | 22,000 requests checked, no alarm, no loss; 6,000 more during a valid request, not checked afterwards (9 Nov) | |
 
 Paste the three `report`s and this table into a **Dev-test feedback** issue (title starts with `[dev-test]`). Anything that is
 exploitable goes privately, as [SECURITY.md](../../../SECURITY.md) says.
