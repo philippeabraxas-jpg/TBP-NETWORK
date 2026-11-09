@@ -12,6 +12,10 @@ scale 2 release, and its version number is chosen when the tag is created. Histo
   French): Azure, three `Standard_D2s_v5`, steps 1 to 14 of `site.md` and two network attacks, the measures (including the
   concurrency of one agent and `tests/opa_latency` on the VM), and what the run found. Partial by
   design: the complete report comes once the test has been run on AWS as well.
+- **The Azure report completed with the second day** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and French): the file
+  attacks on M2 (all refused, each naming its cause), a hard stop of `pepd` that leaves an orphan record in the journal (found by
+  `tbp-audit verify`, not closable by any tool yet), and floods of invalid requests (about 360 bytes of disk each, no alarm, no loss).
+  By hand, one run: what is not established is listed in the report.
 - **A plan for the AWS run** (`deploy/dev-test/reports/aws-test-plan.md`, English and French): the same test as on Azure, then
   what Azure left open (cold timings, the concurrency series, OPA alone, a hard stop of `pepd` followed by `tbp-audit verify`,
   a flood of invalid requests, the file attacks), with a table to fill in. A plan, not a result: nothing in it has been run on AWS.
