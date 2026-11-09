@@ -188,6 +188,18 @@ class Guides(unittest.TestCase):
                           "delete-stack", "m6i.large", "grep -c MAX_INFLIGHT"):
                 self.assertIn(token, text)
 
+    def test_release_notes_state_the_limits_and_what_was_not_tested(self):
+        """The DEV-TEST release notes must keep saying what the first run found and what it did not test."""
+        dev = HERE.parent
+        notes = (dev / "RELEASE-NOTES.md").read_text(encoding="utf-8")
+        for token in ("pre-release", "Do not use this release to govern real agents", "opa-overloaded", "TBP_OPA_MAX_INFLIGHT",
+                      "orphan", "issues/347", "issues/348", "issues/349", "never been run against a real account",
+                      "not explained", "not a performance claim", "SECURITY.md"):
+            self.assertIn(token, notes)
+        root = (dev.parent.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn("deploy/dev-test/RELEASE-NOTES.md", root)
+        self.assertNotIn("No release has been tagged yet", root)
+
     def test_deallocate_not_stop(self):
         for name in ("azure.md", "azure.fr.md"):
             self.assertIn("az vm deallocate", read(name))

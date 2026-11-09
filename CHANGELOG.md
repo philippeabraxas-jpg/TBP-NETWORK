@@ -1,20 +1,24 @@
 # Changelog
 
 All notable changes are listed here, newest first. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Nothing has been tagged yet: the first release is a
-scale 2 release, and its version number is chosen when the tag is created. History before this file is in
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The first release is a DEV-TEST pre-release
+(see `deploy/dev-test/RELEASE-NOTES.md`), and its version number is chosen when the tag is created; a scale 2 release comes
+after it. History before this file is in
 `git log` and in the issues.
 
 ## [Unreleased]
 
 ### Added
+- **Release notes of the DEV-TEST pre-release** (`deploy/dev-test/RELEASE-NOTES.md`): what it is, what the first real run showed,
+  the known limits (parallel decisions of one agent, latency not explained, orphan records after a hard stop, no rate limit on
+  invalid tokens) and what was not tested (AWS, the files the cell does not measure, class F agents).
 - **A draft report of the first real run of the site test** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and
   French): Azure, three `Standard_D2s_v5`, steps 1 to 14 of `site.md` and two network attacks, the measures (including the
   concurrency of one agent and `tests/opa_latency` on the VM), and what the run found. Partial by
   design: the complete report comes once the test has been run on AWS as well.
 - **The Azure report completed with the second day** (`deploy/dev-test/reports/2026-11-08-azure.md`, English and French): the file
   attacks on M2 and M1 (13 changes of measured files refused, each naming its cause), a hard stop of `pepd` that leaves an orphan record in the journal (found by
-  `tbp-audit verify`, not closable by any tool yet), and floods of invalid requests (about 360 bytes of disk each, no alarm, no loss).
+  `tbp-audit verify`, not closable by any tool yet), and floods of invalid requests (about 360 bytes of disk each; no alarm and no loss in the 22,000 that were checked).
   By hand, one run: what is not established is listed in the report.
 - **A plan for the AWS run** (`deploy/dev-test/reports/aws-test-plan.md`, English and French): the same test as on Azure, then
   what Azure left open (cold timings, the concurrency series, OPA alone, a hard stop of `pepd` followed by `tbp-audit verify`,
