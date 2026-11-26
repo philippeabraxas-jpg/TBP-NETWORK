@@ -36,7 +36,7 @@ jobs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7.1.0
         with:
           # Épinglé comme OPA (revue de 30d45af) : « stable » laissait une version de
           # Go différente à chaque exécution, y compris pour la release. La monter est
@@ -89,7 +89,7 @@ jobs:
           name: tbp-binaries
           path: dist/
       - name: "publier les binaires sur la release"
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         with:
           files: dist/*
           fail_on_unmatched_files: true
